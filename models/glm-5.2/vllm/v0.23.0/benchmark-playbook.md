@@ -109,17 +109,17 @@ or `--dataset-name custom` with `--dataset-path /path/to/prompts.jsonl`.
 
 ## Deployment Guides
 
-See [../v0.23.0/](../v0.23.0/) for validated deployment patterns:
+See [README.md](README.md) for validated deployment patterns:
 
 | Pattern | Context Length | Use Case |
 |---------|---------------|----------|
-| [Single-node practical](../v0.23.0/single-node/guides/practical-guide.md) | 131K | Long-context agentic (Claude Code, coding agents) |
-| [Single-node 8K/1K optimized](../v0.23.0/single-node/guides/8k1k-optimized.md) | 10K | Short-context, high-turnover |
-| [Multi-node PP2/TP8](../v0.23.0/multi-node-lws/guides/multi-node-pp2-tp8.md) | 100K+ | Model/KV beyond single node HBM |
+| [Single-node practical](single-node/guides/practical-guide.md) | 131K | Long-context agentic (Claude Code, coding agents) |
+| [Single-node 8K/1K optimized](single-node/guides/8k1k-optimized.md) | 10K | Short-context, high-turnover |
+| [Multi-node PP2/TP8](multi-node-lws/guides/multi-node-pp2-tp8.md) | 100K+ | Model/KV beyond single node HBM |
 
 ### Auxiliary
 
-- [Connecting Claude Code to vLLM](../v0.23.0/claude-code-connection.md) — route Claude Code through your vLLM deployment via `/v1/messages`
+- [Connecting Claude Code to vLLM](claude-code-connection.md) — route Claude Code through your vLLM deployment via `/v1/messages`
 
 ## Results Summary
 
