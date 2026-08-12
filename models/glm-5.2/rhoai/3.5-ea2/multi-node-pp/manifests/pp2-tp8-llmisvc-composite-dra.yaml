@@ -1,12 +1,15 @@
 # GLM-5.2-FP8 across 2× 8×H200 nodes: PP=2, TP=8 via LLMInferenceService.
+# Cross-node communication: RDMA via composite DRA (GPU + NIC pairs).
 #
-# The controller creates a LeaderWorkerSet behind the scenes when
-# spec.worker is present. Head serves the API; worker joins headless.
-# The PP config template (LLMInferenceServiceConfig) provides the
-# vllm serve command with --pipeline-parallel-size, --nnodes,
-# --node-rank, --master-addr, and --headless for the worker.
+# Uses composite.dra/gpu-nic-pair resource instead of nvidia.com/gpu.
+# The DRA driver co-allocates each GPU with its nearest RDMA NIC,
+# ensuring NCCL uses RDMA for cross-node PP activation transfer.
+#
+# For clusters without composite DRA, use
+# pp2-tp8-llmisvc-pod-net.yaml instead.
 #
 # Prerequisites:
+# - Composite DRA driver installed (GPU + NIC pair allocation)
 # - LLMInferenceServiceConfig for pipeline-parallel worker must exist
 #   (see ../../../prerequisites/pp-worker-llmisvcconfig.yaml)
 # - KServe with LLMInferenceService v1alpha2 support
@@ -52,18 +55,24 @@ spec:
               --skip-mm-profiling
               --trust-remote-code
               --distributed-timeout-seconds 1200
-          # RoCE auto-inference: discovers HCAs, GID index, sets
-          # NCCL_IB_HCA, NCCL_IB_GID_INDEX, NVSHMEM_*, UCX_* automatically.
           - name: KSERVE_INFER_ROCE
             value: "true"
         resources:
           requests:
             cpu: 32
             memory: 256Gi
-            nvidia.com/gpu: "8"
+            composite.dra/gpu-nic-pair: "8"
+            # Suppress nvidia.com/gpu auto-insertion by the
+            # LLMInferenceServiceConfig template merge;
+            # GPUs are allocated via composite DRA instead.
+            nvidia.com/gpu: "0"
           limits:
             memory: 512Gi
-            nvidia.com/gpu: "8"
+            composite.dra/gpu-nic-pair: "8"
+            # Suppress nvidia.com/gpu auto-insertion by the
+            # LLMInferenceServiceConfig template merge;
+            # GPUs are allocated via composite DRA instead.
+            nvidia.com/gpu: "0"
         startupProbe:
           httpGet:
             path: /health
@@ -103,10 +112,18 @@ spec:
           requests:
             cpu: 32
             memory: 256Gi
-            nvidia.com/gpu: "8"
+            composite.dra/gpu-nic-pair: "8"
+            # Suppress nvidia.com/gpu auto-insertion by the
+            # LLMInferenceServiceConfig template merge;
+            # GPUs are allocated via composite DRA instead.
+            nvidia.com/gpu: "0"
           limits:
             memory: 512Gi
-            nvidia.com/gpu: "8"
+            composite.dra/gpu-nic-pair: "8"
+            # Suppress nvidia.com/gpu auto-insertion by the
+            # LLMInferenceServiceConfig template merge;
+            # GPUs are allocated via composite DRA instead.
+            nvidia.com/gpu: "0"
         volumeMounts:
           - name: dshm
             mountPath: /dev/shm

@@ -1,0 +1,121 @@
+# GLM-5.2-FP8 across 2× 8×H200 nodes: PP=2, TP=8 via LLMInferenceService.
+# Cross-node communication: pod network (TCP).
+#
+# For clusters with composite DRA (GPU + NIC pairs via RDMA), use
+# pp2-tp8-llmisvc-composite-dra.yaml instead.
+#
+# The controller creates a LeaderWorkerSet behind the scenes when
+# spec.worker is present. Head serves the API; worker joins headless.
+# The PP config template (LLMInferenceServiceConfig) provides the
+# vllm serve command with --pipeline-parallel-size, --nnodes,
+# --node-rank, --master-addr, and --headless for the worker.
+#
+# Prerequisites:
+# - LLMInferenceServiceConfig for pipeline-parallel worker must exist
+#   (see ../../../prerequisites/pp-worker-llmisvcconfig.yaml)
+# - KServe with LLMInferenceService v1alpha2 support
+# - LeaderWorkerSet controller installed (kubernetes-sigs/lws)
+# - Secret llm-d-hf-token with key HF_TOKEN in the target namespace
+# - Model weights pre-loaded to PVC or hostPath (~756 GB)
+#
+# GLM-5.2 requires vLLM >= v0.23.0. If the RHOAI-shipped image
+# includes v0.23.0+, remove the image override below to use it.
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: glm52-pp
+spec:
+  model:
+    # For PVC-backed weights (recommended for 756 GB model):
+    #   uri: pvc://glm52-weights
+    # For HuggingFace download (slow, re-downloads on restart):
+    uri: hf://zai-org/GLM-5.2-FP8
+    name: glm-5.2-fp8
+  replicas: 1
+  parallelism:
+    pipeline: 2
+    tensor: 8
+  template:
+    containers:
+      - name: main
+        # Override needed: GLM-5.2 requires vLLM >= v0.23.0.
+        # Remove once RHOAI ships v0.23.0+ in its vLLM image.
+        image: vllm/vllm-openai:v0.23.0
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: llm-d-hf-token
+                key: HF_TOKEN
+          - name: VLLM_ADDITIONAL_ARGS
+            value: >-
+              --kv-cache-dtype fp8
+              --tool-call-parser glm47
+              --reasoning-parser glm45
+              --enable-auto-tool-choice
+              --skip-mm-profiling
+              --trust-remote-code
+              --distributed-timeout-seconds 1200
+          # RoCE auto-inference: discovers HCAs, GID index, sets
+          # NCCL_IB_HCA, NCCL_IB_GID_INDEX, NVSHMEM_*, UCX_* automatically.
+          - name: KSERVE_INFER_ROCE
+            value: "true"
+        resources:
+          requests:
+            cpu: 32
+            memory: 256Gi
+            nvidia.com/gpu: "8"
+          limits:
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          failureThreshold: 720
+          periodSeconds: 10
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+  worker:
+    containers:
+      - name: main
+        image: vllm/vllm-openai:v0.23.0
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: llm-d-hf-token
+                key: HF_TOKEN
+          - name: VLLM_ADDITIONAL_ARGS
+            value: >-
+              --kv-cache-dtype fp8
+              --tool-call-parser glm47
+              --reasoning-parser glm45
+              --enable-auto-tool-choice
+              --skip-mm-profiling
+              --trust-remote-code
+              --distributed-timeout-seconds 1200
+          - name: KSERVE_INFER_ROCE
+            value: "true"
+        resources:
+          requests:
+            cpu: 32
+            memory: 256Gi
+            nvidia.com/gpu: "8"
+          limits:
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi

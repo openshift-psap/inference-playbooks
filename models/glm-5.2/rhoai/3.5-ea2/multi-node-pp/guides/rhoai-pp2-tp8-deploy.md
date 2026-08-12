@@ -9,12 +9,24 @@ This is the RHOAI-stack equivalent of the
 [raw LWS deployment](../../../vllm/v0.23.0/multi-node-lws/guides/multi-node-pp2-tp8.md).
 Same vLLM config, wrapped in the KServe CRD layer.
 
+## Manifest Variants
+
+| Manifest | Cross-node comms | GPU resource | Use when |
+|----------|-----------------|--------------|----------|
+| `pp2-tp8-llmisvc-pod-net.yaml` | TCP (pod network) | `nvidia.com/gpu: "8"` | No RDMA / no composite DRA driver |
+| `pp2-tp8-llmisvc-composite-dra.yaml` | RDMA (GPU+NIC pairs) | `composite.dra/gpu-nic-pair: "8"` | Composite DRA driver installed |
+
+The composite-DRA variant co-allocates each GPU with its nearest RDMA
+NIC, ensuring NCCL uses RDMA for cross-node PP activation transfer.
+It sets `nvidia.com/gpu: "0"` to suppress the `nvidia.com/gpu`
+auto-insertion by the LLMInferenceServiceConfig template merge.
+
 ## Prerequisites
 
 - KServe with `LLMInferenceService` v1alpha2 CRD
 - LeaderWorkerSet controller installed
 - 2× nodes with 8× NVIDIA H200 GPUs each
-- NVIDIA GPU operator with `nvidia.com/gpu` resource
+- NVIDIA GPU operator — or composite DRA driver for RDMA variant
 
 ### Pipeline-Parallel Config Template
 
@@ -85,7 +97,11 @@ kubectl create secret generic llm-d-hf-token \
   --from-literal="HF_TOKEN=${HF_TOKEN}" -n ${NAMESPACE} \
   --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl apply -n ${NAMESPACE} -f ../manifests/pp2-tp8-llmisvc.yaml
+# Pod network (TCP):
+kubectl apply -n ${NAMESPACE} -f ../manifests/pp2-tp8-llmisvc-pod-net.yaml
+
+# — OR — Composite DRA (RDMA, GPU+NIC pairs):
+kubectl apply -n ${NAMESPACE} -f ../manifests/pp2-tp8-llmisvc-composite-dra.yaml
 ```
 
 ### Watch Startup
