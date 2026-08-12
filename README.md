@@ -24,10 +24,10 @@ models/<model>/<framework>/<version>/<topology>/
 |-------|-----------|----------|------------|
 | GLM-5.2-FP8 | vLLM | [v0.23.0](models/glm-5.2/vllm/v0.23.0/) | [Deployment Guides](models/glm-5.2/vllm/v0.23.0/README.md) |
 | GLM-5 / GLM-5-FP8 | vLLM | [latest](models/glm-5/vllm/latest/) | [Model Ops](models/glm-5/model-ops/) |
+| GLM-5.2-FP8 | RHOAI | [3.5-ea2](models/glm-5.2/rhoai/3.5-ea2/) | [Deployment Guides](models/glm-5.2/rhoai/3.5-ea2/README.md) |
 
 ## Planned
 
 - **llm-d** — prefix-cache-aware routing, P/D disaggregation, KV tiering
-- **RHOAI** — Red Hat OpenShift AI serving stack (KServe + ServingRuntime)
 
 Follow the same `<version>/<topology>/` convention when adding content under these frameworks.

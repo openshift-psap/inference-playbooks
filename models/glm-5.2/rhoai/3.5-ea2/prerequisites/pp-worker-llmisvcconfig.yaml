@@ -1,0 +1,215 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceServiceConfig
+metadata:
+  name: ${CONFIG_PREFIX}config-llm-worker-pipeline-parallel
+  namespace: ${CONTROLLER_NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: kserve
+  annotations:
+    serving.kserve.io/well-known-config: 'true'
+spec:
+  annotations:
+    serving.kserve.io/model-based-routing-enabled: 'true'
+  template:
+    containers:
+    - command:
+      - /bin/bash
+      - -c
+      - "if [ -f /etc/profile.d/ibm-aiu-setup.sh ]; then\n  source /etc/profile.d/ibm-aiu-setup.sh\nfi\n\nif [ \"$KSERVE_INFER_ROCE\" = \"true\" ]; then\n  echo \"Trying to infer RoCE configs ... \"\n \
+        \ grep -H . /sys/class/infiniband/*/ports/*/gids/* 2>/dev/null\n  grep -H . /sys/class/infiniband/*/ports/*/gid_attrs/types/* 2>/dev/null\n  cat /proc/driver/nvidia/params\n  KSERVE_INFER_IB_GID_INDEX_GREP=${KSERVE_INFER_IB_GID_INDEX_GREP:-\"\
+        RoCE v2\"}\n  echo \"[Infer RoCE] Discovering active HCAs ...\"\n  active_hcas=()\n  for hca_dir in /sys/class/infiniband/mlx5_*; do\n      if [ -d \"$hca_dir\" ]; then\n          hca_name=$(basename\
+        \ \"$hca_dir\")\n          port_state_file=\"$hca_dir/ports/1/state\"\n          type_file=\"$hca_dir/ports/1/gid_attrs/types/*\"\n          if [ -f \"$port_state_file\" ] && grep -q \"ACTIVE\"\
+        \ \"$port_state_file\" && grep -q \"${KSERVE_INFER_IB_GID_INDEX_GREP}\" ${type_file} 2>/dev/null; then\n              active_hcas+=(\"$hca_name\")\n          fi\n      fi\n  done\n  if [ ${#active_hcas[@]}\
+        \ -gt 0 ]; then\n      hca_port_pairs=()\n      for hca in \"${active_hcas[@]}\"; do\n        hca_port_pairs+=(\"${hca}:1\")\n      done\n      active_hca_list=$(IFS=,; echo \"${active_hcas[*]}\"\
+        )\n      hca_port_pairs_list=$(IFS=,; echo \"${hca_port_pairs[*]}\")\n      export NCCL_IB_HCA=${NCCL_IB_HCA:-${active_hca_list}}\n      export NVSHMEM_HCA_LIST=${NVSHMEM_HCA_LIST:-${hca_port_pairs_list}}\n\
+        \      export UCX_NET_DEVICES=${UCX_NET_DEVICES:-${hca_port_pairs_list}}\n      echo \"[Infer RoCE] NCCL_IB_HCA=${NCCL_IB_HCA}\"\n  fi\n  if [ ${#active_hcas[@]} -gt 0 ]; then\n      declare -A\
+        \ gid_index_count\n      for hca_name in \"${active_hcas[@]}\"; do\n          for tpath in /sys/class/infiniband/${hca_name}/ports/1/gid_attrs/types/*; do\n              if grep -q \"${KSERVE_INFER_IB_GID_INDEX_GREP}\"\
+        \ \"$tpath\" 2>/dev/null; then\n                  idx=$(basename \"$tpath\")\n                  gid_file=\"/sys/class/infiniband/${hca_name}/ports/1/gids/${idx}\"\n                  if [ -f \"$gid_file\"\
+        \ ] && grep -q \"ffff:\" \"$gid_file\"; then\n                      gid_index_count[\"${idx}\"]=$((${gid_index_count[\"${idx}\"]} + 1))\n                      break\n                  fi\n     \
+        \         fi\n          done\n      done\n      best_gid_index=\"\"\n      max_count=0\n      for idx in \"${!gid_index_count[@]}\"; do\n          count=${gid_index_count[\"${idx}\"]}\n        \
+        \  if [ $count -gt $max_count ]; then max_count=$count; best_gid_index=\"$idx\"; fi\n      done\n      if [ -n \"${NCCL_IB_GID_INDEX}\" ]; then\n          export NVSHMEM_IB_GID_INDEX=${NVSHMEM_IB_GID_INDEX:-$NCCL_IB_GID_INDEX}\n\
+        \          export UCX_IB_GID_INDEX=${UCX_IB_GID_INDEX:-$NCCL_IB_GID_INDEX}\n      elif [ -n \"$best_gid_index\" ]; then\n          export NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-$best_gid_index}\n\
+        \          export NVSHMEM_IB_GID_INDEX=${NVSHMEM_IB_GID_INDEX:-$best_gid_index}\n          export UCX_IB_GID_INDEX=${UCX_IB_GID_INDEX:-$best_gid_index}\n      fi\n  fi\nfi\n\nACCESS_LOG_ARGS=\"\
+        --disable-uvicorn-access-log\"\nVLLM_VERSION=$(vllm --version 2>/dev/null | tail -1 | awk '{print $NF}')\nif [[ \"$VLLM_VERSION\" =~ ^[0-9]+\\.[0-9]+ ]] && [ \"$(printf '%s\\n%s\\n' \"0.16.0\" \"\
+        ${VLLM_VERSION}\" | sort -V | head -1)\" = \"0.16.0\" ]; then\n  ACCESS_LOG_ARGS=\"--disable-access-log-for-endpoints /health,/metrics,/ping\"\nfi\n\nSHUTDOWN_TIMEOUT_ARGS=\"\"\nif [[ \"$VLLM_VERSION\"\
+        \ =~ ^[0-9]+\\.[0-9]+ ]] && [ \"$(printf '%s\\n%s\\n' \"0.18.0\" \"${VLLM_VERSION}\" | sort -V | head -1)\" = \"0.18.0\" ]; then\n  SHUTDOWN_TIMEOUT_ARGS=\"--shutdown-timeout {{ shutdownTimeout\
+        \ .Spec.Template 15 }}\"\nfi\n\neval \"exec vllm serve \\\n  /mnt/models \\\n  --served-model-name \\\"{{ .Spec.Model.Name }}\\\" \\\"publishers/{{ .ObjectMeta.Namespace }}/models/{{ .Spec.Model.Name\
+        \ }}\\\" \\\n  --port 8000 \\\n  {{- if .Spec.Parallelism.Tensor }} --tensor-parallel-size {{ .Spec.Parallelism.Tensor }}{{- end }} \\\n  --pipeline-parallel-size {{ or .Spec.Parallelism.Pipeline\
+        \ 1 }} \\\n  --nnodes {{ or .Spec.Parallelism.Pipeline 1 }} \\\n  --node-rank 0 \\\n  --master-addr 0.0.0.0 \\\n  ${ACCESS_LOG_ARGS} \\\n  ${SHUTDOWN_TIMEOUT_ARGS} \\\n  {{ if .GlobalConfig.EnableTLS\
+        \ }}--enable-ssl-refresh{{- end }} \\\n  {{ if .GlobalConfig.EnableTLS }}--ssl-certfile /var/run/kserve/tls/tls.crt{{- end }} \\\n  {{ if .GlobalConfig.EnableTLS }}--ssl-keyfile /var/run/kserve/tls/tls.key{{-\
+        \ end }} \\\n  ${VLLM_ADDITIONAL_ARGS} \\\n  \\$@\""
+      - --
+      env:
+      - name: HOME
+        value: /home
+      - name: VLLM_LOGGING_LEVEL
+        value: INFO
+      - name: HF_HUB_CACHE
+        value: /models
+      image: registry.redhat.io/rhaii-early-access/vllm-cuda-rhel9@sha256:e95153e0bdce2b94d0470d4ac983d3c4b67576280afe99e97ce51700c57f3e5a
+      imagePullPolicy: IfNotPresent
+      lifecycle:
+        preStop:
+          exec:
+            command:
+            - /bin/sleep
+            - '15'
+      livenessProbe:
+        failureThreshold: 10
+        httpGet:
+          path: /health
+          port: 8000
+          scheme: '{{ if .GlobalConfig.EnableTLS }}HTTPS{{else}}HTTP{{- end }}'
+        periodSeconds: 10
+        timeoutSeconds: 1
+      name: main
+      ports:
+      - containerPort: 8000
+        protocol: TCP
+      readinessProbe:
+        failureThreshold: 2
+        httpGet:
+          path: /health
+          port: 8000
+          scheme: '{{ if .GlobalConfig.EnableTLS }}HTTPS{{else}}HTTP{{- end }}'
+        periodSeconds: 1
+        timeoutSeconds: 1
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+          - IPC_LOCK
+          - SYS_RAWIO
+          - NET_RAW
+          drop:
+          - ALL
+        readOnlyRootFilesystem: false
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      startupProbe:
+        failureThreshold: 60
+        httpGet:
+          path: /health
+          port: 8000
+          scheme: '{{ if .GlobalConfig.EnableTLS }}HTTPS{{else}}HTTP{{- end }}'
+        periodSeconds: 10
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: FallbackToLogsOnError
+      volumeMounts:
+      - mountPath: /home
+        name: home
+      - mountPath: /tmp
+        name: tmp-dir
+      - mountPath: /dev/shm
+        name: dshm
+      - mountPath: /models
+        name: model-cache
+      - mountPath: /var/run/kserve/tls
+        name: tls-certs
+        readOnly: true
+    terminationGracePeriodSeconds: 60
+    volumes:
+    - emptyDir: {}
+      name: home
+    - emptyDir: {}
+      name: tmp-dir
+    - emptyDir:
+        medium: Memory
+        sizeLimit: 8Gi
+      name: dshm
+    - emptyDir: {}
+      name: model-cache
+    - name: tls-certs
+      secret:
+        secretName: '{{ ChildName .ObjectMeta.Name `-kserve-self-signed-certs` }}'
+  worker:
+    containers:
+    - command:
+      - /bin/bash
+      - -c
+      - "if [ -f /etc/profile.d/ibm-aiu-setup.sh ]; then\n  source /etc/profile.d/ibm-aiu-setup.sh\nfi\n\nif [ \"$KSERVE_INFER_ROCE\" = \"true\" ]; then\n  echo \"Trying to infer RoCE configs ... \"\n \
+        \ grep -H . /sys/class/infiniband/*/ports/*/gids/* 2>/dev/null\n  grep -H . /sys/class/infiniband/*/ports/*/gid_attrs/types/* 2>/dev/null\n  cat /proc/driver/nvidia/params\n  KSERVE_INFER_IB_GID_INDEX_GREP=${KSERVE_INFER_IB_GID_INDEX_GREP:-\"\
+        RoCE v2\"}\n  active_hcas=()\n  for hca_dir in /sys/class/infiniband/mlx5_*; do\n      if [ -d \"$hca_dir\" ]; then\n          hca_name=$(basename \"$hca_dir\")\n          port_state_file=\"$hca_dir/ports/1/state\"\
+        \n          type_file=\"$hca_dir/ports/1/gid_attrs/types/*\"\n          if [ -f \"$port_state_file\" ] && grep -q \"ACTIVE\" \"$port_state_file\" && grep -q \"${KSERVE_INFER_IB_GID_INDEX_GREP}\"\
+        \ ${type_file} 2>/dev/null; then\n              active_hcas+=(\"$hca_name\")\n          fi\n      fi\n  done\n  if [ ${#active_hcas[@]} -gt 0 ]; then\n      hca_port_pairs=()\n      for hca in \"\
+        ${active_hcas[@]}\"; do\n        hca_port_pairs+=(\"${hca}:1\")\n      done\n      active_hca_list=$(IFS=,; echo \"${active_hcas[*]}\")\n      hca_port_pairs_list=$(IFS=,; echo \"${hca_port_pairs[*]}\"\
+        )\n      export NCCL_IB_HCA=${NCCL_IB_HCA:-${active_hca_list}}\n      export NVSHMEM_HCA_LIST=${NVSHMEM_HCA_LIST:-${hca_port_pairs_list}}\n      export UCX_NET_DEVICES=${UCX_NET_DEVICES:-${hca_port_pairs_list}}\n\
+        \  fi\n  if [ ${#active_hcas[@]} -gt 0 ]; then\n      declare -A gid_index_count\n      for hca_name in \"${active_hcas[@]}\"; do\n          for tpath in /sys/class/infiniband/${hca_name}/ports/1/gid_attrs/types/*;\
+        \ do\n              if grep -q \"${KSERVE_INFER_IB_GID_INDEX_GREP}\" \"$tpath\" 2>/dev/null; then\n                  idx=$(basename \"$tpath\")\n                  gid_file=\"/sys/class/infiniband/${hca_name}/ports/1/gids/${idx}\"\
+        \n                  if [ -f \"$gid_file\" ] && grep -q \"ffff:\" \"$gid_file\"; then\n                      gid_index_count[\"${idx}\"]=$((${gid_index_count[\"${idx}\"]} + 1))\n                \
+        \      break\n                  fi\n              fi\n          done\n      done\n      best_gid_index=\"\"\n      max_count=0\n      for idx in \"${!gid_index_count[@]}\"; do\n          count=${gid_index_count[\"\
+        ${idx}\"]}\n          if [ $count -gt $max_count ]; then max_count=$count; best_gid_index=\"$idx\"; fi\n      done\n      if [ -n \"${NCCL_IB_GID_INDEX}\" ]; then\n          export NVSHMEM_IB_GID_INDEX=${NVSHMEM_IB_GID_INDEX:-$NCCL_IB_GID_INDEX}\n\
+        \          export UCX_IB_GID_INDEX=${UCX_IB_GID_INDEX:-$NCCL_IB_GID_INDEX}\n      elif [ -n \"$best_gid_index\" ]; then\n          export NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-$best_gid_index}\n\
+        \          export NVSHMEM_IB_GID_INDEX=${NVSHMEM_IB_GID_INDEX:-$best_gid_index}\n          export UCX_IB_GID_INDEX=${UCX_IB_GID_INDEX:-$best_gid_index}\n      fi\n  fi\nfi\n\nACCESS_LOG_ARGS=\"\
+        --disable-uvicorn-access-log\"\nVLLM_VERSION=$(vllm --version 2>/dev/null | tail -1 | awk '{print $NF}')\nif [[ \"$VLLM_VERSION\" =~ ^[0-9]+\\.[0-9]+ ]] && [ \"$(printf '%s\\n%s\\n' \"0.16.0\" \"\
+        ${VLLM_VERSION}\" | sort -V | head -1)\" = \"0.16.0\" ]; then\n  ACCESS_LOG_ARGS=\"--disable-access-log-for-endpoints /health,/metrics,/ping\"\nfi\n\nSHUTDOWN_TIMEOUT_ARGS=\"\"\nif [[ \"$VLLM_VERSION\"\
+        \ =~ ^[0-9]+\\.[0-9]+ ]] && [ \"$(printf '%s\\n%s\\n' \"0.18.0\" \"${VLLM_VERSION}\" | sort -V | head -1)\" = \"0.18.0\" ]; then\n  SHUTDOWN_TIMEOUT_ARGS=\"--shutdown-timeout {{ shutdownTimeout\
+        \ .Spec.Worker 15 }}\"\nfi\n\neval \"exec vllm serve \\\n  /mnt/models \\\n  --served-model-name \\\"{{ .Spec.Model.Name }}\\\" \\\"publishers/{{ .ObjectMeta.Namespace }}/models/{{ .Spec.Model.Name\
+        \ }}\\\" \\\n  --port 8000 \\\n  {{- if .Spec.Parallelism.Tensor }} --tensor-parallel-size {{ .Spec.Parallelism.Tensor }}{{- end }} \\\n  --pipeline-parallel-size {{ or .Spec.Parallelism.Pipeline\
+        \ 1 }} \\\n  --nnodes {{ or .Spec.Parallelism.Pipeline 1 }} \\\n  --node-rank \\$(( \\${LWS_WORKER_INDEX:-0} )) \\\n  --master-addr \\${LWS_LEADER_ADDRESS} \\\n  --headless \\\n  ${ACCESS_LOG_ARGS}\
+        \ \\\n  ${SHUTDOWN_TIMEOUT_ARGS} \\\n  {{ if .GlobalConfig.EnableTLS }}--enable-ssl-refresh{{- end }} \\\n  {{ if .GlobalConfig.EnableTLS }}--ssl-certfile /var/run/kserve/tls/tls.crt{{- end }} \\\
+        \n  {{ if .GlobalConfig.EnableTLS }}--ssl-keyfile /var/run/kserve/tls/tls.key{{- end }} \\\n  ${VLLM_ADDITIONAL_ARGS} \\\n  \\$@\""
+      - --
+      env:
+      - name: HOME
+        value: /home
+      - name: VLLM_LOGGING_LEVEL
+        value: INFO
+      - name: HF_HUB_CACHE
+        value: /models
+      image: registry.redhat.io/rhaii-early-access/vllm-cuda-rhel9@sha256:e95153e0bdce2b94d0470d4ac983d3c4b67576280afe99e97ce51700c57f3e5a
+      imagePullPolicy: IfNotPresent
+      lifecycle:
+        preStop:
+          exec:
+            command:
+            - /bin/sleep
+            - '15'
+      name: main
+      ports:
+      - containerPort: 8000
+        protocol: TCP
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+          - IPC_LOCK
+          - SYS_RAWIO
+          - NET_RAW
+          drop:
+          - ALL
+        readOnlyRootFilesystem: false
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: FallbackToLogsOnError
+      volumeMounts:
+      - mountPath: /home
+        name: home
+      - mountPath: /tmp
+        name: tmp-dir
+      - mountPath: /dev/shm
+        name: dshm
+      - mountPath: /models
+        name: model-cache
+      - mountPath: /var/run/kserve/tls
+        name: tls-certs
+        readOnly: true
+    terminationGracePeriodSeconds: 60
+    volumes:
+    - emptyDir: {}
+      name: home
+    - emptyDir: {}
+      name: tmp-dir
+    - emptyDir:
+        medium: Memory
+        sizeLimit: 8Gi
+      name: dshm
+    - emptyDir: {}
+      name: model-cache
+    - name: tls-certs
+      secret:
+        secretName: '{{ ChildName .ObjectMeta.Name `-kserve-self-signed-certs` }}'
+

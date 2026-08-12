@@ -1,0 +1,89 @@
+# LLMInferenceService PP validation on L4 GPUs.
+#
+# Qwen2.5-7B-Instruct across 2 nodes with PP=2, TP=1.
+# Purpose: validate LLMInferenceService → LWS → PP wiring before
+# committing H200 nodes to the full GLM-5.2 recipe.
+#
+# Requirements:
+# - KServe with LLMInferenceService v1alpha2 support
+# - LeaderWorkerSet controller installed
+# - 2 nodes with at least 1 GPU each (L4 24 GB is sufficient)
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: qwen-pp-validation
+spec:
+  model:
+    uri: hf://Qwen/Qwen2.5-7B-Instruct
+    name: Qwen/Qwen2.5-7B-Instruct
+  replicas: 1
+  parallelism:
+    pipeline: 2
+    tensor: 1
+  # router:                    # Requires Kuadrant v1 AuthPolicy CRD.
+  #   scheduler: {}            # RHOAI 3.5.0-ea.2 ships Kuadrant v0.11.1
+  #   route: {}                # (v1beta2 only). Uncomment once Kuadrant
+  #   gateway: {}              # ships v1 API (expected in RHOAI GA).
+  template:
+    containers:
+      - name: main
+        # No image override — uses RHOAI vLLM image from the PP config
+        # template (OpenShift UID-aware). Override with upstream
+        # vllm/vllm-openai:v0.23.0 only when the model requires it.
+        env:
+          - name: VLLM_ADDITIONAL_ARGS
+            value: "--trust-remote-code --distributed-timeout-seconds 300"
+        resources:
+          requests:
+            cpu: 4
+            memory: 32Gi
+            nvidia.com/gpu: "1"
+          limits:
+            memory: 48Gi
+            nvidia.com/gpu: "1"
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          failureThreshold: 60
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 2Gi
+  worker:
+    containers:
+      - name: main
+        resources:
+          requests:
+            cpu: 4
+            memory: 32Gi
+            nvidia.com/gpu: "1"
+          limits:
+            memory: 48Gi
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 2Gi
