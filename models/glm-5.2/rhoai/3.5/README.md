@@ -1,29 +1,51 @@
-# GLM 5.2 FP8 on RHOAI — LLMInferenceService Recipes
+# GLM 5.2 FP8 Multi-Node — PP=2 TP=8 via LLMInferenceService
 
-Deployment recipes for
-[zai-org/GLM-5.2-FP8](https://huggingface.co/zai-org/GLM-5.2-FP8)
-using KServe's `LLMInferenceService` CRD. The controller creates a
-LeaderWorkerSet behind the scenes when pipeline parallelism is
-configured with a worker template.
+Deploy [zai-org/GLM-5.2-FP8](https://huggingface.co/zai-org/GLM-5.2-FP8)
+split across **two 8×H200 nodes** with pipeline parallelism (PP=2) and
+tensor parallelism within each node (TP=8), using KServe's
+`LLMInferenceService` CRD. The controller creates a LeaderWorkerSet
+behind the scenes.
 
-Validated on janus (OCP 4.22, RHOAI 3.5.0 GA, 2×8×H200, composite
-DRA, RDMA/RoCE) and psap-dra-ocp2 (OCP 4.22, RHOAI 3.5.0-ea.2,
-2×L4, pod network).
+Validated on janus (OCP 4.22, RHOAI 3.5.0 GA, 2×8×H200) with real
+FP8 weights from NFS PVC, composite DRA GPU+NIC pairs, RDMA/RoCE.
 
-| # | Pattern | Guide | Hardware | Key feature |
-|---|---------|-------|----------|-------------|
-| 1 | Multi-node PP=2 TP=8 | [Deploy guide](multi-node-pp/guides/rhoai-pp2-tp8-deploy.md) | 2× 8×H200 | Controller-managed LWS, full GLM-5.2 serving |
-| 2 | L4 validation | [Validation guide](l4-validation/guides/l4-validation.md) | 2× 1×L4 | Pattern validation with Qwen2.5-7B before H200 commit |
+## Manifest Variants
+
+| Manifest | GPU resource | Use when |
+|----------|--------------|----------|
+| [`pp2-tp8-llmisvc.yaml`](multi-node-pp/manifests/pp2-tp8-llmisvc.yaml) | `nvidia.com/gpu: "8"` | Standard GPU allocation. Add Multus annotations for RDMA if needed. |
+| [`pp2-tp8-llmisvc-composite-dra.yaml`](multi-node-pp/manifests/pp2-tp8-llmisvc-composite-dra.yaml) | `composite.dra.io/gpu-nic-pair: "8"` | Composite DRA driver co-allocates GPU + nearest RDMA NIC. |
+
+The composite-DRA variant sets `nvidia.com/gpu: "0"` to suppress the
+auto-insertion by the LLMInferenceServiceConfig template merge.
+
+For **Multus** secondary networks with the standard manifest, add a
+pod annotation to both `template` and `worker` specs:
+```yaml
+metadata:
+  annotations:
+    k8s.v1.cni.cncf.io/networks: <your-net-attach-def>
+```
+
+**NOTE**: The composite DRA driver domain is cluster-specific
+(`composite.dra.io` vs `composite.dra`). Check your cluster:
+```bash
+oc get resourceslices -o json | jq -r '.items[].spec.driver' | sort -u | grep composite
+```
 
 ## Prerequisites
 
+- KServe with `LLMInferenceService` v1alpha2 CRD
+- LeaderWorkerSet controller installed (`kubernetes-sigs/lws`)
+- 2× nodes with 8× NVIDIA H200 GPUs each
+- NVIDIA GPU operator — or composite DRA driver for RDMA variant
+- HuggingFace token secret `llm-d-hf-token` (key `HF_TOKEN`)
+
 ### Pipeline-Parallel Config Template
 
-RHOAI 3.5 ships `LLMInferenceServiceConfig` templates for
-data-parallel and single-node deployments, but **not for pipeline
-parallelism**. A custom PP worker config must be created by copying
-from the existing DP worker config (preserves shell variable escaping
-for the RoCE auto-inference script):
+RHOAI 3.5 ships `LLMInferenceServiceConfig` templates for data-parallel
+and single-node deployments, but **not for pipeline parallelism**. Apply
+the PP worker config before deploying:
 
 ```bash
 CONFIG_PREFIX=$(oc get deploy llmisvc-controller-manager \
@@ -34,19 +56,89 @@ CONTROLLER_NAMESPACE=redhat-ods-applications
 envsubst < prerequisites/pp-worker-llmisvcconfig.yaml | oc apply -f -
 ```
 
-See [`prerequisites/pp-worker-llmisvcconfig.yaml`](prerequisites/pp-worker-llmisvcconfig.yaml)
-and the [deploy guide](multi-node-pp/guides/rhoai-pp2-tp8-deploy.md#pipeline-parallel-config-template)
-for the full creation procedure.
+Verify:
+```bash
+oc get llminferenceserviceconfigs -n redhat-ods-applications | grep pipeline
+```
 
-### Other Requirements
+To validate the PP wiring on cheap hardware before committing H200s,
+use the [L4 validation recipe](prerequisites/l4-validation/).
 
-- KServe with `LLMInferenceService` v1alpha2 CRD support
-- LeaderWorkerSet controller installed (`kubernetes-sigs/lws`)
-- NVIDIA GPU operator or composite DRA driver
-- HuggingFace token secret `llm-d-hf-token` (key `HF_TOKEN`)
-- Model weights pre-loaded to a PVC (~756 GB)
-- MachineConfig: unlimited memlock (for RDMA)
-- MachineConfig: topology manager best-effort (for 8 GPU+NIC pairs)
+### MachineConfig Prerequisites (RDMA)
+
+1. **Unlimited memlock** — required for RDMA memory registration:
+   ```bash
+   # See: https://github.com/opendatahub-io/llm-d-playbooks/blob/main/03-accelerator-operator-config/common/03-worker-gpu-rdma-config/machineconfig-memlock.yaml
+   ```
+
+2. **Topology manager best-effort** — required to allocate 8 GPU+NIC
+   pairs across NUMA boundaries:
+   ```bash
+   oc apply -f - <<'EOF'
+   apiVersion: machineconfiguration.openshift.io/v1
+   kind: KubeletConfig
+   metadata:
+     name: topology-best-effort
+   spec:
+     machineConfigPoolSelector:
+       matchLabels:
+         pools.operator.machineconfiguration.openshift.io/gpu-worker: ""
+     kubeletConfig:
+       topologyManagerPolicy: "best-effort"
+   EOF
+   ```
+
+### Model Storage
+
+GLM-5.2-FP8 is ~756 GB. Manifests use `storageInitializer.enabled: false`
+with a direct PVC mount — no init container, no re-download on restart.
+
+Pre-download weights to a PVC:
+```bash
+oc apply -f - <<'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: glm52-fp8-weights
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 850Gi
+  storageClassName: nfs
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: download-glm52-fp8
+spec:
+  template:
+    spec:
+      containers:
+        - name: download
+          image: registry.redhat.io/rhoai/odh-kserve-storage-initializer-rhel9
+          args: ["hf://zai-org/GLM-5.2-FP8", "/mnt/models"]
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: llm-d-hf-token
+                  key: HF_TOKEN
+          resources:
+            requests:
+              cpu: 4
+              memory: 16Gi
+          volumeMounts:
+            - name: models
+              mountPath: /mnt/models
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: glm52-fp8-weights
+      restartPolicy: Never
+  backoffLimit: 2
+EOF
+```
 
 ## How It Works
 
@@ -65,7 +157,7 @@ The PP template handles `--pipeline-parallel-size`, `--nnodes`,
 `--node-rank`, `--master-addr`, `--headless`, TLS, access logging,
 and RoCE inference.
 
-## Key Config Details
+### Key Config Details
 
 - **`storageInitializer.enabled: false`** — PVC mounted directly at
   `/mnt/models`. No init container, no re-download on restart.
@@ -77,6 +169,74 @@ and RoCE inference.
   weights without hitting cgroup memory limit.
 - **No image override** — RHOAI 3.5 GA ships vLLM v0.24.0, which
   supports GLM-5.2.
+
+## Networking: RoCE
+
+The PP config template includes automatic RoCE inference — set
+`KSERVE_INFER_ROCE=true` to auto-detect HCAs, GID index, and NCCL
+settings. Set `NCCL_IB_GID_INDEX=3` explicitly for SR-IOV VF setups.
+
+## Deploy
+
+```bash
+export NAMESPACE=glm52-rhoai
+kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic llm-d-hf-token \
+  --from-literal="HF_TOKEN=${HF_TOKEN}" -n ${NAMESPACE} \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Standard (nvidia.com/gpu):
+kubectl apply -n ${NAMESPACE} -f multi-node-pp/manifests/pp2-tp8-llmisvc.yaml
+
+# — OR — Composite DRA (GPU+NIC pairs):
+kubectl apply -n ${NAMESPACE} -f multi-node-pp/manifests/pp2-tp8-llmisvc-composite-dra.yaml
+```
+
+### Watch Startup
+
+```bash
+kubectl get lws -n ${NAMESPACE} -w
+kubectl get pods -n ${NAMESPACE} -w
+kubectl logs -f -l leaderworkerset.sigs.k8s.io/name -n ${NAMESPACE} --prefix
+```
+
+Model loading from NFS takes ~90 min for 756 GB. Ready when:
+`oc get llminferenceservice -n ${NAMESPACE}` shows `READY: True`.
+
+## Verify
+
+```bash
+kubectl exec -it <head-pod> -n ${NAMESPACE} -- \
+  curl -sk https://localhost:8000/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "glm-5.2-fp8",
+    "prompt": "Hello",
+    "max_tokens": 10
+  }' | python3 -m json.tool
+```
+
+Expected `system_fingerprint` contains `tp8-pp2`.
+
+## Known Issues
+
+- **NFS weight loading is slow.** 756 GB over NFS takes ~90 min.
+  `VLLM_ENGINE_READY_TIMEOUT_S=3600` prevents API server timeout.
+  Use local NVMe storage for faster loading if available.
+- **No MTP with PP.** GLM-5.2's MTP speculative decoding is not
+  supported under pipeline parallelism —
+  [vllm#44697](https://github.com/vllm-project/vllm/issues/44697).
+- **Whole-group restarts.** Any pod failure restarts both nodes.
+- **PP config template not shipped by RHOAI.** Must be created
+  manually until RHOAI includes it in a future release.
+- **Composite DRA driver startup order.** If the composite DRA driver
+  starts before the NVIDIA GPU DRA driver, it sees 0 GPUs and
+  publishes 0 composite devices. Restart the composite DRA driver
+  pod after the GPU driver is ready —
+  [composite-dra-driver#75](https://github.com/openshift-psap/composite-dra-driver/issues/75).
+- **Memory limit.** Set `limits.memory: 1024Gi` to allow page cache
+  prefetch of 756 GB weights. The default 512Gi from the template
+  causes OOM during weight loading.
 
 ## Compared to Raw LWS
 
@@ -92,3 +252,9 @@ The [raw vLLM recipes](../../vllm/v0.23.0/) use `LeaderWorkerSet` and
 If your RHOAI/KServe version does not support v1alpha2, use the raw
 LWS manifests at
 [`../../vllm/v0.23.0/multi-node-lws/`](../../vllm/v0.23.0/multi-node-lws/).
+
+## Cleanup
+
+```bash
+kubectl delete -n ${NAMESPACE} llminferenceservice glm52-pp
+```
