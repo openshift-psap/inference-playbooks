@@ -27,8 +27,7 @@ metadata:
     k8s.v1.cni.cncf.io/networks: <your-net-attach-def>
 ```
 
-**NOTE**: The composite DRA driver domain is cluster-specific
-(`composite.dra.io` vs `composite.dra`). Check your cluster:
+Verify your composite DRA driver domain before deploying:
 ```bash
 oc get resourceslices -o json | jq -r '.items[].spec.driver' | sort -u | grep composite
 ```
