@@ -66,27 +66,10 @@ use the [L4 validation recipe](prerequisites/l4-validation/).
 
 ### MachineConfig Prerequisites (RDMA)
 
-1. **Unlimited memlock** — required for RDMA memory registration:
-   ```bash
-   # See: https://github.com/opendatahub-io/llm-d-playbooks/blob/main/03-accelerator-operator-config/common/03-worker-gpu-rdma-config/machineconfig-memlock.yaml
-   ```
-
-2. **Topology manager best-effort** — required to allocate 8 GPU+NIC
-   pairs across NUMA boundaries:
-   ```bash
-   oc apply -f - <<'EOF'
-   apiVersion: machineconfiguration.openshift.io/v1
-   kind: KubeletConfig
-   metadata:
-     name: topology-best-effort
-   spec:
-     machineConfigPoolSelector:
-       matchLabels:
-         pools.operator.machineconfiguration.openshift.io/gpu-worker: ""
-     kubeletConfig:
-       topologyManagerPolicy: "best-effort"
-   EOF
-   ```
+**Unlimited memlock** — required for RDMA memory registration:
+```bash
+# See: https://github.com/opendatahub-io/llm-d-playbooks/blob/main/03-accelerator-operator-config/common/03-worker-gpu-rdma-config/machineconfig-memlock.yaml
+```
 
 ### Model Storage
 
