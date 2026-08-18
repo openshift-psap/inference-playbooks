@@ -10,15 +10,21 @@ FP8 weights from NFS PVC, composite DRA GPU+NIC pairs, RDMA/RoCE.
 
 ## Manifest Variants
 
-| Manifest | Cross-node comms | GPU resource | Use when |
-|----------|-----------------|--------------|----------|
-| `pp2-tp8-llmisvc-pod-net.yaml` | TCP (pod network) | `nvidia.com/gpu: "8"` | No RDMA / no composite DRA driver |
-| `pp2-tp8-llmisvc-composite-dra.yaml` | RDMA (GPU+NIC pairs) | `composite.dra.io/gpu-nic-pair: "8"` | Composite DRA driver installed |
+| Manifest | GPU resource | Use when |
+|----------|--------------|----------|
+| `pp2-tp8-llmisvc.yaml` | `nvidia.com/gpu: "8"` | Standard GPU allocation. Add Multus annotations for RDMA if needed. |
+| `pp2-tp8-llmisvc-composite-dra.yaml` | `composite.dra.io/gpu-nic-pair: "8"` | Composite DRA driver co-allocates GPU + nearest RDMA NIC. |
 
-The composite-DRA variant co-allocates each GPU with its nearest RDMA
-NIC, ensuring NCCL uses RDMA for cross-node PP activation transfer.
-It sets `nvidia.com/gpu: "0"` to suppress the `nvidia.com/gpu`
+The composite-DRA variant sets `nvidia.com/gpu: "0"` to suppress the
 auto-insertion by the LLMInferenceServiceConfig template merge.
+
+For **Multus** secondary networks with the standard manifest, add a
+pod annotation to both `template` and `worker` specs:
+```yaml
+metadata:
+  annotations:
+    k8s.v1.cni.cncf.io/networks: <your-net-attach-def>
+```
 
 **NOTE**: The composite DRA driver domain is cluster-specific
 (`composite.dra.io` vs `composite.dra`). Check your cluster:
@@ -168,10 +174,10 @@ kubectl create secret generic llm-d-hf-token \
   --from-literal="HF_TOKEN=${HF_TOKEN}" -n ${NAMESPACE} \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# Pod network (TCP):
-kubectl apply -n ${NAMESPACE} -f ../manifests/pp2-tp8-llmisvc-pod-net.yaml
+# Standard (nvidia.com/gpu):
+kubectl apply -n ${NAMESPACE} -f ../manifests/pp2-tp8-llmisvc.yaml
 
-# — OR — Composite DRA (RDMA, GPU+NIC pairs):
+# — OR — Composite DRA (GPU+NIC pairs):
 kubectl apply -n ${NAMESPACE} -f ../manifests/pp2-tp8-llmisvc-composite-dra.yaml
 ```
 

@@ -1,8 +1,14 @@
 # GLM-5.2-FP8 across 2× 8×H200 nodes: PP=2, TP=8 via LLMInferenceService.
-# Cross-node communication: pod network (TCP).
+# Uses nvidia.com/gpu for GPU allocation.
 #
-# For clusters with composite DRA (GPU + NIC pairs via RDMA), use
+# For RDMA with composite DRA (GPU + NIC pairs), use
 # pp2-tp8-llmisvc-composite-dra.yaml instead.
+#
+# For Multus secondary networks, add a pod annotation to both
+# template and worker specs:
+#   metadata:
+#     annotations:
+#       k8s.v1.cni.cncf.io/networks: <your-net-attach-def>
 #
 # Prerequisites:
 # - LLMInferenceServiceConfig for pipeline-parallel worker must exist
