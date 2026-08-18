@@ -4,33 +4,23 @@
 # For clusters with composite DRA (GPU + NIC pairs via RDMA), use
 # pp2-tp8-llmisvc-composite-dra.yaml instead.
 #
-# The controller creates a LeaderWorkerSet behind the scenes when
-# spec.worker is present. Head serves the API; worker joins headless.
-# The PP config template (LLMInferenceServiceConfig) provides the
-# vllm serve command with --pipeline-parallel-size, --nnodes,
-# --node-rank, --master-addr, and --headless for the worker.
-#
 # Prerequisites:
 # - LLMInferenceServiceConfig for pipeline-parallel worker must exist
 #   (see ../../../prerequisites/pp-worker-llmisvcconfig.yaml)
 # - KServe with LLMInferenceService v1alpha2 support
 # - LeaderWorkerSet controller installed (kubernetes-sigs/lws)
 # - Secret llm-d-hf-token with key HF_TOKEN in the target namespace
-# - Model weights pre-loaded to PVC or hostPath (~756 GB)
-#
-# GLM-5.2 requires vLLM >= v0.23.0. If the RHOAI-shipped image
-# includes v0.23.0+, remove the image override below to use it.
+# - Model weights pre-loaded to a PVC (~756 GB)
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
   name: glm52-pp
 spec:
   model:
-    # For PVC-backed weights (recommended for 756 GB model):
-    #   uri: pvc://glm52-weights
-    # For HuggingFace download (slow, re-downloads on restart):
-    uri: hf://zai-org/GLM-5.2-FP8
+    uri: pvc://glm52-fp8-weights
     name: glm-5.2-fp8
+  storageInitializer:
+    enabled: false
   replicas: 1
   parallelism:
     pipeline: 2
@@ -38,9 +28,6 @@ spec:
   template:
     containers:
       - name: main
-        # Override needed: GLM-5.2 requires vLLM >= v0.23.0.
-        # Remove once RHOAI ships v0.23.0+ in its vLLM image.
-        image: vllm/vllm-openai:v0.23.0
         env:
           - name: HF_TOKEN
             valueFrom:
@@ -55,9 +42,9 @@ spec:
               --enable-auto-tool-choice
               --skip-mm-profiling
               --trust-remote-code
-              --distributed-timeout-seconds 1200
-          # RoCE auto-inference: discovers HCAs, GID index, sets
-          # NCCL_IB_HCA, NCCL_IB_GID_INDEX, NVSHMEM_*, UCX_* automatically.
+              --distributed-timeout-seconds 3600
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: "3600"
           - name: KSERVE_INFER_ROCE
             value: "true"
         resources:
@@ -66,7 +53,7 @@ spec:
             memory: 256Gi
             nvidia.com/gpu: "8"
           limits:
-            memory: 512Gi
+            memory: 1024Gi
             nvidia.com/gpu: "8"
         startupProbe:
           httpGet:
@@ -77,15 +64,19 @@ spec:
         volumeMounts:
           - name: dshm
             mountPath: /dev/shm
+          - name: models
+            mountPath: /mnt/models
     volumes:
       - name: dshm
         emptyDir:
           medium: Memory
           sizeLimit: 16Gi
+      - name: models
+        persistentVolumeClaim:
+          claimName: glm52-fp8-weights
   worker:
     containers:
       - name: main
-        image: vllm/vllm-openai:v0.23.0
         env:
           - name: HF_TOKEN
             valueFrom:
@@ -100,7 +91,9 @@ spec:
               --enable-auto-tool-choice
               --skip-mm-profiling
               --trust-remote-code
-              --distributed-timeout-seconds 1200
+              --distributed-timeout-seconds 3600
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: "3600"
           - name: KSERVE_INFER_ROCE
             value: "true"
         resources:
@@ -109,13 +102,18 @@ spec:
             memory: 256Gi
             nvidia.com/gpu: "8"
           limits:
-            memory: 512Gi
+            memory: 1024Gi
             nvidia.com/gpu: "8"
         volumeMounts:
           - name: dshm
             mountPath: /dev/shm
+          - name: models
+            mountPath: /mnt/models
     volumes:
       - name: dshm
         emptyDir:
           medium: Memory
           sizeLimit: 16Gi
+      - name: models
+        persistentVolumeClaim:
+          claimName: glm52-fp8-weights

@@ -6,9 +6,9 @@ using KServe's `LLMInferenceService` CRD. The controller creates a
 LeaderWorkerSet behind the scenes when pipeline parallelism is
 configured with a worker template.
 
-These recipes use the same validated vLLM configuration as the
-[raw LWS playbooks](../vllm/v0.23.0/), wrapped in the RHOAI/KServe
-CRD layer for integration with the Red Hat OpenShift AI serving stack.
+Validated on janus (OCP 4.22, RHOAI 3.5.0 GA, 2×8×H200, composite
+DRA, RDMA/RoCE) and psap-dra-ocp2 (OCP 4.22, RHOAI 3.5.0-ea.2,
+2×L4, pod network).
 
 | # | Pattern | Guide | Hardware | Key feature |
 |---|---------|-------|----------|-------------|
@@ -19,34 +19,34 @@ CRD layer for integration with the Red Hat OpenShift AI serving stack.
 
 ### Pipeline-Parallel Config Template
 
-RHOAI 3.5.0-ea ships `LLMInferenceServiceConfig` templates for
+RHOAI 3.5 ships `LLMInferenceServiceConfig` templates for
 data-parallel and single-node deployments, but **not for pipeline
-parallelism**. A custom PP worker config must be created before
-deploying any `LLMInferenceService` with `parallelism.pipeline > 1`.
+parallelism**. A custom PP worker config must be created by copying
+from the existing DP worker config (preserves shell variable escaping
+for the RoCE auto-inference script):
 
 ```bash
-# Determine your config prefix and controller namespace:
 CONFIG_PREFIX=$(oc get deploy llmisvc-controller-manager \
   -n redhat-ods-applications \
   -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="LLM_INFERENCE_SERVICE_CONFIG_PREFIX")].value}')
 CONTROLLER_NAMESPACE=redhat-ods-applications
 
-# Review and apply the PP worker config template:
 envsubst < prerequisites/pp-worker-llmisvcconfig.yaml | oc apply -f -
 ```
 
-The template is adapted from the existing data-parallel worker config,
-replacing `--data-parallel-*` args with `--pipeline-parallel-size`,
-`--nnodes`, `--node-rank`, `--master-addr`, and `--headless`. See
-[`prerequisites/pp-worker-llmisvcconfig.yaml`](prerequisites/pp-worker-llmisvcconfig.yaml).
+See [`prerequisites/pp-worker-llmisvcconfig.yaml`](prerequisites/pp-worker-llmisvcconfig.yaml)
+and the [deploy guide](multi-node-pp/guides/rhoai-pp2-tp8-deploy.md#pipeline-parallel-config-template)
+for the full creation procedure.
 
 ### Other Requirements
 
 - KServe with `LLMInferenceService` v1alpha2 CRD support
 - LeaderWorkerSet controller installed (`kubernetes-sigs/lws`)
-- vLLM ≥ v0.23.0 (GLM-5.2 model support starts at v0.23.0)
-- NVIDIA GPU operator
+- NVIDIA GPU operator or composite DRA driver
 - HuggingFace token secret `llm-d-hf-token` (key `HF_TOKEN`)
+- Model weights pre-loaded to a PVC (~756 GB)
+- MachineConfig: unlimited memlock (for RDMA)
+- MachineConfig: topology manager best-effort (for 8 GPU+NIC pairs)
 
 ## How It Works
 
@@ -65,20 +65,22 @@ The PP template handles `--pipeline-parallel-size`, `--nnodes`,
 `--node-rank`, `--master-addr`, `--headless`, TLS, access logging,
 and RoCE inference.
 
-## Image
+## Key Config Details
 
-GLM-5.2 requires vLLM ≥ v0.23.0. The RHOAI-shipped image may not
-yet include this version. Manifests override with upstream
-`vllm/vllm-openai:v0.23.0` — remove the `image:` field once RHOAI
-ships v0.23.0+.
-
-For models that work with the RHOAI vLLM version (e.g. Qwen2.5-7B in
-the L4 validation recipe), omit the `image:` field to use the
-RHOAI image, which handles OpenShift arbitrary UIDs.
+- **`storageInitializer.enabled: false`** — PVC mounted directly at
+  `/mnt/models`. No init container, no re-download on restart.
+- **`VLLM_ENGINE_READY_TIMEOUT_S=3600`** — prevents API server
+  timeout during slow NFS weight loading (~90 min for 756 GB).
+- **`KSERVE_INFER_ROCE=true`** — auto-discovers RDMA HCAs and sets
+  NCCL_IB_HCA, NCCL_IB_GID_INDEX, NVSHMEM, UCX env vars.
+- **`limits.memory: 1024Gi`** — allows page cache prefetch of 756 GB
+  weights without hitting cgroup memory limit.
+- **No image override** — RHOAI 3.5 GA ships vLLM v0.24.0, which
+  supports GLM-5.2.
 
 ## Compared to Raw LWS
 
-The [raw vLLM recipes](../vllm/v0.23.0/) use `LeaderWorkerSet` and
+The [raw vLLM recipes](../../vllm/v0.23.0/) use `LeaderWorkerSet` and
 `Service` resources directly. The LLMInferenceService approach adds:
 
 - Controller-managed LWS lifecycle (creation, scaling, rollout)
@@ -89,4 +91,4 @@ The [raw vLLM recipes](../vllm/v0.23.0/) use `LeaderWorkerSet` and
 
 If your RHOAI/KServe version does not support v1alpha2, use the raw
 LWS manifests at
-[`../vllm/v0.23.0/multi-node-lws/`](../vllm/v0.23.0/multi-node-lws/).
+[`../../vllm/v0.23.0/multi-node-lws/`](../../vllm/v0.23.0/multi-node-lws/).

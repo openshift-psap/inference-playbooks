@@ -1,9 +1,8 @@
 # GLM-5.2-FP8 across 2× 8×H200 nodes: PP=2, TP=8 via LLMInferenceService.
 # Cross-node communication: RDMA via composite DRA (GPU + NIC pairs).
 #
-# Uses composite.dra/gpu-nic-pair resource instead of nvidia.com/gpu.
-# The DRA driver co-allocates each GPU with its nearest RDMA NIC,
-# ensuring NCCL uses RDMA for cross-node PP activation transfer.
+# Validated on janus (OCP 4.22, RHOAI 3.5.0 GA, 2×8×H200) with real
+# FP8 weights from NFS PVC. RHOAI vLLM v0.24.0 (no upstream override).
 #
 # For clusters without composite DRA, use
 # pp2-tp8-llmisvc-pod-net.yaml instead.
@@ -15,21 +14,24 @@
 # - KServe with LLMInferenceService v1alpha2 support
 # - LeaderWorkerSet controller installed (kubernetes-sigs/lws)
 # - Secret llm-d-hf-token with key HF_TOKEN in the target namespace
-# - Model weights pre-loaded to PVC or hostPath (~756 GB)
+# - Model weights pre-loaded to a PVC (~756 GB)
+# - MachineConfig: memlock unlimited for CRI-O (required for RDMA)
+# - MachineConfig: topologyManagerPolicy best-effort (for 8 GPU+NIC)
 #
-# GLM-5.2 requires vLLM >= v0.23.0. If the RHOAI-shipped image
-# includes v0.23.0+, remove the image override below to use it.
+# NOTE: The composite DRA driver domain is cluster-specific.
+# Use composite.dra.io/gpu-nic-pair or composite.dra/gpu-nic-pair
+# depending on which driver is installed. Check with:
+#   oc get resourceslices -o json | jq '.items[].spec.driver' | sort -u
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
   name: glm52-pp
 spec:
   model:
-    # For PVC-backed weights (recommended for 756 GB model):
-    #   uri: pvc://glm52-weights
-    # For HuggingFace download (slow, re-downloads on restart):
-    uri: hf://zai-org/GLM-5.2-FP8
+    uri: pvc://glm52-fp8-weights
     name: glm-5.2-fp8
+  storageInitializer:
+    enabled: false
   replicas: 1
   parallelism:
     pipeline: 2
@@ -37,9 +39,6 @@ spec:
   template:
     containers:
       - name: main
-        # Override needed: GLM-5.2 requires vLLM >= v0.23.0.
-        # Remove once RHOAI ships v0.23.0+ in its vLLM image.
-        image: vllm/vllm-openai:v0.23.0
         env:
           - name: HF_TOKEN
             valueFrom:
@@ -54,24 +53,25 @@ spec:
               --enable-auto-tool-choice
               --skip-mm-profiling
               --trust-remote-code
-              --distributed-timeout-seconds 1200
+              --distributed-timeout-seconds 3600
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: "3600"
           - name: KSERVE_INFER_ROCE
             value: "true"
+          - name: NCCL_IB_GID_INDEX
+            value: "3"
         resources:
           requests:
             cpu: 32
             memory: 256Gi
-            composite.dra/gpu-nic-pair: "8"
+            composite.dra.io/gpu-nic-pair: "8"
             # Suppress nvidia.com/gpu auto-insertion by the
             # LLMInferenceServiceConfig template merge;
             # GPUs are allocated via composite DRA instead.
             nvidia.com/gpu: "0"
           limits:
-            memory: 512Gi
-            composite.dra/gpu-nic-pair: "8"
-            # Suppress nvidia.com/gpu auto-insertion by the
-            # LLMInferenceServiceConfig template merge;
-            # GPUs are allocated via composite DRA instead.
+            memory: 1024Gi
+            composite.dra.io/gpu-nic-pair: "8"
             nvidia.com/gpu: "0"
         startupProbe:
           httpGet:
@@ -82,15 +82,19 @@ spec:
         volumeMounts:
           - name: dshm
             mountPath: /dev/shm
+          - name: models
+            mountPath: /mnt/models
     volumes:
       - name: dshm
         emptyDir:
           medium: Memory
           sizeLimit: 16Gi
+      - name: models
+        persistentVolumeClaim:
+          claimName: glm52-fp8-weights
   worker:
     containers:
       - name: main
-        image: vllm/vllm-openai:v0.23.0
         env:
           - name: HF_TOKEN
             valueFrom:
@@ -105,30 +109,33 @@ spec:
               --enable-auto-tool-choice
               --skip-mm-profiling
               --trust-remote-code
-              --distributed-timeout-seconds 1200
+              --distributed-timeout-seconds 3600
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: "3600"
           - name: KSERVE_INFER_ROCE
             value: "true"
+          - name: NCCL_IB_GID_INDEX
+            value: "3"
         resources:
           requests:
             cpu: 32
             memory: 256Gi
-            composite.dra/gpu-nic-pair: "8"
-            # Suppress nvidia.com/gpu auto-insertion by the
-            # LLMInferenceServiceConfig template merge;
-            # GPUs are allocated via composite DRA instead.
+            composite.dra.io/gpu-nic-pair: "8"
             nvidia.com/gpu: "0"
           limits:
-            memory: 512Gi
-            composite.dra/gpu-nic-pair: "8"
-            # Suppress nvidia.com/gpu auto-insertion by the
-            # LLMInferenceServiceConfig template merge;
-            # GPUs are allocated via composite DRA instead.
+            memory: 1024Gi
+            composite.dra.io/gpu-nic-pair: "8"
             nvidia.com/gpu: "0"
         volumeMounts:
           - name: dshm
             mountPath: /dev/shm
+          - name: models
+            mountPath: /mnt/models
     volumes:
       - name: dshm
         emptyDir:
           medium: Memory
           sizeLimit: 16Gi
+      - name: models
+        persistentVolumeClaim:
+          claimName: glm52-fp8-weights
