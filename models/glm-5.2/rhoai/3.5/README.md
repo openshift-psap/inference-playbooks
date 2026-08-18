@@ -222,21 +222,12 @@ Expected `system_fingerprint` contains `tp8-pp2`.
 
 - **NFS weight loading is slow.** 756 GB over NFS takes ~90 min.
   `VLLM_ENGINE_READY_TIMEOUT_S=3600` prevents API server timeout.
-  Use local NVMe storage for faster loading if available.
 - **No MTP with PP.** GLM-5.2's MTP speculative decoding is not
   supported under pipeline parallelism —
   [vllm#44697](https://github.com/vllm-project/vllm/issues/44697).
 - **Whole-group restarts.** Any pod failure restarts both nodes.
 - **PP config template not shipped by RHOAI.** Must be created
   manually until RHOAI includes it in a future release.
-- **Composite DRA driver startup order.** If the composite DRA driver
-  starts before the NVIDIA GPU DRA driver, it sees 0 GPUs and
-  publishes 0 composite devices. Restart the composite DRA driver
-  pod after the GPU driver is ready —
-  [composite-dra-driver#75](https://github.com/openshift-psap/composite-dra-driver/issues/75).
-- **Memory limit.** Set `limits.memory: 1024Gi` to allow page cache
-  prefetch of 756 GB weights. The default 512Gi from the template
-  causes OOM during weight loading.
 
 ## Compared to Raw LWS
 
@@ -248,10 +239,6 @@ The [raw vLLM recipes](../../vllm/v0.23.0/) use `LeaderWorkerSet` and
 - TLS auto-configuration
 - RoCE auto-inference (set `KSERVE_INFER_ROCE=true`)
 - Consistent health check management
-
-If your RHOAI/KServe version does not support v1alpha2, use the raw
-LWS manifests at
-[`../../vllm/v0.23.0/multi-node-lws/`](../../vllm/v0.23.0/multi-node-lws/).
 
 ## Cleanup
 
