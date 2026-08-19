@@ -2,3 +2,5 @@ kubeconfig*.yaml
 .DS_Store
 .env
 *.secret
+*.log
+temp/
