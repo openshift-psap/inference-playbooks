@@ -200,6 +200,34 @@ kubectl exec -it <head-pod> -n ${NAMESPACE} -- \
 
 Expected `system_fingerprint` contains `tp8-pp2`.
 
+## Measured Results
+
+**Cluster**: janus — 2× 8×H200, OCP 4.22, RHOAI 3.5.0 GA, composite
+DRA GPU+NIC pairs, RDMA/RoCE, real FP8 weights from NFS PVC.
+
+### WL2: Shared Prefix — 80K prefix + 20K suffix, OSL=1024, C=8
+
+150 prompts, 10 prefix groups, through the OpenShift AI inference
+gateway. Tests prefix cache reuse under concurrent load.
+
+| Metric | Value |
+|---|---|
+| Output throughput (tok/s) | 141 |
+| Peak output throughput (tok/s) | 456 |
+| Total throughput (tok/s) | 19,612 |
+| TTFT mean | 6.8 s |
+| TTFT median | 3.1 s |
+| TTFT P99 | 75.2 s |
+| TPOT mean | 53 ms |
+| TPOT median | 43 ms |
+| TPOT P99 | 302 ms |
+| ITL median | 17.8 ms |
+| ITL P99 | 1,104 ms |
+
+The high TTFT P99 reflects queuing under C=8 with 100K-token prefills.
+TPOT median of 43 ms is consistent with PP=2 decode latency (pipeline
+bubble visible in ITL P99).
+
 ## Known Issues
 
 - **NFS weight loading is slow.** 756 GB over NFS takes ~90 min.
