@@ -25,6 +25,7 @@ models/<model>/<framework>/<version>/<topology>/
 | GLM-5.2-FP8 | vLLM | [v0.23.0](models/glm-5.2/vllm/v0.23.0/) | [Deployment Guides](models/glm-5.2/vllm/v0.23.0/README.md) |
 | GLM-5 / GLM-5-FP8 | vLLM | [latest](models/glm-5/vllm/latest/) | [Model Ops](models/glm-5/model-ops/) |
 | GLM-5.2-FP8 | RHOAI | [3.5](models/glm-5.2/rhoai/3.5/) | [Deployment Guides](models/glm-5.2/rhoai/3.5/README.md) |
+| Gemma-4-26B-A4B-FP8 | vLLM | [v0.24.0](models/gemma-4/vllm/v0.24.0/) | [Deployment Guides](models/gemma-4/vllm/v0.24.0/README.md) |
 
 ## Planned
 

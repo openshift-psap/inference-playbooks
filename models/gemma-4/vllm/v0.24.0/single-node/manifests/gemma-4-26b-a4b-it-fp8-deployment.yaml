@@ -1,0 +1,74 @@
+# vLLM serving google/gemma-4-26B-A4B-it, with MTP speculative decoding driven
+# by the companion google/gemma-4-26B-A4B-it-assistant draft repo (3 tokens).
+#
+# Gemma is a gated repo on HuggingFace -- create the token secret first:
+#   kubectl create secret generic hf-token --from-literal=HF_TOKEN=hf_xxx
+# The same token has to cover the -assistant repo; it is gated too.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gemma-4-26b-a4b-it-fp8
+  labels:
+    app.kubernetes.io/name: gemma-4-26b-a4b-it-fp8
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gemma-4-26b-a4b-it-fp8
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gemma-4-26b-a4b-it-fp8
+    spec:
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.24.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              vllm serve "$@"
+            - --
+          args:
+            - RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
+            - --served-model-name=RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
+            - --enable-prefix-caching
+            - '--speculative-config={"method":"mtp","model":"google/gemma-4-26B-A4B-it-assistant","num_speculative_tokens":3}'
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          resources:
+            limits:
+              cpu: "8"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "8"
+              memory: 32Gi
+              nvidia.com/gpu: "1"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 5
