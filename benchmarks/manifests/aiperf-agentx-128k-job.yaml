@@ -20,7 +20,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: aiperf
-          image: ghcr.io/nvidia/aiperf:v1.2.3
+          image: quay.io/rh-ee-thibrahi/aiperf:0.12.0
           imagePullPolicy: IfNotPresent
           env:
             # Set to an OpenAI-compatible Service reachable from this Job's namespace.
