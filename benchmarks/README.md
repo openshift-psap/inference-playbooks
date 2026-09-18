@@ -50,9 +50,13 @@ Choose exactly one context variant:
   request in the corpus. A server-side context rejection counts toward AgentX's
   context-overflow rate and can invalidate the run.
 
-The AgentX scenario requires a minimum `--benchmark-duration` of 900 seconds;
-the templates use the standard 1,800 seconds. Its scenario-locked flags should
-not be changed unless you intentionally want a non-comparable run.
+The templates match InferenceX's standard replay settings: the complete
+393-trace corpus, pre-canned assistant responses, a 25–75% trajectory-start
+window, seed 42, 10% failed-request threshold, 10-minute cache warmup, and
+30-minute warmup grace period. The AgentX scenario requires a minimum
+`--benchmark-duration` of 900 seconds; the templates use the standard 1,800
+seconds. Its scenario-locked cache-bust and idle-gap settings are injected by
+the scenario, so do not supply conflicting flags.
 
 The Job downloads the public trace corpus and tokenizer on first use. If egress
 is restricted, provide an approved image/cache strategy before submitting it.

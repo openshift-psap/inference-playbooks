@@ -34,6 +34,14 @@ spec:
               value: REPLACE_ME
             - name: HF_HOME
               value: /tmp/huggingface
+            # Match the InferenceX pre-canned-assistant replay mode.
+            - name: AIPERF_DATASET_WEKA_LIVE_ASSISTANT_RESPONSES
+              value: "0"
+            # The full Weka corpus can take several minutes to prepare.
+            - name: AIPERF_DATASET_CONFIGURATION_TIMEOUT
+              value: "1800"
+            - name: AIPERF_SERVICE_PROFILE_CONFIGURE_TIMEOUT
+              value: "1800"
           command:
             - /bin/sh
             - -ec
@@ -41,21 +49,25 @@ spec:
               exec aiperf profile \
                 --scenario inferencex-agentx-mvp \
                 --url "${ENDPOINT}" \
+                --endpoint /v1/chat/completions \
                 --model "${MODEL}" \
                 --tokenizer "${TOKENIZER}" \
                 --endpoint-type chat \
                 --public-dataset semianalysis_cc_traces_weka_062126 \
                 --concurrency 32 \
+                --failed-request-threshold 0.10 \
                 --use-server-token-count \
                 --streaming \
-                --extra-inputs ignore_eos:true \
-                --cache-bust first_turn_prefix \
-                --system-idle-gap-cap-seconds 10 \
-                --trajectory-start-min-ratio 0.0 \
-                --trajectory-start-max-ratio 1.0 \
+                --trajectory-start-min-ratio 0.25 \
+                --trajectory-start-max-ratio 0.75 \
                 --benchmark-duration 1800 \
-                --random-seed 20260707 \
-                --artifact-dir /results \
+                --random-seed 42 \
+                --agentic-cache-warmup-duration 600 \
+                --warmup-grace-period 1800 \
+                --tokenizer-trust-remote-code \
+                --num-dataset-entries 393 \
+                --slice-duration 1.0 \
+                --output-artifact-dir /results \
                 --ui simple
           resources:
             requests:
