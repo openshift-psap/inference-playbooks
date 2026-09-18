@@ -18,6 +18,21 @@ models/<model>/<framework>/<version>/<topology>/
 - **topology** — deployment shape (`single-node`, `multi-node-lws`)
 - **model-ops/** — framework-agnostic download/sync jobs, at model level
 
+## Common Benchmarks
+
+Reusable benchmark Jobs live in [`benchmarks/manifests/`](benchmarks/manifests/).
+Set the `ENDPOINT`, `MODEL`, and (for AIPerf) `TOKENIZER` environment values in
+each manifest before applying it in the same namespace as the target Service.
+
+- [GuideLLM 8K/1K](benchmarks/manifests/guidellm-8k1k-job.yaml) — synthetic
+  8,000-input / 1,000-output requests at concurrent streams 1, 4, and 16.
+- [AIPerf AgentX](benchmarks/manifests/aiperf-agentx-job.yaml) — long-context,
+  multi-turn agentic trace replay; requires an endpoint that accepts 128K
+  contexts.
+
+Model playbooks may add benchmark manifests beside a topology only when the
+workload is specific to that model, framework, or deployment shape.
+
 ## Models
 
 | Model | Framework | Versions | Start Here |

@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aiperf-agentx
+  labels:
+    app.kubernetes.io/name: aiperf
+    app.kubernetes.io/component: benchmark
+    app.kubernetes.io/part-of: inference-playbooks
+spec:
+  activeDeadlineSeconds: 7200
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiperf
+        app.kubernetes.io/component: benchmark
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: aiperf
+          image: ghcr.io/nvidia/aiperf:v1.2.3
+          imagePullPolicy: IfNotPresent
+          env:
+            # Set to an OpenAI-compatible Service reachable from this Job's namespace.
+            - name: ENDPOINT
+              value: http://REPLACE_ME:8000
+            # Set to the model identifier accepted by the target endpoint.
+            - name: MODEL
+              value: REPLACE_ME
+            # Used locally to reconstruct and tokenize AgentX trace prompts.
+            - name: TOKENIZER
+              value: REPLACE_ME
+            - name: HF_HOME
+              value: /tmp/huggingface
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              exec aiperf profile \
+                --scenario inferencex-agentx-mvp \
+                --url "${ENDPOINT}" \
+                --model "${MODEL}" \
+                --tokenizer "${TOKENIZER}" \
+                --max-context-length 128000 \
+                --endpoint-type chat \
+                --public-dataset semianalysis_cc_traces_weka_062126 \
+                --concurrency 32 \
+                --use-server-token-count \
+                --streaming \
+                --extra-inputs ignore_eos:true \
+                --cache-bust first_turn_prefix \
+                --system-idle-gap-cap-seconds 10 \
+                --trajectory-start-min-ratio 0.0 \
+                --trajectory-start-max-ratio 1.0 \
+                --benchmark-duration 1800 \
+                --random-seed 20260707 \
+                --artifact-dir /results \
+                --ui simple
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+            limits:
+              cpu: "8"
+              memory: 32Gi
+          volumeMounts:
+            - name: results
+              mountPath: /results
+            - name: hf-cache
+              mountPath: /tmp/huggingface
+      volumes:
+        # Replace with a PersistentVolumeClaim to retain results after Job TTL cleanup.
+        - name: results
+          emptyDir: {}
+        # Keeps the automatically downloaded public AgentX trace corpus for this run.
+        - name: hf-cache
+          emptyDir: {}
