@@ -35,7 +35,7 @@ spec:
             - --data
             - kind=synthetic_text,prompt_tokens=8000,output_tokens=1000
             - --profile
-            - '{"kind":"concurrent","streams":[1,4,16]}'
+            - '{"kind":"concurrent","streams":[1,4,16,32,64,128]}'
             - --constraint
             - kind=max_duration,seconds=300
             - --output

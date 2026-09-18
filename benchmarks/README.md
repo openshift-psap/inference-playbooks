@@ -25,7 +25,8 @@ included in these templates.
 
 [`manifests/guidellm-8k1k-job.yaml`](manifests/guidellm-8k1k-job.yaml) runs
 synthetic requests with 8,000 prompt tokens and 1,000 output tokens. It tests
-fixed concurrent streams of 1, 4, and 16, for 300 seconds per stream count.
+fixed concurrent streams of 1, 4, 16, 32, 64, and 128, for 300 seconds per
+stream count.
 
 Change the `--data`, `--profile`, or `--constraint` command arguments only
 when defining a different workload. Make sure the server's configured maximum

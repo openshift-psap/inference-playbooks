@@ -25,7 +25,8 @@ Set the `ENDPOINT`, `MODEL`, and (for AIPerf) `TOKENIZER` environment values in
 each manifest before applying it in the same namespace as the target Service.
 
 - [GuideLLM 8K/1K](benchmarks/manifests/guidellm-8k1k-job.yaml) — synthetic
-  8,000-input / 1,000-output requests at concurrent streams 1, 4, and 16.
+  8,000-input / 1,000-output requests at concurrent streams 1, 4, 16, 32, 64,
+  and 128.
 - [AIPerf AgentX 128K](benchmarks/manifests/aiperf-agentx-128k-job.yaml) —
   long-context, multi-turn agentic trace replay filtered to 128K contexts.
 - [AIPerf AgentX unlimited context](benchmarks/manifests/aiperf-agentx-unlimited-context-job.yaml)
