@@ -35,16 +35,24 @@ syntax aligned with that image tag when upgrading it.
 
 ## AIPerf: AgentX
 
-[`manifests/aiperf-agentx-job.yaml`](manifests/aiperf-agentx-job.yaml) runs the
-date-pinned AgentX trace corpus with the `inferencex-agentx-mvp` scenario. It is
-not an 8K/1K workload: it replays multi-turn, long-context coding sessions.
+Both AgentX manifests run the date-pinned AgentX trace corpus with the
+`inferencex-agentx-mvp` scenario. This is not an 8K/1K workload: it replays
+multi-turn, long-context coding sessions.
 
-Before using this Job, confirm that the server accepts at least the configured
-`--max-context-length` (128000 tokens). Lowering that value filters traces and
-changes the workload; record the change with the benchmark results. The AgentX
-scenario requires a minimum `--benchmark-duration` of 900 seconds; the template
-uses the standard 1,800 seconds. Its scenario-locked flags should not be
-changed unless you intentionally want a non-comparable run.
+Choose exactly one context variant:
+
+- [`manifests/aiperf-agentx-128k-job.yaml`](manifests/aiperf-agentx-128k-job.yaml)
+  sets `--max-context-length 128000`. Use it only when the server accepts 128K
+  contexts. This filters out larger traces, so results are comparable only to
+  runs with the same cap.
+- [`manifests/aiperf-agentx-unlimited-context-job.yaml`](manifests/aiperf-agentx-unlimited-context-job.yaml)
+  omits `--max-context-length`. Use it only when the server accepts every trace
+  request in the corpus. A server-side context rejection counts toward AgentX's
+  context-overflow rate and can invalidate the run.
+
+The AgentX scenario requires a minimum `--benchmark-duration` of 900 seconds;
+the templates use the standard 1,800 seconds. Its scenario-locked flags should
+not be changed unless you intentionally want a non-comparable run.
 
 The Job downloads the public trace corpus and tokenizer on first use. If egress
 is restricted, provide an approved image/cache strategy before submitting it.
@@ -80,5 +88,5 @@ download, warmup, 30-minute profile, and result export. Check Job logs when a
 Job fails:
 
 ```bash
-kubectl logs -n <namespace> job/aiperf-agentx
+kubectl logs -n <namespace> job/aiperf-agentx-128k
 ```

@@ -1,11 +1,12 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: aiperf-agentx
+  name: aiperf-agentx-unlimited-context
   labels:
     app.kubernetes.io/name: aiperf
     app.kubernetes.io/component: benchmark
     app.kubernetes.io/part-of: inference-playbooks
+    benchmark.inference-playbooks.io/context-profile: unlimited
 spec:
   activeDeadlineSeconds: 7200
   backoffLimit: 0
@@ -42,7 +43,6 @@ spec:
                 --url "${ENDPOINT}" \
                 --model "${MODEL}" \
                 --tokenizer "${TOKENIZER}" \
-                --max-context-length 128000 \
                 --endpoint-type chat \
                 --public-dataset semianalysis_cc_traces_weka_062126 \
                 --concurrency 32 \
