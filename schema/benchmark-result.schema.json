@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/benchmark-result.schema.json",
+  "title": "Inference Playbook Normalized Benchmark Result",
+  "type": "object",
+  "required": ["schema_version", "run_id", "deployment_scope", "accelerator_key", "metrics"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string"},
+    "deployment_scope": {"enum": ["single-node", "multi-node"]},
+    "accelerator_key": {"type": "string"},
+    "metrics": {"type": "object"},
+    "raw_metrics": {"type": "object"}
+  }
+}

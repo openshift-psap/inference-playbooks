@@ -1,0 +1,11 @@
+repos:
+  - repo: local
+    hooks:
+      - id: hardware-profiles
+        name: validate schemas and hardware-profile corrections
+        entry: python3 tools/validate.py --base HEAD --cached
+        language: python
+        additional_dependencies:
+          - PyYAML==6.0.2
+          - jsonschema==4.25.1
+        pass_filenames: false

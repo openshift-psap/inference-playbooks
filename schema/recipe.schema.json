@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/recipe.schema.json",
+  "title": "Inference Playbook Recipe",
+  "type": "object",
+  "required": [
+    "schema_version", "recipe_id", "model_id", "platform",
+    "hardware_profile", "workload_profile", "maturity", "deployment"
+  ],
+  "$defs": {
+    "status": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["verified", "derived", "needs-verification"]},
+        "date": {"type": "string", "format": "date"},
+        "method": {"type": "string"},
+        "note": {"type": "string"},
+        "derived_from": {"type": "string"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "verified"}}},
+          "then": {"required": ["date", "method"]}
+        },
+        {
+          "if": {"properties": {"state": {"const": "derived"}}},
+          "then": {"required": ["derived_from"]}
+        },
+        {
+          "if": {"properties": {"state": {"const": "needs-verification"}}},
+          "then": {"required": ["note"]}
+        }
+      ]
+    }
+  },
+  "properties": {
+    "schema_version": {"const": 3},
+    "recipe_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "model_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "platform": {
+      "type": "object",
+      "required": ["stack", "version"],
+      "properties": {
+        "stack": {"enum": ["rhoai", "llm-d", "vllm"]},
+        "version": {"type": "string", "minLength": 1}
+      }
+    },
+    "hardware_profile": {
+      "type": "string",
+      "pattern": "^hardware-profiles/[a-z0-9][a-z0-9._-]+\\.yaml$"
+    },
+    "workload_profile": {
+      "enum": ["agentic", "latency", "throughput", "chat", "batch", "embedding"]
+    },
+    "maturity": {"enum": ["day-zero", "validated", "production"]},
+    "deployment": {
+      "type": "object",
+      "required": ["scope"],
+      "properties": {
+        "scope": {"enum": ["single-node", "multi-node"]},
+        "status": {"$ref": "#/$defs/status"},
+        "parallelism": {
+          "type": "object",
+          "properties": {
+            "tensor": {"type": "integer", "minimum": 1},
+            "pipeline": {"type": "integer", "minimum": 1},
+            "data": {"type": "integer", "minimum": 1}
+          }
+        },
+        "manifests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "kind"],
+            "properties": {
+              "path": {"type": "string", "pattern": "^manifests/"},
+              "kind": {"type": "string"},
+              "generated": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "benchmark_runs": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^results/.+/run\\.yaml$"}
+    },
+    "match": {
+      "type": "object",
+      "not": {"required": ["nodes"]},
+      "description": "Catalog selectors may not contain nodes; use deployment.scope."
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"maturity": {"enum": ["validated", "production"]}}},
+      "then": {"required": ["benchmark_runs"]}
+    }
+  ]
+}
