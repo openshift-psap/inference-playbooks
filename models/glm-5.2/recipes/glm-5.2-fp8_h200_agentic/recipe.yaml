@@ -35,7 +35,7 @@ platform:
   rhaiis_bundled_vllm: "NEEDS VERIFICATION"  # vLLM version shipped inside RHAIIS 3.5.0-GA image
   vllm_upstream_min: "v0.24.0"          # minimum upstream vLLM for all features in this recipe
   vllm_upstream_validated: "v0.24.0"    # upstream version actually benchmarked by PSAP
-  llmisvc_api: "serving.kserve.io/v1alpha1"  # NEEDS VERIFICATION -- confirm against 3.5.0-GA CRD
+  llmisvc_api: "serving.kserve.io/v1alpha2"  # matches shipped 3.5 manifests: models/glm-5.2/rhoai/3.5/
   # NOTE: rhaiis_bundled_vllm predates GLM-5.2 support. The image override in
   # image.recommended is required until RHAIIS ships >= vllm_upstream_min.
 
@@ -80,7 +80,7 @@ args:
 
 args_lede: >
   Ten flags plus two common. Each is load-bearing for agentic serving at 131K --
-  drop any of the four parser and tool flags and tool calling silently degrades to prose.
+  drop any of the three parser and tool flags and tool calling silently degrades to prose.
 default_stance: >
   Everything else is default on purpose. If you are reaching for a flag not on this
   list, the honest first question is whether you have measured the thing it is
@@ -114,11 +114,11 @@ features:
 deploy:
   tier: rhaiis
   kind: LLMInferenceService
-  api_version: "serving.kserve.io/v1alpha1"   # NEEDS VERIFICATION
+  api_version: "serving.kserve.io/v1alpha2"   # keep aligned with platform.llmisvc_api
   target: kserve-llmisvc
   status:
     state: derived
-    derived_from: "validated raw single-node playbook (models/glm-5.2, vllm v0.24.0)"
+    derived_from: "validated raw single-node playbook (models/glm-5.2/vllm/v0.23.0/single-node)"
     note: "3.5-GA publishes LLMInferenceService manifests only for PP=2. Confirm single-node passes VLLM_ADDITIONAL_ARGS through."
   parallelism: { tensor: 8 }
   resources:
@@ -154,14 +154,22 @@ deploy:
     - { step: "Verify", detail: "Three probes, not one." }
 
 benchmarks:
-  harness: guidellm            # NEEDS VERIFICATION
-  workload: "agentic trace replay, 50 Weka sessions, 131K ctx"
+  harness: guidellm            # 8K/1K sweep below; Weka trace replay used inference-perf
+  workload: "synthetic 8K in / 1K out sweep, 300 s per concurrency stage"
   image_tested: vllm/vllm-openai:v0.24.0
   status: { state: verified, date: 2026-08-20, method: psap-run }
+  note: >
+    Sweep measured on the short-context tuned config (10K max-model-len, auto KV
+    dtype, no parsers) -- see guides/8k1k-optimized.md in the source playbook. Treat
+    it as this node's short-context ceiling, not 131K agentic latency: the Weka
+    trace replay (50 sessions, 131K ctx) measured TTFT p50 5.96 s at 66K avg input.
   summary:
-    - { concurrency: 1,  ttft_p50_ms: 700, ttft_p95_ms: null, tpot_ms: null, throughput_tok_s: null }
-    - { concurrency: 16, ttft_p50_ms: 700, ttft_p95_ms: null, tpot_ms: null, throughput_tok_s: null }
-  raw: results/2026-08-20-agentic-replay/
+    - { concurrency: 1,  ttft_p50_ms: 665, ttft_p95_ms: 671,  itl_p50_ms: 6.0,  tpot_ms: null, throughput_tok_s: 151 }
+    - { concurrency: 4,  ttft_p50_ms: 692, ttft_p95_ms: 708,  itl_p50_ms: 11.0, tpot_ms: null, throughput_tok_s: 339 }
+    - { concurrency: 16, ttft_p50_ms: 738, ttft_p95_ms: 4708, itl_p50_ms: 23.0, tpot_ms: null, throughput_tok_s: 649 }
+  # Sweep raw artifacts live with the internal perf-team run (June 2026 window);
+  # the repo results/ dir holds the WL1/WL2 runs backing the prefix-caching insight.
+  raw: models/glm-5.2/vllm/v0.23.0/single-node/results/
 
 sizing:
   tool: configiq
@@ -171,7 +179,7 @@ insights:
   - "Prefix caching is the cheapest win available: 63% lower TTFT p50, 12% higher throughput."
   - "FP8 KV cache bought ~16% throughput over GLM-5 on the same topology, 14-17% faster TTFT."
   - "Real agentic sessions overflow 131K: 42 of 50 Weka sessions exceeded the window."
-  - "TTFT p50 flat near 0.7 s from C=1 to C=16; p95 blowup at C=16 is prefill queueing -- add a replica."
+  - "TTFT p50 flat near 0.7 s from C=1 to C=16 in the 8K/1K sweep; the measured p95 blowup at C=16 (4.7 s) is prefill queueing -- add a replica."
 
 known_issues:
   - issue: "MTP incompatible with pipeline parallelism"
