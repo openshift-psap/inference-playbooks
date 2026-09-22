@@ -7,6 +7,8 @@
 - Removes `match.nodes` as a supported catalog selector; catalog tooling derives
   node scope from `deployment.scope`.
 - Requires explicit platform, hardware-profile, and workload-profile identity.
+- Limits workload profiles to the reusable PR #7 benchmark workloads and adds
+  deployment-mode plus latency/throughput optimization-intent metadata.
 - Adds references to benchmark run records for validated and production recipes.
 
 ## Supporting schemas v1

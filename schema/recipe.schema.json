@@ -5,7 +5,8 @@
   "type": "object",
   "required": [
     "schema_version", "recipe_id", "model_id", "platform",
-    "hardware_profile", "workload_profile", "maturity", "deployment"
+    "hardware_profile", "workload_profile", "deployment_mode",
+    "optimization_intent", "maturity", "deployment"
   ],
   "$defs": {
     "status": {
@@ -51,8 +52,13 @@
       "pattern": "^hardware-profiles/[a-z0-9][a-z0-9._-]+\\.yaml$"
     },
     "workload_profile": {
-      "enum": ["agentic", "latency", "throughput", "chat", "batch", "embedding"]
+      "enum": ["guidellm-8k1k", "aiperf-agentx-128k", "aiperf-agentx-unlimited-context"]
     },
+    "deployment_mode": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*(--[a-z0-9][a-z0-9-]*)?$"
+    },
+    "optimization_intent": {"enum": ["latency", "throughput"]},
     "maturity": {"enum": ["day-zero", "validated", "production"]},
     "deployment": {
       "type": "object",

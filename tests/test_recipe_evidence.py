@@ -42,9 +42,9 @@ correction_log:
         profile = directory / "hardware-profiles" / "h200-r1.yaml"
         profile.parent.mkdir(parents=True)
         profile.write_text(self.profile_text.format(revision=1, correction=""))
-        recipe = directory / "models" / "glm" / "rhoai" / "3.5" / "recipes" / "h200-r1" / "agentic" / "recipe.yaml"
+        recipe = directory / "models" / "glm" / "rhoai" / "3.5" / "recipes" / "h200-r1" / "guidellm-8k1k" / "tp8-aggregated" / "recipe.yaml"
         recipe.parent.mkdir(parents=True)
-        recipe.write_text("recipe_id: agentic\nhardware_profile: hardware-profiles/h200-r1.yaml\n")
+        recipe.write_text("recipe_id: guidellm-tp8\nhardware_profile: hardware-profiles/h200-r1.yaml\n")
         git(directory, "add", ".")
         git(directory, "commit", "-qm", "initial")
         return directory, profile, recipe
@@ -97,13 +97,13 @@ correction_log:
 
     def test_recipe_change_selects_only_that_recipe(self):
         directory, _, recipe = self.make_repo()
-        recipe.write_text("recipe_id: agentic\nmaturity: validated\n")
+        recipe.write_text("recipe_id: guidellm-tp8\nmaturity: validated\n")
         git(directory, "add", ".")
         result = self.run_tool(directory, "--cached", "affected-recipes")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             json.loads(result.stdout),
-            {"all": False, "recipes": ["models/glm/rhoai/3.5/recipes/h200-r1/agentic"]},
+            {"all": False, "recipes": ["models/glm/rhoai/3.5/recipes/h200-r1/guidellm-8k1k/tp8-aggregated"]},
         )
 
     def test_profile_correction_selects_referencing_recipe(self):
@@ -117,18 +117,20 @@ correction_log:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             json.loads(result.stdout),
-            {"all": False, "recipes": ["models/glm/rhoai/3.5/recipes/h200-r1/agentic"]},
+            {"all": False, "recipes": ["models/glm/rhoai/3.5/recipes/h200-r1/guidellm-8k1k/tp8-aggregated"]},
         )
 
     def test_recipe_schema_requires_canonical_deployment_scope(self):
         schema = json.loads((REPO / "schema" / "recipe.schema.json").read_text())
         recipe = {
             "schema_version": 3,
-            "recipe_id": "glm-agentic",
+            "recipe_id": "glm-guidellm-tp8",
             "model_id": "glm",
             "platform": {"stack": "rhoai", "version": "3.5"},
             "hardware_profile": "hardware-profiles/h200-r1.yaml",
-            "workload_profile": "agentic",
+            "workload_profile": "guidellm-8k1k",
+            "deployment_mode": "tp8-aggregated",
+            "optimization_intent": "latency",
             "maturity": "day-zero",
             "deployment": {"scope": "single-node"},
         }

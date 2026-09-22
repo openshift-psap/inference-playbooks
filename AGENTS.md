@@ -21,11 +21,12 @@ models/<model-id>/
     model-ops/
     recipes/<hardware-profile>/
       <workload-profile>/
-        recipe.yaml
-        manifests/
-        guides/
-        benchmarks/
-        results/
+        <deployment-mode>[--<suffix>]/
+          recipe.yaml
+          manifests/
+          guides/
+          benchmarks/
+          results/
 catalog/
 tools/
 .github/workflows/
@@ -40,8 +41,17 @@ framework limitations are part of the stack/version context.
 `h200-sxm8` or `mi300x-8gpu`. In a recipe path it is a navigation selector, not
 the source of physical facts. Each `recipe.yaml` must explicitly reference the
 matching root-level `hardware-profiles/<hardware-profile>.yaml`.
-`<workload-profile>` is the intended use case, such as `agentic`, `latency`,
-or `throughput`.
+`<workload-profile>` is one of the reusable benchmark workloads from PR #7:
+`guidellm-8k1k`, `aiperf-agentx-128k`, or
+`aiperf-agentx-unlimited-context`. `<deployment-mode>` identifies the
+configuration pattern, such as `tp8-aggregated`, `tp8-replicas-2`, or
+`pp2-tp8`. A suffix is allowed only when more than one recipe shares the same
+deployment mode (for example, `tp8-aggregated--prefix-cache-off`).
+
+Each recipe declares `optimization_intent: latency` or
+`optimization_intent: throughput`. This is a catalog label, not a directory
+level or a claim inferred from the path. Multiple recipes for the same workload
+may have the same intent.
 
 ## Ownership and source of truth
 
@@ -122,12 +132,12 @@ configuration linting.
 CI and pre-commit must run the same local commands. CI should calculate the
 affected recipe set from the diff:
 
-- changes below one workload recipe validate/render only that recipe;
+- changes below one deployment-mode recipe validate/render only that recipe;
 - a newly added hardware profile does not fan out to existing recipes;
 - a corrected hardware profile validates/renders only recipes that explicitly
   reference that profile;
 - renderer/schema/validator changes validate/render every recipe;
-- a modification to an existing hardware profile fails validation.
+- a documented hardware-profile correction validates; an identity change fails.
 
 Generated-file checks must fail on drift; automation should not silently commit
 changes to a contributor's branch.

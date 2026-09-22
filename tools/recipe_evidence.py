@@ -142,7 +142,7 @@ def check_hardware_profiles(repo: Path, base: str, head: str, cached: bool) -> i
 def recipe_directories(repo: Path) -> set[str]:
     return {
         str(path.parent.relative_to(repo))
-        for path in repo.glob("models/**/recipes/*/*/recipe.yaml")
+        for path in repo.glob("models/**/recipes/*/*/*/recipe.yaml")
     }
 
 

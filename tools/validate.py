@@ -54,11 +54,13 @@ def referenced_path(repo: Path, relative_path: str) -> Path | None:
 def validate_recipe_layout(repo: Path, recipe_path: Path, recipe: dict) -> list[str]:
     errors = []
     parts = recipe_path.relative_to(repo).parts
-    # models/<model>/<stack>/<version>/recipes/<hardware>/<workload>/recipe.yaml
+    # models/<model>/<stack>/<version>/recipes/<hardware>/<workload>/<mode>/recipe.yaml
     try:
         recipes_index = parts.index("recipes")
         model_id, stack, version = parts[1], parts[2], parts[3]
-        hardware_selector, workload = parts[recipes_index + 1], parts[recipes_index + 2]
+        hardware_selector, workload, deployment_mode = (
+            parts[recipes_index + 1], parts[recipes_index + 2], parts[recipes_index + 3]
+        )
     except (ValueError, IndexError):
         return [f"{recipe_path}: does not follow the model/stack/version/recipes layout"]
     if recipe.get("model_id") != model_id:
@@ -68,6 +70,8 @@ def validate_recipe_layout(repo: Path, recipe_path: Path, recipe: dict) -> list[
         errors.append(f"{recipe_path}: platform.stack/version must match its directory")
     if recipe.get("workload_profile") != workload:
         errors.append(f"{recipe_path}: workload_profile must match its directory")
+    if recipe.get("deployment_mode") != deployment_mode:
+        errors.append(f"{recipe_path}: deployment_mode must match its directory")
     profile_path = referenced_path(repo, recipe.get("hardware_profile", ""))
     if not profile_path or not profile_path.is_file():
         errors.append(f"{recipe_path}: hardware_profile does not exist")
@@ -118,7 +122,7 @@ def main() -> int:
     for path in sorted(repo.glob("models/**/model.yaml")):
         model = load_yaml(path)
         errors.extend(validate_document(path, model, schemas["model"]))
-    for path in sorted(repo.glob("models/**/recipes/*/*/recipe.yaml")):
+    for path in sorted(repo.glob("models/**/recipes/*/*/*/recipe.yaml")):
         recipe = load_yaml(path)
         errors.extend(validate_document(path, recipe, schemas["recipe"]))
         errors.extend(validate_recipe_layout(repo, path, recipe))
