@@ -88,11 +88,9 @@ All benchmark Jobs write artifacts to `/results` on a PersistentVolumeClaim
 named `benchmark-results`. Create that claim in the benchmark namespace before
 applying a Job, choosing a storage class, size, and access mode that fit the
 cluster's storage policy. Completed Jobs and their pods are retained for one day
-to support debugging; results remain on the PVC. A reusable retrieval pod that
-mounts this claim is tracked in
-[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
-The AIPerf cache is still temporary; replace `hf-cache` with a PVC if repeated
-runs should reuse downloads.
+to support debugging; results remain on the PVC. The AIPerf cache is still
+temporary; replace `hf-cache` with a PVC if repeated runs should reuse
+downloads.
 
 This PVC-backed collection workflow is for standalone benchmark runs. It is not
 needed when running through the Forge CI framework, which handles result
@@ -117,9 +115,22 @@ kubectl apply -f benchmarks/manifests/guidellm-8k1k-job.yaml -n <namespace>
 kubectl wait --for=condition=complete job/guidellm-8k1k -n <namespace> --timeout=45m
 ```
 
-Retrieve artifacts by mounting `benchmark-results` in a separate running pod;
-the reusable manifest and commands are tracked in
-[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
+## Retrieve Artifacts
+
+Use the supplied BusyBox pod to mount `benchmark-results` read-only and copy
+artifacts after the benchmark Job has completed or been cleaned up. It is a Pod,
+not a Job, because `kubectl cp` requires a running container.
+
+```bash
+kubectl apply -n <namespace> -f benchmarks/manifests/benchmark-results-download-pod.yaml
+kubectl wait --for=condition=Ready pod/benchmark-results-download -n <namespace> --timeout=5m
+kubectl cp -n <namespace> benchmark-results-download:/results ./benchmark-results
+kubectl delete pod/benchmark-results-download -n <namespace>
+```
+
+The pod runs for one hour. Delete and recreate it if the copy takes longer or
+if it has already completed. The claim must be in the same namespace and allow
+a read-only mount while the benchmark Job is no longer using it.
 
 Use the equivalent AIPerf Job name and allow at least two hours for its
 download, warmup, 30-minute profile, and result export. Check Job logs when a
