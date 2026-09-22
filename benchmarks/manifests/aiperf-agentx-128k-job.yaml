@@ -101,9 +101,9 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-        # Replace with a PersistentVolumeClaim to retain results after Job TTL cleanup.
         - name: results
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: benchmark-results
         # Keeps the automatically downloaded public AgentX trace corpus for this run.
         - name: hf-cache
           emptyDir: {}
