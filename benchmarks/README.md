@@ -13,7 +13,7 @@ they prevent a benchmark from being accidentally directed at the wrong model.
 |---|---|---|
 | `ENDPOINT` | Set to the target's in-cluster base URL, including its port; for example, `http://my-model:8000`. Do not add `/v1/...`. | Both Jobs |
 | `MODEL` | Set to the model identifier accepted by the endpoint. For vLLM, this is normally the `--served-model-name` value. | Both Jobs |
-| `TOKENIZER` | Set to the Hugging Face model ID or another tokenizer path that matches the served model. | AIPerf AgentX |
+| `TOKENIZER` | Set to the Hugging Face model ID or another tokenizer path that matches the served model. | Both Jobs |
 | `image` | The templates use `quay.io/rh-ee-thibrahi/aiperf:0.12.0`. Replace it only if the target cluster cannot pull it or requires a different AIPerf version. | AIPerf AgentX |
 
 The target must be reachable from the Job namespace and expose OpenAI-compatible
@@ -103,7 +103,7 @@ same manifest, or change `metadata.name` to retain multiple runs.
 ```bash
 kubectl apply --dry-run=client -f benchmarks/manifests/guidellm-8k1k-job.yaml
 kubectl apply -f benchmarks/manifests/guidellm-8k1k-job.yaml -n <namespace>
-kubectl wait --for=condition=complete job/guidellm-8k1k -n <namespace> --timeout=30m
+kubectl wait --for=condition=complete job/guidellm-8k1k -n <namespace> --timeout=45m
 POD=$(kubectl get pods -n <namespace> -l job-name=guidellm-8k1k -o jsonpath='{.items[0].metadata.name}')
 kubectl cp -n <namespace> "$POD":/results ./guidellm-8k1k-results
 ```

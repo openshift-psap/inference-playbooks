@@ -21,7 +21,7 @@ models/<model>/<framework>/<version>/<topology>/
 ## Common Benchmarks
 
 Reusable benchmark Jobs live in [`benchmarks/manifests/`](benchmarks/manifests/).
-Set the `ENDPOINT`, `MODEL`, and (for AIPerf) `TOKENIZER` environment values in
+Set the `ENDPOINT`, `MODEL`, and `TOKENIZER` environment values in
 each manifest before applying it in the same namespace as the target Service.
 
 - [GuideLLM 8K/1K](benchmarks/manifests/guidellm-8k1k-job.yaml) — synthetic

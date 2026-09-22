@@ -17,7 +17,13 @@ spec:
         app.kubernetes.io/name: aiperf
         app.kubernetes.io/component: benchmark
     spec:
+      automountServiceAccountToken: false
       restartPolicy: Never
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
         - name: aiperf
           image: quay.io/rh-ee-thibrahi/aiperf:0.12.0
@@ -42,6 +48,12 @@ spec:
               value: "1800"
             - name: AIPERF_SERVICE_PROFILE_CONFIGURE_TIMEOUT
               value: "1800"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
           command:
             - /bin/sh
             - -ec
@@ -78,14 +90,22 @@ spec:
               cpu: "8"
               memory: 32Gi
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: results
               mountPath: /results
             - name: hf-cache
               mountPath: /tmp/huggingface
+            - name: torchinductor-cache
+              mountPath: /tmp/torchinductor
       volumes:
+        - name: tmp
+          emptyDir: {}
         # Replace with a PersistentVolumeClaim to retain results after Job TTL cleanup.
         - name: results
           emptyDir: {}
         # Keeps the automatically downloaded public AgentX trace corpus for this run.
         - name: hf-cache
+          emptyDir: {}
+        - name: torchinductor-cache
           emptyDir: {}

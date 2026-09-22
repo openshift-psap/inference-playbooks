@@ -17,9 +17,16 @@ spec:
         app.kubernetes.io/name: aiperf
         app.kubernetes.io/component: benchmark
     spec:
+      automountServiceAccountToken: false
       restartPolicy: Never
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
         - name: aiperf
+          image: quay.io/rh-ee-thibrahi/aiperf:0.12.0
           imagePullPolicy: IfNotPresent
           env:
             # Set to an OpenAI-compatible Service reachable from this Job's namespace.
@@ -41,10 +48,17 @@ spec:
               value: "1800"
             - name: AIPERF_SERVICE_PROFILE_CONFIGURE_TIMEOUT
               value: "1800"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
           command:
             - /bin/sh
             - -ec
             - |
+              # Adjust this sweep for larger load generators.
               exec aiperf profile \
                 --scenario inferencex-agentx-mvp \
                 --url "${ENDPOINT}" \
@@ -53,7 +67,7 @@ spec:
                 --tokenizer "${TOKENIZER}" \
                 --endpoint-type chat \
                 --public-dataset semianalysis_cc_traces_weka_062126 \
-                --concurrency 32 \
+                --concurrency 1,4,16,32 \
                 --failed-request-threshold 0.10 \
                 --use-server-token-count \
                 --streaming \
@@ -76,14 +90,22 @@ spec:
               cpu: "8"
               memory: 32Gi
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: results
               mountPath: /results
             - name: hf-cache
               mountPath: /tmp/huggingface
+            - name: torchinductor-cache
+              mountPath: /tmp/torchinductor
       volumes:
+        - name: tmp
+          emptyDir: {}
         # Replace with a PersistentVolumeClaim to retain results after Job TTL cleanup.
         - name: results
           emptyDir: {}
         # Keeps the automatically downloaded public AgentX trace corpus for this run.
         - name: hf-cache
+          emptyDir: {}
+        - name: torchinductor-cache
           emptyDir: {}

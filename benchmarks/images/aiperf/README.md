@@ -27,7 +27,7 @@ To build a different pinned AIPerf version:
 
 ```bash
 docker buildx build --platform linux/amd64 --push \
-  --build-arg AIPERF_VERSION=0.12.0 \
+  --build-arg AIPERF_VERSION=0.11.0 \
   --tag "$AIPERF_IMAGE" \
   --file benchmarks/images/aiperf/Containerfile \
   benchmarks/images/aiperf

@@ -15,7 +15,13 @@ spec:
         app.kubernetes.io/name: guidellm
         app.kubernetes.io/component: benchmark
     spec:
+      automountServiceAccountToken: false
       restartPolicy: Never
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
         - name: guidellm
           image: ghcr.io/vllm-project/guidellm:v0.7.3
@@ -27,11 +33,22 @@ spec:
             # Set to the model identifier accepted by the target endpoint.
             - name: MODEL
               value: REPLACE_ME
+            # Set to the Hugging Face tokenizer identifier matching the served model.
+            - name: TOKENIZER
+              value: REPLACE_ME
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
           command:
             - guidellm
             - run
             - --backend
             - kind=openai_http,target=$(ENDPOINT),model=$(MODEL)
+            - --tokenizer
+            - kind=huggingface_auto,model=$(TOKENIZER)
             - --data
             - kind=synthetic_text,prompt_tokens=8000,output_tokens=1000
             - --profile
@@ -50,9 +67,13 @@ spec:
               cpu: "4"
               memory: 8Gi
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: results
               mountPath: /results
       volumes:
+        - name: tmp
+          emptyDir: {}
         # Replace with a PersistentVolumeClaim to retain results after Job TTL cleanup.
         - name: results
           emptyDir: {}
