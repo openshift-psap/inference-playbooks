@@ -18,6 +18,9 @@ from typing import Iterable
 import yaml
 
 PROFILE_ROOT = "hardware-profiles"
+RECIPE_PATH = re.compile(
+    r"^models/[^/]+/[^/]+/[^/]+/recipes/[^/]+/[^/]+/[^/]+/recipe\.yaml$"
+)
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -183,17 +186,23 @@ def check_hardware_profiles(repo: Path, base: str, head: str, cached: bool) -> i
     return 0
 
 
-def recipe_directories(repo: Path) -> set[str]:
-    """Discover recipe directories following the supported layout."""
+def recipe_directories(repo: Path, revision: str) -> set[str]:
+    """Discover canonical recipe directories from one Git snapshot."""
+    if revision == ":":
+        paths = git_lines(repo, ["ls-files", "--cached"])
+    else:
+        paths = git_lines(repo, ["ls-tree", "-r", "--name-only", revision])
     return {
-        str(path.parent.relative_to(repo))
-        for path in repo.glob("models/**/recipes/*/*/*/recipe.yaml")
+        str(Path(path).parent)
+        for path in paths
+        if RECIPE_PATH.fullmatch(path)
     }
 
 
 def affected_recipes(repo: Path, base: str, head: str, cached: bool) -> dict[str, object]:
     """Return the recipe directories affected by a revision comparison."""
-    recipes = recipe_directories(repo)
+    candidate_revision = ":" if cached else head
+    recipes = recipe_directories(repo, candidate_revision)
     changed = changed_paths(repo, base, head, cached)
     global_change = any(
         any(path.startswith(prefix) for prefix in ("tools/", "schema/", ".github/workflows/"))
@@ -212,7 +221,7 @@ def affected_recipes(repo: Path, base: str, head: str, cached: bool) -> dict[str
     }
     changed_profiles = {path for _, path in profile_paths(changed)}
     for recipe in recipes:
-        recipe_text = (repo / recipe / "recipe.yaml").read_text()
+        recipe_text = git_file(repo, candidate_revision, f"{recipe}/recipe.yaml")
         if any(profile in recipe_text for profile in changed_profiles):
             affected.add(recipe)
     return {"all": False, "recipes": sorted(affected)}

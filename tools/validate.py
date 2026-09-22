@@ -62,14 +62,10 @@ def validate_recipe_layout(repo: Path, recipe_path: Path, recipe: dict, runs_by_
     errors = []
     parts = recipe_path.relative_to(repo).parts
     # models/<model>/<stack>/<version>/recipes/<hardware>/<workload>/<mode>/recipe.yaml
-    try:
-        recipes_index = parts.index("recipes")
-        model_id, stack, version = parts[1], parts[2], parts[3]
-        hardware_selector, workload, deployment_mode = (
-            parts[recipes_index + 1], parts[recipes_index + 2], parts[recipes_index + 3]
-        )
-    except (ValueError, IndexError):
+    if len(parts) != 9 or parts[0] != "models" or parts[4] != "recipes":
         return [f"{recipe_path}: does not follow the model/stack/version/recipes layout"]
+    model_id, stack, version = parts[1:4]
+    hardware_selector, workload, deployment_mode = parts[5:8]
     if recipe.get("model_id") != model_id:
         errors.append(f"{recipe_path}: model_id must match its model directory")
     platform = recipe.get("platform", {})
@@ -85,9 +81,12 @@ def validate_recipe_layout(repo: Path, recipe_path: Path, recipe: dict, runs_by_
     if not profile_path or not profile_path.is_file():
         errors.append(f"{recipe_path}: hardware_profile does not exist")
     else:
-        profile = load_yaml(profile_path)
-        if hardware_selector not in {profile_path.stem, profile.get("accelerator_key")}:
-            errors.append(f"{recipe_path}: hardware selector must match the profile ID or accelerator_key")
+        try:
+            profile = load_yaml(profile_path)
+            if hardware_selector not in {profile_path.stem, profile.get("accelerator_key")}:
+                errors.append(f"{recipe_path}: hardware selector must match the profile ID or accelerator_key")
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            errors.append(f"{recipe_path}: cannot load hardware_profile: {error}")
     run_references = recipe.get("benchmark_runs", [])
     if not isinstance(run_references, list):
         run_references = []
@@ -126,8 +125,12 @@ def validate_benchmark_run(repo: Path, path: Path, run: dict) -> tuple[list[str]
     profile_path = contained_path(repo, run.get("hardware_profile"))
     if not profile_path or not profile_path.is_file():
         return [f"{path}: hardware_profile does not exist"], None
-    profile = load_yaml(profile_path)
-    if run.get("hardware_profile_revision", 0) > profile["profile_revision"]:
+    try:
+        profile = load_yaml(profile_path)
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        return [f"{path}: cannot load hardware_profile: {error}"], None
+    profile_revision = profile.get("profile_revision")
+    if isinstance(profile_revision, int) and run.get("hardware_profile_revision", 0) > profile_revision:
         errors.append(f"{path}: hardware_profile_revision is newer than the referenced profile")
     result_path = contained_path(path.parent, run.get("result"))
     if not result_path:
@@ -162,17 +165,32 @@ def main() -> int:
             else ["hardware profile correction validation failed"]
         )
     for path in sorted((repo / "hardware-profiles").glob("*.yaml")):
-        profile = load_yaml(path)
+        try:
+            profile = load_yaml(path)
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            errors.append(f"{path}: cannot load YAML: {error}")
+            continue
         errors.extend(validate_document(path, profile, schemas["hardware-profile"]))
     for path in sorted(repo.glob("models/**/model.yaml")):
-        model = load_yaml(path)
+        try:
+            model = load_yaml(path)
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            errors.append(f"{path}: cannot load YAML: {error}")
+            continue
         errors.extend(validate_document(path, model, schemas["model"]))
     runs_by_id: dict[str, tuple[Path, dict]] = {}
     runs_by_path: dict[Path, dict] = {}
     expected_results: dict[Path, tuple[Path, dict]] = {}
     for path in sorted(repo.glob("models/**/results/**/run.yaml")):
-        run = load_yaml(path)
-        errors.extend(validate_document(path, run, schemas["benchmark-run"]))
+        try:
+            run = load_yaml(path)
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            errors.append(f"{path}: cannot load YAML: {error}")
+            continue
+        document_errors = validate_document(path, run, schemas["benchmark-run"])
+        errors.extend(document_errors)
+        if document_errors:
+            continue
         run_id = run.get("run_id")
         if isinstance(run_id, str):
             if run_id in runs_by_id:
@@ -188,12 +206,26 @@ def main() -> int:
             else:
                 expected_results[result_path] = (path, run)
     for path in sorted(repo.glob("models/**/recipes/*/*/*/recipe.yaml")):
-        recipe = load_yaml(path)
-        errors.extend(validate_document(path, recipe, schemas["recipe"]))
+        try:
+            recipe = load_yaml(path)
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            errors.append(f"{path}: cannot load YAML: {error}")
+            continue
+        document_errors = validate_document(path, recipe, schemas["recipe"])
+        errors.extend(document_errors)
+        if document_errors:
+            continue
         errors.extend(validate_recipe_layout(repo, path, recipe, runs_by_path))
     for path in sorted(repo.glob("models/**/results/**/result.json")):
-        result = json.loads(path.read_text())
-        errors.extend(validate_document(path, result, schemas["benchmark-result"]))
+        try:
+            result = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            errors.append(f"{path}: cannot load JSON: {error}")
+            continue
+        document_errors = validate_document(path, result, schemas["benchmark-result"])
+        errors.extend(document_errors)
+        if document_errors:
+            continue
         expected = expected_results.get(path.resolve())
         if not expected:
             errors.append(f"{path}: normalized result is not referenced by a benchmark run")

@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from jsonschema import Draft202012Validator
 
 REPO = Path(__file__).resolve().parents[1]
 TOOL = REPO / "tools" / "recipe_evidence.py"
+VALIDATOR = REPO / "tools" / "validate.py"
 
 
 def git(directory, *arguments):
@@ -52,6 +54,14 @@ correction_log:
     def run_tool(self, directory, *arguments):
         return subprocess.run(
             ["python3", str(TOOL), "--repo", str(directory), *arguments],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def run_validator(self, directory, *arguments):
+        return subprocess.run(
+            ["python3", str(VALIDATOR), "--repo", str(directory), *arguments],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -136,6 +146,34 @@ correction_log:
             json.loads(result.stdout),
             {"all": False, "recipes": ["models/glm/rhoai/3.5/recipes/h200-r1/guidellm-8k1k/tp8-aggregated"]},
         )
+
+    def test_staged_profile_correction_ignores_unstaged_recipe_edits(self):
+        directory, profile, recipe = self.make_repo()
+        profile.write_text(self.profile_text.format(
+            revision=2,
+            correction="  - revision: 2\n    summary: Corrected host memory documentation.\n",
+        ))
+        git(directory, "add", "hardware-profiles/h200-r1.yaml")
+        recipe.write_text("recipe_id: guidellm-tp8\n")
+        result = self.run_tool(directory, "--cached", "affected-recipes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"all": False, "recipes": ["models/glm/rhoai/3.5/recipes/h200-r1/guidellm-8k1k/tp8-aggregated"]},
+        )
+
+    def test_validator_reports_invalid_document_shapes_without_a_traceback(self):
+        directory, profile, _ = self.make_repo()
+        shutil.copytree(REPO / "schema", directory / "schema")
+        profile.write_text("profile_id: h200-r1\n")
+        result_path = directory / "models" / "glm" / "results" / "run-1" / "result.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_text("[]\n")
+        result = self.run_validator(directory, "--current")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("profile_revision", result.stderr)
+        self.assertIn("is not of type 'object'", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_recipe_schema_requires_canonical_deployment_scope(self):
         schema = json.loads((REPO / "schema" / "recipe.schema.json").read_text())
