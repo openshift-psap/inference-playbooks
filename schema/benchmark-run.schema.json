@@ -5,7 +5,7 @@
   "type": "object",
   "required": [
     "schema_version", "run_id", "recipe_id", "deployment_scope",
-    "hardware_profile", "hardware_profile_revision", "harness", "artifacts"
+    "hardware_profile", "hardware_profile_revision", "harness", "result", "artifacts"
   ],
   "properties": {
     "schema_version": {"const": 1},
@@ -15,6 +15,7 @@
     "hardware_profile": {"type": "string", "pattern": "^hardware-profiles/.+\\.yaml$"},
     "hardware_profile_revision": {"type": "integer", "minimum": 1},
     "harness": {"type": "string"},
+    "result": {"type": "string", "pattern": "^result\\.json$"},
     "command": {"type": "string"},
     "workload": {"type": "object"},
     "environment": {"type": "object"},

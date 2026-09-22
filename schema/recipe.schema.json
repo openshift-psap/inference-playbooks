@@ -44,7 +44,7 @@
       "required": ["stack", "version"],
       "properties": {
         "stack": {"enum": ["rhoai", "llm-d", "vllm"]},
-        "version": {"type": "string", "minLength": 1}
+        "version": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"}
       }
     },
     "hardware_profile": {

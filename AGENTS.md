@@ -113,6 +113,10 @@ A result run records:
 - stack, driver, CUDA, storage, and relevant environment details;
 - raw harness output, checksums, and a parser-generated normalized result.
 
+Each run record points to its normalized `result.json`; the result points back
+to exactly one run ID. Validation rejects duplicate run IDs, unreferenced
+results, and references that escape a recipe or run directory.
+
 Raw output is authoritative. Parsers/normalizers must be standalone local tools
 that run in pre-commit and CI; README/catalog summaries are generated from the
 normalized result and must never be hand-copied. Preserve explicit units and
@@ -126,7 +130,7 @@ and immutable checksum plus a durable external location.
 ## Validation and generated files
 
 `tools/validate.py` validates schemas, cross-file references, profile
-immutability, and required benchmark provenance. `tools/render.py` renders
+revisions, and required benchmark provenance. `tools/render.py` renders
 manifests, recipe READMEs, and catalog outputs. `tools/doctor.py` performs
 configuration linting.
 

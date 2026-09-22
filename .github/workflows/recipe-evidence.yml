@@ -1,5 +1,8 @@
 name: Recipe evidence
 
+permissions:
+  contents: read
+
 on:
   pull_request:
   push:
@@ -31,6 +34,7 @@ jobs:
       - id: affected
         name: Find recipes affected by this change
         run: |
+          python3 -m pip install --disable-pip-version-check -r tools/requirements.txt
           matrix=$(python3 tools/recipe_evidence.py \
             --base "${{ github.event.pull_request.base.sha || github.event.before }}" \
             --head "${{ github.sha }}" affected-recipes)
@@ -47,5 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Render and check the recipe README
+        env:
+          RECIPE: ${{ matrix.recipe }}
         run: >-
-          echo "README rendering will be enabled when the renderer lands for ${{ matrix.recipe }}"
+          echo "README rendering will be enabled when the renderer lands for $RECIPE"

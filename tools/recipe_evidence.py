@@ -21,6 +21,7 @@ PROFILE_ROOT = "hardware-profiles"
 
 
 def git_lines(repo: Path, arguments: list[str]) -> list[str]:
+    """Run Git and return its non-empty stdout lines."""
     result = subprocess.run(
         ["git", "-C", str(repo), *arguments],
         check=True,
@@ -32,6 +33,7 @@ def git_lines(repo: Path, arguments: list[str]) -> list[str]:
 
 
 def changed_paths(repo: Path, base: str, head: str, cached: bool) -> list[tuple[str, list[str]]]:
+    """Return name-status changes for a revision comparison or staged index."""
     arguments = ["diff", "--name-status", "-M"]
     if cached:
         arguments.append("--cached")
@@ -48,6 +50,7 @@ def changed_paths(repo: Path, base: str, head: str, cached: bool) -> list[tuple[
 
 
 def profile_paths(changes: Iterable[tuple[str, list[str]]]) -> Iterable[tuple[str, str]]:
+    """Yield changed flat hardware-profile YAML files."""
     for status, paths in changes:
         for path in paths:
             if Path(path).parent.as_posix() == PROFILE_ROOT and path.endswith(".yaml"):
@@ -55,6 +58,7 @@ def profile_paths(changes: Iterable[tuple[str, list[str]]]) -> Iterable[tuple[st
 
 
 def git_file(repo: Path, revision: str, path: str) -> str:
+    """Read a file from a Git revision or from the staged index."""
     object_name = f":{path}" if revision == ":" else f"{revision}:{path}"
     return subprocess.run(
         ["git", "-C", str(repo), "show", object_name],
@@ -66,6 +70,7 @@ def git_file(repo: Path, revision: str, path: str) -> str:
 
 
 def load_profile(repo: Path, revision: str, path: str) -> dict:
+    """Load and type-check a profile stored at a Git revision."""
     profile = yaml.safe_load(git_file(repo, revision, path))
     if not isinstance(profile, dict):
         raise ValueError("profile must be a YAML object")
@@ -73,6 +78,7 @@ def load_profile(repo: Path, revision: str, path: str) -> dict:
 
 
 def expected_accelerator_key(profile: dict) -> str:
+    """Derive the generic accelerator comparison key from a profile."""
     accelerators = profile.get("accelerators", {})
     if not isinstance(accelerators, dict):
         return ""
@@ -83,6 +89,7 @@ def expected_accelerator_key(profile: dict) -> str:
 
 
 def identity(profile: dict) -> dict:
+    """Return the hardware-profile fields that cannot change in place."""
     return {
         "profile_id": profile.get("profile_id"),
         "accelerator_key": profile.get("accelerator_key")
@@ -90,6 +97,7 @@ def identity(profile: dict) -> dict:
 
 
 def profile_errors(path: str, profile: dict) -> list[str]:
+    """Return static profile-format errors independent of Git history."""
     errors = []
     if profile.get("profile_id") != Path(path).stem:
         errors.append("profile_id must match the profile filename stem")
@@ -103,7 +111,19 @@ def profile_errors(path: str, profile: dict) -> list[str]:
     return errors
 
 
+def has_current_revision_log(profile: dict) -> bool:
+    """Check that the correction log documents the current revision."""
+    return any(
+        isinstance(entry, dict)
+        and entry.get("revision") == profile.get("profile_revision")
+        and isinstance(entry.get("summary"), str)
+        and entry["summary"].strip()
+        for entry in profile.get("correction_log", [])
+    )
+
+
 def check_hardware_profiles(repo: Path, base: str, head: str, cached: bool) -> int:
+    """Validate profile additions and documented corrections in a Git diff."""
     violations = []
     for status, path in profile_paths(changed_paths(repo, base, head, cached)):
         if status.startswith(("D", "R")):
@@ -116,20 +136,15 @@ def check_hardware_profiles(repo: Path, base: str, head: str, cached: bool) -> i
             if errors:
                 violations.extend(f"{status}\t{path}: {error}" for error in errors)
                 continue
+            if not has_current_revision_log(candidate):
+                violations.append(f"{status}\t{path}: correction_log needs a summary for the current revision")
+                continue
             if status.startswith("M"):
                 previous = load_profile(repo, base, path)
                 if identity(previous) != identity(candidate):
                     violations.append(f"{status}\t{path}: profile_id and accelerator_key require a new profile file")
                 elif candidate["profile_revision"] <= previous.get("profile_revision", 0):
                     violations.append(f"{status}\t{path}: profile_revision must increase for a correction")
-                elif not any(
-                    isinstance(entry, dict)
-                    and entry.get("revision") == candidate["profile_revision"]
-                    and isinstance(entry.get("summary"), str)
-                    and entry["summary"].strip()
-                    for entry in candidate["correction_log"]
-                ):
-                    violations.append(f"{status}\t{path}: correction_log needs a summary for the new revision")
         except (subprocess.CalledProcessError, ValueError, yaml.YAMLError) as error:
             violations.append(f"{status}\t{path}: {error}")
     if violations:
@@ -140,6 +155,7 @@ def check_hardware_profiles(repo: Path, base: str, head: str, cached: bool) -> i
 
 
 def recipe_directories(repo: Path) -> set[str]:
+    """Discover recipe directories following the supported layout."""
     return {
         str(path.parent.relative_to(repo))
         for path in repo.glob("models/**/recipes/*/*/*/recipe.yaml")
@@ -147,6 +163,7 @@ def recipe_directories(repo: Path) -> set[str]:
 
 
 def affected_recipes(repo: Path, base: str, head: str, cached: bool) -> dict[str, object]:
+    """Return the recipe directories affected by a revision comparison."""
     recipes = recipe_directories(repo)
     changed = changed_paths(repo, base, head, cached)
     global_change = any(
@@ -173,6 +190,7 @@ def affected_recipes(repo: Path, base: str, head: str, cached: bool) -> dict[str
 
 
 def main() -> int:
+    """Run the selected evidence-validation helper command."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--base", default="HEAD")

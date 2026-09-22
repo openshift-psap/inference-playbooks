@@ -95,6 +95,15 @@ correction_log:
         result = self.run_tool(directory, "--cached", "check-hardware-profiles")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_new_profile_requires_a_log_for_its_current_revision(self):
+        directory, _, _ = self.make_repo()
+        profile = directory / "hardware-profiles" / "h200-r2.yaml"
+        profile.write_text(self.profile_text.format(revision=2, correction="").replace("h200-r1", "h200-r2"))
+        git(directory, "add", ".")
+        result = self.run_tool(directory, "--cached", "check-hardware-profiles")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("current revision", result.stderr)
+
     def test_recipe_change_selects_only_that_recipe(self):
         directory, _, recipe = self.make_repo()
         recipe.write_text("recipe_id: guidellm-tp8\nmaturity: validated\n")
