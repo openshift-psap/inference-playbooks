@@ -1,14 +1,43 @@
 # Inference Playbooks
 
-Deployment playbooks, manifests, benchmark scripts, and guides for serving large language models on OpenShift/Kubernetes with GPU accelerators.
+Inference Playbooks is a curated, reproducible collection of deployment recipes
+for serving large language models on OpenShift/Kubernetes with GPU accelerators.
+Each playbook connects a model, serving stack, hardware profile, workload,
+deployment configuration, and—when available—auditable benchmark evidence. It
+helps operators select, deploy, validate, and compare practical inference
+configurations rather than treat manifests or benchmark numbers in isolation.
 
-## Current status
+## Supported Accelerators
 
-The repository contains existing deployment guides and manifests in the legacy
-topology-based layout. New playbooks use the Recipe v3 evidence structure below.
-The v3 schemas, immutable hardware profiles, evidence validator, affected-recipe
-selection, and reusable benchmark workloads are now on `main`. Migrating the
-existing playbooks and adding the renderer/catalog are follow-up work.
+- NVIDIA B200
+- NVIDIA H200
+- NVIDIA H100
+
+## Target Workloads
+
+Reusable benchmark Jobs live in [`benchmarks/manifests/`](benchmarks/manifests/).
+Set the `ENDPOINT`, `MODEL`, and `TOKENIZER` environment values in each manifest
+before applying it in the same namespace as the target Service.
+
+- [GuideLLM 8K/1K](benchmarks/manifests/guidellm-8k1k-job.yaml) — synthetic
+  8,000-input / 1,000-output requests at concurrent streams 1, 4, 16, 32, 64,
+  and 128.
+- [AIPerf AgentX 128K](benchmarks/manifests/aiperf-agentx-128k-job.yaml) —
+  long-context, multi-turn agentic trace replay filtered to 128K contexts.
+- [AIPerf AgentX unlimited context](benchmarks/manifests/aiperf-agentx-unlimited-context-job.yaml)
+  — the same replay without context filtering; requires an endpoint that can
+  accept every request in the trace corpus.
+
+Model playbooks may add benchmark manifests beside a topology only when the
+workload is specific to that model, framework, or deployment shape.
+
+## Models
+
+| Model | Frameworks | Start Here |
+|-------|------------|------------|
+| GLM-5.2-FP8 | [vLLM (v0.23.0)](models/glm-5.2/vllm/v0.23.0/) · [RHOAI (3.5)](models/glm-5.2/rhoai/3.5/) | [vLLM guides](models/glm-5.2/vllm/v0.23.0/README.md) · [RHOAI guides](models/glm-5.2/rhoai/3.5/README.md) |
+| GLM-5 / GLM-5-FP8 | [vLLM (latest)](models/glm-5/vllm/latest/) | [Model Ops](models/glm-5/model-ops/) |
+| Gemma-4-26B-A4B-FP8 | [vLLM (v0.24.0)](models/gemma-4/vllm/v0.24.0/) | [Deployment Guides](models/gemma-4/vllm/v0.24.0/README.md) |
 
 ## Recipe v3 layout
 
@@ -64,32 +93,15 @@ reference it; schema, validator, renderer, or workflow changes select all
 recipes. README rendering and catalog generation will be enabled when the
 renderer lands.
 
-## Common Benchmarks
+## Current status
 
-Reusable benchmark Jobs live in [`benchmarks/manifests/`](benchmarks/manifests/).
-Set the `ENDPOINT`, `MODEL`, and `TOKENIZER` environment values in
-each manifest before applying it in the same namespace as the target Service.
-
-- [GuideLLM 8K/1K](benchmarks/manifests/guidellm-8k1k-job.yaml) — synthetic
-  8,000-input / 1,000-output requests at concurrent streams 1, 4, 16, 32, 64,
-  and 128.
-- [AIPerf AgentX 128K](benchmarks/manifests/aiperf-agentx-128k-job.yaml) —
-  long-context, multi-turn agentic trace replay filtered to 128K contexts.
-- [AIPerf AgentX unlimited context](benchmarks/manifests/aiperf-agentx-unlimited-context-job.yaml)
-  — the same replay without context filtering; requires an endpoint that can
-  accept every request in the trace corpus.
-
-Model playbooks may add benchmark manifests beside a topology only when the
-workload is specific to that model, framework, or deployment shape.
-
-## Models
-
-| Model | Framework | Versions | Start Here |
-|-------|-----------|----------|------------|
-| GLM-5.2-FP8 | vLLM | [v0.23.0](models/glm-5.2/vllm/v0.23.0/) | [Deployment Guides](models/glm-5.2/vllm/v0.23.0/README.md) |
-| GLM-5 / GLM-5-FP8 | vLLM | [latest](models/glm-5/vllm/latest/) | [Model Ops](models/glm-5/model-ops/) |
-| GLM-5.2-FP8 | RHOAI | [3.5](models/glm-5.2/rhoai/3.5/) | [Deployment Guides](models/glm-5.2/rhoai/3.5/README.md) |
-| Gemma-4-26B-A4B-FP8 | vLLM | [v0.24.0](models/gemma-4/vllm/v0.24.0/) | [Deployment Guides](models/gemma-4/vllm/v0.24.0/README.md) |
+- Existing deployment guides and manifests remain in the legacy topology-based
+  layout; new playbooks use the Recipe v3 evidence structure above.
+- Recipe v3 schemas, immutable hardware profiles, evidence validation,
+  affected-recipe selection, and reusable benchmark workloads are available on
+  `main`.
+- Migration of existing playbooks, README rendering, and catalog generation are
+  follow-up work.
 
 ## Planned
 
