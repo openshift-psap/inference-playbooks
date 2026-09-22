@@ -1,0 +1,16 @@
+# AIPerf is a CPU-only load generator. Keep this independent of the inference
+# server image so benchmark pods do not pull a multi-gigabyte CUDA image.
+FROM python:3.12-slim
+
+ARG AIPERF_VERSION=0.12.0
+
+# The virtual environment is world-readable so OpenShift's arbitrary UID can run it.
+RUN python3 -m venv /opt/aiperf-venv \
+    && /opt/aiperf-venv/bin/pip install --no-cache-dir "aiperf==${AIPERF_VERSION}" \
+    && /opt/aiperf-venv/bin/aiperf --help >/dev/null \
+    && chmod -R a+rX /opt/aiperf-venv
+
+ENV PATH="/opt/aiperf-venv/bin:${PATH}" \
+    HOME=/tmp \
+    HF_HOME=/tmp/huggingface \
+    TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor
