@@ -87,9 +87,10 @@ registry-pull-secret steps.
 All benchmark Jobs write artifacts to `/results` on a PersistentVolumeClaim
 named `benchmark-results`. Create that claim in the benchmark namespace before
 applying a Job, choosing a storage class, size, and access mode that fit the
-cluster's storage policy. Jobs and their pods are removed as soon as they
-complete; results remain on the PVC. A reusable retrieval pod that mounts this
-claim is tracked in [issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
+cluster's storage policy. Completed Jobs and their pods are retained for one day
+to support debugging; results remain on the PVC. A reusable retrieval pod that
+mounts this claim is tracked in
+[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
 The AIPerf cache is still temporary; replace `hf-cache` with a PVC if repeated
 runs should reuse downloads.
 
