@@ -48,6 +48,10 @@ configuration pattern, such as `tp8-aggregated`, `tp8-replicas-2`, or
 `pp2-tp8`. A suffix is allowed only when more than one recipe shares the same
 deployment mode (for example, `tp8-aggregated--prefix-cache-off`).
 
+Recipe v3 requires `deployment.scope` to be either `single-node` or
+`multi-node`. `match.nodes` is retired; do not reintroduce it as a second node
+scope field.
+
 Each recipe declares `optimization_intent` as a concise catalog label.
 `latency` and `throughput` are the standard values, but a recipe creator may
 use a more specific free-form intent. This is not a directory level or a claim
