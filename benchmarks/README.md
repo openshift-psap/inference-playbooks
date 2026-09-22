@@ -92,6 +92,10 @@ cleanup and can be collected from a pod that mounts the same claim. The AIPerf
 cache is still temporary; replace `hf-cache` with a PVC if repeated runs should
 reuse downloads.
 
+This PVC-backed collection workflow is for standalone benchmark runs. It is not
+needed when running through the Forge CI framework, which handles result
+collection.
+
 The CPU and memory requests are starting points for a single load-generator
 pod. Increase them if the client becomes the bottleneck, and set node selectors,
 tolerations, or a service account to match your cluster's policies. Do not add a
