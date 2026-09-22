@@ -1,0 +1,111 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aiperf-agentx-unlimited-context
+  labels:
+    app.kubernetes.io/name: aiperf
+    app.kubernetes.io/component: benchmark
+    app.kubernetes.io/part-of: inference-playbooks
+    benchmark.inference-playbooks.io/context-profile: unlimited
+spec:
+  activeDeadlineSeconds: 7200
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiperf
+        app.kubernetes.io/component: benchmark
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: aiperf
+          image: quay.io/rh-ee-thibrahi/aiperf:0.12.0
+          imagePullPolicy: IfNotPresent
+          env:
+            # Set to an OpenAI-compatible Service reachable from this Job's namespace.
+            - name: ENDPOINT
+              value: http://REPLACE_ME:8000
+            # Set to the model identifier accepted by the target endpoint.
+            - name: MODEL
+              value: REPLACE_ME
+            # Used locally to reconstruct and tokenize AgentX trace prompts.
+            - name: TOKENIZER
+              value: REPLACE_ME
+            - name: HF_HOME
+              value: /tmp/huggingface
+            # Match the InferenceX pre-canned-assistant replay mode.
+            - name: AIPERF_DATASET_WEKA_LIVE_ASSISTANT_RESPONSES
+              value: "0"
+            # The full Weka corpus can take several minutes to prepare.
+            - name: AIPERF_DATASET_CONFIGURATION_TIMEOUT
+              value: "1800"
+            - name: AIPERF_SERVICE_PROFILE_CONFIGURE_TIMEOUT
+              value: "1800"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              # Adjust this sweep for larger load generators.
+              exec aiperf profile \
+                --scenario inferencex-agentx-mvp \
+                --url "${ENDPOINT}" \
+                --endpoint /v1/chat/completions \
+                --model "${MODEL}" \
+                --tokenizer "${TOKENIZER}" \
+                --endpoint-type chat \
+                --public-dataset semianalysis_cc_traces_weka_062126 \
+                --concurrency 1,4,16,32 \
+                --failed-request-threshold 0.10 \
+                --use-server-token-count \
+                --streaming \
+                --trajectory-start-min-ratio 0.25 \
+                --trajectory-start-max-ratio 0.75 \
+                --benchmark-duration 1800 \
+                --random-seed 42 \
+                --agentic-cache-warmup-duration 600 \
+                --warmup-grace-period 1800 \
+                --tokenizer-trust-remote-code \
+                --num-dataset-entries 393 \
+                --slice-duration 1.0 \
+                --output-artifact-dir /results \
+                --ui simple
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+            limits:
+              cpu: "8"
+              memory: 32Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: results
+              mountPath: /results
+            - name: hf-cache
+              mountPath: /tmp/huggingface
+            - name: torchinductor-cache
+              mountPath: /tmp/torchinductor
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        # Replace with a PersistentVolumeClaim to retain results after Job TTL cleanup.
+        - name: results
+          emptyDir: {}
+        # Keeps the automatically downloaded public AgentX trace corpus for this run.
+        - name: hf-cache
+          emptyDir: {}
+        - name: torchinductor-cache
+          emptyDir: {}
