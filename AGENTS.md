@@ -4,6 +4,13 @@ This repository stores reproducible inference playbooks. A playbook is more
 than a manifest: it is a deployable configuration with auditable benchmark
 evidence and a concise generated reader view.
 
+## Main-branch changes
+
+Do not push directly to `main`. Changes must be reviewed and merged through a
+pull request. A direct push is permitted only as a break-glass response with
+explicit approval from a repository owner; record the approval and reason in
+the resulting commit or incident record.
+
 ## Repository layout
 
 Use this hierarchy for new model playbooks:
