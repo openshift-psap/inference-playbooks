@@ -88,9 +88,11 @@ All benchmark Jobs write artifacts to `/results` on a PersistentVolumeClaim
 named `benchmark-results`. Create that claim in the benchmark namespace before
 applying a Job, choosing a storage class, size, and access mode that fit the
 cluster's storage policy. Results remain available after the Job's seven-day TTL
-cleanup and can be collected from a pod that mounts the same claim. The AIPerf
-cache is still temporary; replace `hf-cache` with a PVC if repeated runs should
-reuse downloads.
+cleanup. A reusable post-TTL retrieval pod is tracked in
+[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
+Until it lands, copy artifacts from the completed benchmark pod before TTL
+cleanup. The AIPerf cache is still temporary; replace `hf-cache` with a PVC if
+repeated runs should reuse downloads.
 
 This PVC-backed collection workflow is for standalone benchmark runs. It is not
 needed when running through the Forge CI framework, which handles result
@@ -102,7 +104,10 @@ tolerations, or a service account to match your cluster's policies. Do not add a
 GPU request unless the benchmark client specifically needs one.
 
 Job names are namespace-scoped. Delete a completed Job before rerunning the
-same manifest, or change `metadata.name` to retain multiple runs.
+same manifest. Do not rely on changing `metadata.name` to retain multiple runs:
+the current manifests use fixed artifact filenames on the shared PVC. Use a
+separate PVC for each retained run, or copy/archive the artifacts before the
+next run.
 
 ## Run and Collect Results
 
@@ -113,6 +118,11 @@ kubectl wait --for=condition=complete job/guidellm-8k1k -n <namespace> --timeout
 POD=$(kubectl get pods -n <namespace> -l job-name=guidellm-8k1k -o jsonpath='{.items[0].metadata.name}')
 kubectl cp -n <namespace> "$POD":/results ./guidellm-8k1k-results
 ```
+
+This command requires the completed benchmark pod to still exist. Run it before
+the Job's seven-day TTL cleanup; after that cleanup, use the retrieval workflow
+from [issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13)
+once it is available.
 
 Use the equivalent AIPerf Job name and allow at least two hours for its
 download, warmup, 30-minute profile, and result export. Check Job logs when a
