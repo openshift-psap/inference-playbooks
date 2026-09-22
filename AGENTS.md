@@ -148,5 +148,11 @@ affected recipe set from the diff:
 - renderer/schema/validator changes validate/render every recipe;
 - a documented hardware-profile correction validates; an identity change fails.
 
+After a hardware-profile correction, render only recipes that explicitly
+reference that profile. Catalog generation is a separate required aggregation
+step: regenerate `catalog/` from the validated recipe set after those targeted
+renders, then verify the resulting generated-file diff. Until `tools/render.py`
+lands, CI records the affected recipe matrix but cannot perform this generation.
+
 Generated-file checks must fail on drift; automation should not silently commit
 changes to a contributor's branch.
