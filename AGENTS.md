@@ -11,6 +11,11 @@ pull request. A direct push is permitted only as a break-glass response with
 explicit approval from a repository owner; record the approval and reason in
 the resulting commit or incident record.
 
+## Container images
+
+Use fully qualified container image references; never use a short image name.
+Use a maintained upstream image appropriate for the workload.
+
 ## Repository layout
 
 Use this hierarchy for new model playbooks:
