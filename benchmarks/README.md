@@ -87,10 +87,12 @@ registry-pull-secret steps.
 All benchmark Jobs write artifacts to `/results` on a PersistentVolumeClaim
 named `benchmark-results`. Create that claim in the benchmark namespace before
 applying a Job, choosing a storage class, size, and access mode that fit the
-cluster's storage policy. Results remain available after the Job's seven-day TTL
-cleanup and can be collected from a pod that mounts the same claim. The AIPerf
-cache is still temporary; replace `hf-cache` with a PVC if repeated runs should
-reuse downloads.
+cluster's storage policy. Completed Jobs and their pods are retained for one day
+to support debugging; results remain on the PVC. A reusable retrieval pod that
+mounts this claim is tracked in
+[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
+The AIPerf cache is still temporary; replace `hf-cache` with a PVC if repeated
+runs should reuse downloads.
 
 This PVC-backed collection workflow is for standalone benchmark runs. It is not
 needed when running through the Forge CI framework, which handles result
@@ -102,17 +104,22 @@ tolerations, or a service account to match your cluster's policies. Do not add a
 GPU request unless the benchmark client specifically needs one.
 
 Job names are namespace-scoped. Delete a completed Job before rerunning the
-same manifest, or change `metadata.name` to retain multiple runs.
+same manifest. Do not rely on changing `metadata.name` to retain multiple runs:
+the current manifests use fixed artifact filenames on the shared PVC. Use a
+separate PVC for each retained run, or copy/archive the artifacts before the
+next run.
 
-## Run and Collect Results
+## Run a Benchmark
 
 ```bash
 kubectl apply --dry-run=client -f benchmarks/manifests/guidellm-8k1k-job.yaml
 kubectl apply -f benchmarks/manifests/guidellm-8k1k-job.yaml -n <namespace>
 kubectl wait --for=condition=complete job/guidellm-8k1k -n <namespace> --timeout=45m
-POD=$(kubectl get pods -n <namespace> -l job-name=guidellm-8k1k -o jsonpath='{.items[0].metadata.name}')
-kubectl cp -n <namespace> "$POD":/results ./guidellm-8k1k-results
 ```
+
+Retrieve artifacts by mounting `benchmark-results` in a separate running pod;
+the reusable manifest and commands are tracked in
+[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
 
 Use the equivalent AIPerf Job name and allow at least two hours for its
 download, warmup, 30-minute profile, and result export. Check Job logs when a
