@@ -15,7 +15,7 @@ spec:
       type: RuntimeDefault
   containers:
     - name: busybox
-      image: busybox:1.37.0
+      image: quay.io/crio/busybox:1
       imagePullPolicy: IfNotPresent
       command:
         - sleep
