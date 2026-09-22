@@ -84,11 +84,17 @@ registry-pull-secret steps.
 
 ## Storage, Resources, and Job Lifecycle
 
-Both Jobs write artifacts to `/results`, backed by `emptyDir`. Copy results from
-the completed pod before its seven-day TTL expires, or replace the `results`
-volume with a PersistentVolumeClaim for durable storage. The AIPerf cache is
-also temporary; replace `hf-cache` with a PVC if repeated runs should reuse
-downloads.
+All benchmark Jobs write artifacts to `/results` on a PersistentVolumeClaim
+named `benchmark-results`. Create that claim in the benchmark namespace before
+applying a Job, choosing a storage class, size, and access mode that fit the
+cluster's storage policy. Results remain available after the Job's seven-day TTL
+cleanup and can be collected from a pod that mounts the same claim. The AIPerf
+cache is still temporary; replace `hf-cache` with a PVC if repeated runs should
+reuse downloads.
+
+This PVC-backed collection workflow is for standalone benchmark runs. It is not
+needed when running through the Forge CI framework, which handles result
+collection.
 
 The CPU and memory requests are starting points for a single load-generator
 pod. Increase them if the client becomes the bottleneck, and set node selectors,

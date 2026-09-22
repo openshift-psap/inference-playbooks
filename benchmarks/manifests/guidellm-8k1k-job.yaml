@@ -18,10 +18,9 @@ spec:
       automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
-        fsGroup: 1000
-        runAsGroup: 1000
         runAsNonRoot: true
-        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: guidellm
           image: ghcr.io/vllm-project/guidellm:v0.7.3
@@ -36,6 +35,11 @@ spec:
             # Set to the Hugging Face tokenizer identifier matching the served model.
             - name: TOKENIZER
               value: REPLACE_ME
+            # Keep tokenizer downloads off the image's read-only home directory.
+            - name: HF_HOME
+              value: /tmp/huggingface
+            - name: XDG_CACHE_HOME
+              value: /tmp
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -74,6 +78,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-        # Replace with a PersistentVolumeClaim to retain results after Job TTL cleanup.
         - name: results
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: benchmark-results

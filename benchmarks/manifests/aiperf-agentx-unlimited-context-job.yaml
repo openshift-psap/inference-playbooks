@@ -20,10 +20,9 @@ spec:
       automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
-        fsGroup: 1000
-        runAsGroup: 1000
         runAsNonRoot: true
-        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: aiperf
           image: quay.io/rh-ee-thibrahi/aiperf:0.12.0
@@ -101,9 +100,9 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-        # Replace with a PersistentVolumeClaim to retain results after Job TTL cleanup.
         - name: results
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: benchmark-results
         # Keeps the automatically downloaded public AgentX trace corpus for this run.
         - name: hf-cache
           emptyDir: {}
