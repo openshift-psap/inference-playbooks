@@ -104,6 +104,14 @@ correction_log:
         self.assertEqual(result.returncode, 1)
         self.assertIn("current revision", result.stderr)
 
+    def test_duplicate_profile_fields_are_rejected(self):
+        directory, profile, _ = self.make_repo()
+        profile.write_text(self.profile_text.format(revision=1, correction="") + "profile_revision: 1\n")
+        git(directory, "add", ".")
+        result = self.run_tool(directory, "--cached", "check-hardware-profiles")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("duplicate key", result.stderr)
+
     def test_recipe_change_selects_only_that_recipe(self):
         directory, _, recipe = self.make_repo()
         recipe.write_text("recipe_id: guidellm-tp8\nmaturity: validated\n")

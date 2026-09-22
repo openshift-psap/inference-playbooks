@@ -20,6 +20,35 @@ import yaml
 PROFILE_ROOT = "hardware-profiles"
 
 
+class UniqueKeyLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate keys in every mapping."""
+
+
+def construct_unique_mapping(loader: UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False) -> dict:
+    """Construct one YAML mapping while rejecting duplicate keys."""
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark,
+                f"found duplicate key {key!r}", key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    construct_unique_mapping,
+)
+
+
+def load_unique_yaml(text: str) -> object:
+    """Safely load YAML while rejecting duplicate mapping keys."""
+    return yaml.load(text, Loader=UniqueKeyLoader)
+
+
 def git_lines(repo: Path, arguments: list[str]) -> list[str]:
     """Run Git and return its non-empty stdout lines."""
     result = subprocess.run(
@@ -71,7 +100,7 @@ def git_file(repo: Path, revision: str, path: str) -> str:
 
 def load_profile(repo: Path, revision: str, path: str) -> dict:
     """Load and type-check a profile stored at a Git revision."""
-    profile = yaml.safe_load(git_file(repo, revision, path))
+    profile = load_unique_yaml(git_file(repo, revision, path))
     if not isinstance(profile, dict):
         raise ValueError("profile must be a YAML object")
     return profile

@@ -11,7 +11,7 @@ from pathlib import Path
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
-from recipe_evidence import check_hardware_profiles
+from recipe_evidence import check_hardware_profiles, load_unique_yaml
 
 
 SCHEMAS = {
@@ -25,7 +25,7 @@ SCHEMAS = {
 
 def load_yaml(path: Path) -> dict:
     """Load a YAML mapping from disk."""
-    value = yaml.safe_load(path.read_text())
+    value = load_unique_yaml(path.read_text())
     if not isinstance(value, dict):
         raise ValueError("expected a YAML object")
     return value
