@@ -1,0 +1,28 @@
+schema_version: 1
+profile_id: nvidia-h200-sxm-8x-nvlink-r1
+profile_revision: 1
+kind: hardware-profile
+description: Eight NVIDIA H200 SXM GPUs in one NVLink-connected node.
+accelerator_key: nvidia-h200-x8
+
+accelerators:
+  vendor: nvidia
+  model: H200
+  form_factor: SXM
+  count_per_node: 8
+  memory_per_gpu_gib: 141
+  intra_node_interconnect: nvlink
+
+host:
+  cpu_architecture: x86_64
+  memory_min_gib: 512
+
+# This is a capability profile, including the network/interconnect properties
+# needed to interpret its results. Driver, CUDA, image, storage, and workload
+# details belong to each benchmark run.
+network:
+  required: false
+
+correction_log:
+  - revision: 1
+    summary: Initial profile.

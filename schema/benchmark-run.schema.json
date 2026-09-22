@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/benchmark-run.schema.json",
+  "title": "Inference Playbook Benchmark Run",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "recipe_id", "deployment_scope",
+    "hardware_profile", "hardware_profile_revision", "harness", "result", "artifacts"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "recipe_id": {"type": "string"},
+    "deployment_scope": {"enum": ["single-node", "multi-node"]},
+    "hardware_profile": {"type": "string", "pattern": "^hardware-profiles/.+\\.yaml$"},
+    "hardware_profile_revision": {"type": "integer", "minimum": 1},
+    "harness": {"type": "string"},
+    "result": {"type": "string", "pattern": "^result\\.json$"},
+    "command": {"type": "string"},
+    "workload": {"type": "object"},
+    "environment": {"type": "object"},
+    "artifacts": {"type": "array", "minItems": 1, "items": {"type": "object"}}
+  }
+}

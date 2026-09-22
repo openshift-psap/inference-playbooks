@@ -1,0 +1,39 @@
+schema_version: 1
+profile_id: ibmcloud-h200-gx3d-160x1792x8h200
+profile_revision: 1
+kind: hardware-profile
+description: >
+  Janus IBM Cloud H200 node used for validated GLM-5.2 runs. This profile
+  records node capability and its validated RDMA/RoCE allocation model.
+accelerator_key: nvidia-h200-x8
+
+provider:
+  name: ibmcloud
+  cluster: janus
+  cluster_reference: psap-de-h200-cluster
+
+accelerators:
+  vendor: nvidia
+  model: H200
+  form_factor: SXM
+  count_per_node: 8
+  memory_per_gpu_gib: 141
+  intra_node_interconnect: nvlink
+
+host:
+  cpu_count: 160
+  memory_gib: 1792
+
+network:
+  inter_node_transport: roce
+  inter_node_bandwidth_gbe: 400
+  rdma: true
+  accelerator_nic_allocation: composite.dra/gpu-nic-pair
+  notes: >
+    The composite DRA resource co-allocates a GPU with a nearest InfiniBand
+    NIC. NIC model and fabric-specific GID settings are not recorded here and
+    must be captured by each benchmark run when relevant.
+
+correction_log:
+  - revision: 1
+    summary: Initial profile.

@@ -1,0 +1,57 @@
+name: Recipe evidence
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  hardware-profiles:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Validate hardware profiles and corrections
+        run: >-
+          python3 -m pip install --disable-pip-version-check -r tools/requirements.txt &&
+          python3 tools/validate.py
+          --base "${{ github.event.pull_request.base.sha || github.event.before }}"
+          --head "${{ github.sha }}"
+
+  affected-recipes:
+    needs: hardware-profiles
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.affected.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - id: affected
+        name: Find recipes affected by this change
+        run: |
+          python3 -m pip install --disable-pip-version-check -r tools/requirements.txt
+          matrix=$(python3 tools/recipe_evidence.py \
+            --base "${{ github.event.pull_request.base.sha || github.event.before }}" \
+            --head "${{ github.sha }}" affected-recipes)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  render-readmes:
+    needs: affected-recipes
+    if: ${{ fromJSON(needs.affected-recipes.outputs.matrix).recipes[0] != null }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        recipe: ${{ fromJSON(needs.affected-recipes.outputs.matrix).recipes }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Render and check the recipe README
+        env:
+          RECIPE: ${{ matrix.recipe }}
+        run: >-
+          echo "README rendering will be enabled when the renderer lands for $RECIPE"

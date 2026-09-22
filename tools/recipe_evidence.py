@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""CI helpers for corrigible recipe evidence inputs.
+
+This module intentionally contains no GitHub Actions-specific behavior. The
+same commands are used by local pre-commit hooks and CI.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Iterable
+
+import yaml
+
+PROFILE_ROOT = "hardware-profiles"
+RECIPE_PATH = re.compile(
+    r"^models/[^/]+/[^/]+/[^/]+/recipes/[^/]+/[^/]+/[^/]+/recipe\.yaml$"
+)
+
+
+class UniqueKeyLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate keys in every mapping."""
+
+
+def construct_unique_mapping(loader: UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False) -> dict:
+    """Construct one YAML mapping while rejecting duplicate keys."""
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark,
+                f"found duplicate key {key!r}", key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    construct_unique_mapping,
+)
+
+
+def load_unique_yaml(text: str) -> object:
+    """Safely load YAML while rejecting duplicate mapping keys."""
+    return yaml.load(text, Loader=UniqueKeyLoader)
+
+
+def git_lines(repo: Path, arguments: list[str]) -> list[str]:
+    """Run Git and return its non-empty stdout lines."""
+    result = subprocess.run(
+        ["git", "-C", str(repo), *arguments],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def changed_paths(repo: Path, base: str, head: str, cached: bool) -> list[tuple[str, list[str]]]:
+    """Return name-status changes for a revision comparison or staged index."""
+    arguments = ["diff", "--name-status", "-M"]
+    if cached:
+        arguments.append("--cached")
+        # The staged index is the right-hand side of this comparison. Passing
+        # a second revision would compare two commits and ignore staged files.
+        arguments.append(base)
+    else:
+        arguments.extend([base, head])
+    changes = []
+    for line in git_lines(repo, arguments):
+        fields = line.split("\t")
+        changes.append((fields[0], fields[1:]))
+    return changes
+
+
+def profile_paths(changes: Iterable[tuple[str, list[str]]]) -> Iterable[tuple[str, str]]:
+    """Yield changed flat hardware-profile YAML files."""
+    for status, paths in changes:
+        for path in paths:
+            if Path(path).parent.as_posix() == PROFILE_ROOT and path.endswith(".yaml"):
+                yield status, path
+
+
+def git_file(repo: Path, revision: str, path: str) -> str:
+    """Read a file from a Git revision or from the staged index."""
+    object_name = f":{path}" if revision == ":" else f"{revision}:{path}"
+    return subprocess.run(
+        ["git", "-C", str(repo), "show", object_name],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+
+
+def load_profile(repo: Path, revision: str, path: str) -> dict:
+    """Load and type-check a profile stored at a Git revision."""
+    profile = load_unique_yaml(git_file(repo, revision, path))
+    if not isinstance(profile, dict):
+        raise ValueError("profile must be a YAML object")
+    return profile
+
+
+def expected_accelerator_key(profile: dict) -> str:
+    """Derive the generic accelerator comparison key from a profile."""
+    accelerators = profile.get("accelerators", {})
+    if not isinstance(accelerators, dict):
+        return ""
+    vendor = str(accelerators.get("vendor", "")).lower()
+    model = re.sub(r"[^a-z0-9]+", "-", str(accelerators.get("model", "")).lower()).strip("-")
+    count = accelerators.get("count_per_node")
+    return f"{vendor}-{model}-x{count}" if vendor and model and isinstance(count, int) else ""
+
+
+def identity(profile: dict) -> dict:
+    """Return the hardware-profile fields that cannot change in place."""
+    return {
+        "profile_id": profile.get("profile_id"),
+        "accelerator_key": profile.get("accelerator_key")
+    }
+
+
+def profile_errors(path: str, profile: dict) -> list[str]:
+    """Return static profile-format errors independent of Git history."""
+    errors = []
+    if profile.get("profile_id") != Path(path).stem:
+        errors.append("profile_id must match the profile filename stem")
+    if not isinstance(profile.get("profile_revision"), int) or profile["profile_revision"] < 1:
+        errors.append("profile_revision must be a positive integer")
+    expected_key = expected_accelerator_key(profile)
+    if profile.get("accelerator_key") != expected_key:
+        errors.append(f"accelerator_key must be {expected_key!r} (vendor, model, and count only)")
+    if not isinstance(profile.get("correction_log"), list):
+        errors.append("correction_log must be a list")
+    return errors
+
+
+def has_current_revision_log(profile: dict) -> bool:
+    """Check that the correction log documents the current revision."""
+    return any(
+        isinstance(entry, dict)
+        and entry.get("revision") == profile.get("profile_revision")
+        and isinstance(entry.get("summary"), str)
+        and entry["summary"].strip()
+        for entry in profile.get("correction_log", [])
+    )
+
+
+def check_hardware_profiles(repo: Path, base: str, head: str, cached: bool) -> int:
+    """Validate profile additions and documented corrections in a Git diff."""
+    violations = []
+    for status, path in profile_paths(changed_paths(repo, base, head, cached)):
+        if status.startswith(("D", "R")):
+            violations.append(f"{status}\t{path}: profile files may not be deleted or renamed")
+            continue
+        candidate_revision = ":" if cached else head
+        try:
+            candidate = load_profile(repo, candidate_revision, path)
+            errors = profile_errors(path, candidate)
+            if errors:
+                violations.extend(f"{status}\t{path}: {error}" for error in errors)
+                continue
+            if not has_current_revision_log(candidate):
+                violations.append(f"{status}\t{path}: correction_log needs a summary for the current revision")
+                continue
+            if status.startswith("M"):
+                previous = load_profile(repo, base, path)
+                if identity(previous) != identity(candidate):
+                    violations.append(f"{status}\t{path}: profile_id and accelerator_key require a new profile file")
+                elif candidate["profile_revision"] <= previous.get("profile_revision", 0):
+                    violations.append(f"{status}\t{path}: profile_revision must increase for a correction")
+        except (subprocess.CalledProcessError, ValueError, yaml.YAMLError) as error:
+            violations.append(f"{status}\t{path}: {error}")
+    if violations:
+        print("Hardware profiles must be valid, stable identities; corrections require a revision and log entry.", file=sys.stderr)
+        print("\n".join(violations), file=sys.stderr)
+        return 1
+    return 0
+
+
+def recipe_directories(repo: Path, revision: str) -> set[str]:
+    """Discover canonical recipe directories from one Git snapshot."""
+    if revision == ":":
+        paths = git_lines(repo, ["ls-files", "--cached"])
+    else:
+        paths = git_lines(repo, ["ls-tree", "-r", "--name-only", revision])
+    return {
+        str(Path(path).parent)
+        for path in paths
+        if RECIPE_PATH.fullmatch(path)
+    }
+
+
+def affected_recipes(repo: Path, base: str, head: str, cached: bool) -> dict[str, object]:
+    """Return the recipe directories affected by a revision comparison."""
+    candidate_revision = ":" if cached else head
+    recipes = recipe_directories(repo, candidate_revision)
+    changed = changed_paths(repo, base, head, cached)
+    global_change = any(
+        any(path.startswith(prefix) for prefix in ("tools/", "schema/", ".github/workflows/"))
+        for _, paths in changed
+        for path in paths
+    )
+    if global_change:
+        return {"all": True, "recipes": sorted(recipes)}
+
+    affected = {
+        recipe
+        for recipe in recipes
+        for _, paths in changed
+        for path in paths
+        if path == recipe or path.startswith(f"{recipe}/")
+    }
+    changed_profiles = {path for _, path in profile_paths(changed)}
+    for recipe in recipes:
+        recipe_text = git_file(repo, candidate_revision, f"{recipe}/recipe.yaml")
+        if any(profile in recipe_text for profile in changed_profiles):
+            affected.add(recipe)
+    return {"all": False, "recipes": sorted(affected)}
+
+
+def main() -> int:
+    """Run the selected evidence-validation helper command."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument("--base", default="HEAD")
+    parser.add_argument("--head", default="HEAD", help="comparison head; ignored with --cached")
+    parser.add_argument("--cached", action="store_true", help="compare the staged index with --base")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("check-hardware-profiles")
+    subparsers.add_parser("affected-recipes")
+    arguments = parser.parse_args()
+    repo = arguments.repo.resolve()
+
+    if arguments.command == "check-hardware-profiles":
+        return check_hardware_profiles(repo, arguments.base, arguments.head, arguments.cached)
+    print(json.dumps(affected_recipes(repo, arguments.base, arguments.head, arguments.cached)))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

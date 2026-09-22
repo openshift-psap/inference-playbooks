@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/model.schema.json",
+  "title": "Inference Playbook Model Metadata",
+  "type": "object",
+  "required": ["schema_version", "model_id", "name", "family", "quantizations"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "model_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "name": {"type": "string"},
+    "family": {"type": "string"},
+    "parameters": {"type": "string"},
+    "huggingface_id": {"type": "string"},
+    "license": {"type": "string"},
+    "access": {"type": "object"},
+    "quantizations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {"name": {"type": "string"}}
+      }
+    }
+  }
+}
