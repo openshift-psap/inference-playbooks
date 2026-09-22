@@ -143,6 +143,9 @@ correction_log:
         legacy_nodes = {**recipe, "match": {"nodes": "single"}}
         self.assertTrue(list(validator.iter_errors(legacy_nodes)))
 
+        custom_intent = {**recipe, "optimization_intent": "lowest cost at 128K context"}
+        self.assertFalse(list(validator.iter_errors(custom_intent)))
+
 
 if __name__ == "__main__":
     unittest.main()

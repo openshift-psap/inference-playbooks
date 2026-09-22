@@ -8,7 +8,8 @@
   node scope from `deployment.scope`.
 - Requires explicit platform, hardware-profile, and workload-profile identity.
 - Limits workload profiles to the reusable PR #7 benchmark workloads and adds
-  deployment-mode plus latency/throughput optimization-intent metadata.
+  deployment-mode plus free-form optimization-intent metadata. `latency` and
+  `throughput` remain the standard catalog values.
 - Adds references to benchmark run records for validated and production recipes.
 
 ## Supporting schemas v1

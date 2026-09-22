@@ -48,10 +48,11 @@ configuration pattern, such as `tp8-aggregated`, `tp8-replicas-2`, or
 `pp2-tp8`. A suffix is allowed only when more than one recipe shares the same
 deployment mode (for example, `tp8-aggregated--prefix-cache-off`).
 
-Each recipe declares `optimization_intent: latency` or
-`optimization_intent: throughput`. This is a catalog label, not a directory
-level or a claim inferred from the path. Multiple recipes for the same workload
-may have the same intent.
+Each recipe declares `optimization_intent` as a concise catalog label.
+`latency` and `throughput` are the standard values, but a recipe creator may
+use a more specific free-form intent. This is not a directory level or a claim
+inferred from the path. Multiple recipes for the same workload may have the
+same intent.
 
 ## Ownership and source of truth
 

@@ -58,7 +58,11 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*(--[a-z0-9][a-z0-9-]*)?$"
     },
-    "optimization_intent": {"enum": ["latency", "throughput"]},
+    "optimization_intent": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Catalog label. Use latency or throughput when applicable; custom text is allowed."
+    },
     "maturity": {"enum": ["day-zero", "validated", "production"]},
     "deployment": {
       "type": "object",
