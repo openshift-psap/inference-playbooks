@@ -87,12 +87,11 @@ registry-pull-secret steps.
 All benchmark Jobs write artifacts to `/results` on a PersistentVolumeClaim
 named `benchmark-results`. Create that claim in the benchmark namespace before
 applying a Job, choosing a storage class, size, and access mode that fit the
-cluster's storage policy. Results remain available after the Job's seven-day TTL
-cleanup. A reusable post-TTL retrieval pod is tracked in
-[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
-Until it lands, copy artifacts from the completed benchmark pod before TTL
-cleanup. The AIPerf cache is still temporary; replace `hf-cache` with a PVC if
-repeated runs should reuse downloads.
+cluster's storage policy. Jobs and their pods are removed as soon as they
+complete; results remain on the PVC. A reusable retrieval pod that mounts this
+claim is tracked in [issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
+The AIPerf cache is still temporary; replace `hf-cache` with a PVC if repeated
+runs should reuse downloads.
 
 This PVC-backed collection workflow is for standalone benchmark runs. It is not
 needed when running through the Forge CI framework, which handles result
@@ -109,20 +108,17 @@ the current manifests use fixed artifact filenames on the shared PVC. Use a
 separate PVC for each retained run, or copy/archive the artifacts before the
 next run.
 
-## Run and Collect Results
+## Run a Benchmark
 
 ```bash
 kubectl apply --dry-run=client -f benchmarks/manifests/guidellm-8k1k-job.yaml
 kubectl apply -f benchmarks/manifests/guidellm-8k1k-job.yaml -n <namespace>
 kubectl wait --for=condition=complete job/guidellm-8k1k -n <namespace> --timeout=45m
-POD=$(kubectl get pods -n <namespace> -l job-name=guidellm-8k1k -o jsonpath='{.items[0].metadata.name}')
-kubectl cp -n <namespace> "$POD":/results ./guidellm-8k1k-results
 ```
 
-This command requires the completed benchmark pod to still exist. Run it before
-the Job's seven-day TTL cleanup; after that cleanup, use the retrieval workflow
-from [issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13)
-once it is available.
+Retrieve artifacts by mounting `benchmark-results` in a separate running pod;
+the reusable manifest and commands are tracked in
+[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
 
 Use the equivalent AIPerf Job name and allow at least two hours for its
 download, warmup, 30-minute profile, and result export. Check Job logs when a

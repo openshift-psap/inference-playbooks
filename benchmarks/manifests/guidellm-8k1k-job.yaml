@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/part-of: inference-playbooks
 spec:
   backoffLimit: 0
-  ttlSecondsAfterFinished: 604800
+  ttlSecondsAfterFinished: 0
   template:
     metadata:
       labels:
