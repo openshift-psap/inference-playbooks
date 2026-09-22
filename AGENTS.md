@@ -14,7 +14,7 @@ the resulting commit or incident record.
 ## Container images
 
 Use fully qualified container image references; never use a short image name.
-Prefer an approved `quay.io` image when it is suitable for the workload.
+Use a maintained upstream image appropriate for the workload.
 
 ## Repository layout
 
