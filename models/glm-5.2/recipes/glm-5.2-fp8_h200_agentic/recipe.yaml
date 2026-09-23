@@ -1,0 +1,196 @@
+# Reference example: schema v3. Migrated from the v2 recipe.
+# Deltas vs v2: stack in match, maturity, features block, benchmarks summary,
+# deploy.manifests, model metadata moved out to models/glm-5.2/model.yaml.
+schema_version: 3
+recipe_id: glm-5.2-fp8_h200_agentic
+model_id: glm-5.2          # -> models/glm-5.2/model.yaml (family, params, HF id, license, access)
+match: { stack: rhoai, hw: h200, gpu_count: 8, quant: fp8, nodes: single, topology: tp8, profile: agentic }
+
+maturity: validated        # PSAP-benchmarked on named hardware; no customer in production yet
+
+profile:
+  label: "Agentic / long context"
+  sub: "131K tools MTP"
+  headline: >
+    Serve zai-org/GLM-5.2-FP8 on one 8xH200 node with vLLM and the KServe
+    LLMInferenceService CRD. Aggregated -- prefill and decode share the same
+    GPUs. That is the right answer for almost everyone.
+  specs:
+    Checkpoint: zai-org/GLM-5.2-FP8
+    Hardware: "1 node 8x H200 141 GB"
+    Parallelism: "TP=8, aggregated"
+    Precision: "FP8 weights + FP8 KV"
+    Max model len: "131,072"
+    Spec decode: "MTP, 5 draft tokens"
+
+# -- Runtime surface -----------------------------------------------------------
+# tier: rhaiis   -> targets LLMInferenceService CRD managed by RHOAI operator.
+#                   Config maps to LLMInferenceService.spec; image override required
+#                   until RHAIIS bundles >= vllm_upstream_min.
+# tier: lab      -> raw upstream vLLM on OpenShift; no operator, no CRD.
+#                   Use vllm_upstream_min directly; skip image.target.
+platform:
+  tier: rhaiis
+  rhaiis: "3.5.0-GA"                    # RHAIIS product release this recipe is validated against
+  rhaiis_bundled_vllm: "NEEDS VERIFICATION"  # vLLM version shipped inside RHAIIS 3.5.0-GA image
+  vllm_upstream_min: "v0.24.0"          # minimum upstream vLLM for all features in this recipe
+  vllm_upstream_validated: "v0.24.0"    # upstream version actually benchmarked by PSAP
+  llmisvc_api: "serving.kserve.io/v1alpha2"  # matches shipped 3.5 manifests: models/glm-5.2/rhoai/3.5/
+  # NOTE: rhaiis_bundled_vllm predates GLM-5.2 support. The image override in
+  # image.recommended is required until RHAIIS ships >= vllm_upstream_min.
+
+image:
+  recommended:
+    ref: vllm/vllm-openai:v0.24.0
+    status: { state: verified, date: 2026-08-12, method: cluster-run }
+    why: "RHOAI 3.5.0-GA shipped vLLM predates GLM-5.2 support; manifest overrides it."
+  pin_for_disconnected:
+    digest: sha256:6d8429e38e3747723ca07ee1b17972e09bb9c51c4032b266f24fb1cc3b22ed8f
+    status: { state: verified, date: 2026-08-12, method: registry-api }
+  target:
+    ref: "registry.redhat.io/rhaiis/vllm-cuda-rhel9:<3.5>"
+    status:
+      state: needs-verification
+      note: "Latest public catalog tag 3.3.5 (2026-06-25); vLLM version inside unconfirmed"
+    why: "Red Hat image handles OpenShift arbitrary UIDs; upstream does not. Drop the override when it ships >= v0.24.0."
+
+served_model_name: glm-5.2-fp8
+
+args:
+  - { flag: --tensor-parallel-size, value: 8,
+      why: "One node, eight GPUs, no cross-node transport." }
+  - { flag: --kv-cache-dtype, value: fp8,
+      why: "~16% throughput uplift over GLM-5 on same topology. The main reason this profile holds 131K." }
+  - { flag: --max-model-len, value: 131072,
+      why: "The model context window. Real agent sessions still overflow it -- 42 of 50 in the trace replay." }
+  - { flag: --enable-prefix-caching,
+      why: "63% lower TTFT p50 on shared-prefix traffic. Cheapest win in this file." }
+  - { flag: --enable-chunked-prefill,
+      why: "Keeps a long prefill from starving in-flight decodes." }
+  - { flag: --speculative-config.method, value: mtp,
+      why: "GLM-5.2 ships an MTP head. Free decode speedup -- disappears under pipeline parallelism." }
+  - { flag: --speculative-config.num_speculative_tokens, value: 5,
+      why: "The head predicts five. Raising it costs verification compute for falling acceptance." }
+  - { flag: --tool-call-parser, value: glm47,
+      why: "Required for structured tool arguments. Without it you get prose." }
+  - { flag: --reasoning-parser, value: glm45,
+      why: "Separates reasoning from content. Chat template honors enable_thinking / reasoning_effort." }
+  - { flag: --enable-auto-tool-choice,
+      why: "Lets the model decide when to call. Omit it and the parser never fires." }
+
+args_lede: >
+  Ten flags plus two common. Each is load-bearing for agentic serving at 131K --
+  drop any of the three parser and tool flags and tool calling silently degrades to prose.
+default_stance: >
+  Everything else is default on purpose. If you are reaching for a flag not on this
+  list, the honest first question is whether you have measured the thing it is
+  supposed to fix.
+omissions: []
+
+# doctor.py cross-checks every claim here against args. A features block
+# cannot claim what the flags do not back.
+# vllm_since: the upstream vLLM release that introduced or stabilized this feature.
+# Features where vllm_since > rhaiis_bundled_vllm require the image override.
+features:
+  tool_calling:
+    enabled: true
+    vllm_since: "NEEDS VERIFICATION"
+  speculative_decoding:
+    method: mtp
+    vllm_since: "NEEDS VERIFICATION"
+  structured_output:
+    enabled: true
+    vllm_since: "NEEDS VERIFICATION"
+  reasoning_parser:
+    parser: glm45
+    vllm_since: "NEEDS VERIFICATION"
+  prefix_caching:
+    enabled: true
+    vllm_since: "v0.4.0"
+  kv_cache_dtype:
+    dtype: fp8
+    vllm_since: "NEEDS VERIFICATION"
+
+deploy:
+  tier: rhaiis
+  kind: LLMInferenceService
+  api_version: "serving.kserve.io/v1alpha2"   # keep aligned with platform.llmisvc_api
+  target: kserve-llmisvc
+  status:
+    state: derived
+    derived_from: "validated raw single-node playbook (models/glm-5.2/vllm/v0.23.0/single-node)"
+    note: "3.5-GA publishes LLMInferenceService manifests only for PP=2. Confirm single-node passes VLLM_ADDITIONAL_ARGS through."
+  parallelism: { tensor: 8 }
+  resources:
+    requests: { cpu: 32, memory: 512Gi, "nvidia.com/gpu": 8 }
+    limits: { memory: 512Gi, "nvidia.com/gpu": 8 }
+  probes:
+    startup:
+      path: /health
+      port: 8000
+      failureThreshold: 180
+      periodSeconds: 10
+      why: "Cold load ~12 min from warm PVC; 30 min budget."
+    readiness: { path: /v1/models, port: 8000, periodSeconds: 10 }
+  volumes:
+    dshm: { medium: Memory, sizeLimit: 16Gi }
+  storage:
+    pvc:
+      name: glm52-weights
+      size: 800Gi
+      accessModes: [ReadWriteMany]
+      why: "755.7 GB weights + headroom. RWX so replicas share one copy."
+  router:
+    enabled: false
+    blocked_by: "Kuadrant v1 AuthPolicy; 3.5.0-GA ships v0.11.1 (v1beta2 only)"
+    status: { state: needs-verification, note: "Expected to resolve at GA" }
+  manifests:
+    - { path: manifests/llmisvc.yaml, kind: LLMInferenceService, generated: true }
+    - { path: manifests/pvc.yaml, kind: PersistentVolumeClaim, generated: true }
+  quickstart:
+    - { step: "Namespace, secret, storage", detail: "RWX PVC >= 800Gi..." }
+    - { step: "Stage the weights", detail: "Pin the revision." }
+    - { step: "Deploy", detail: "No PP means no custom LLMInferenceServiceConfig..." }
+    - { step: "Verify", detail: "Three probes, not one." }
+
+benchmarks:
+  harness: guidellm            # 8K/1K sweep below; Weka trace replay used inference-perf
+  workload: "synthetic 8K in / 1K out sweep, 300 s per concurrency stage"
+  image_tested: vllm/vllm-openai:v0.24.0
+  status: { state: verified, date: 2026-08-20, method: psap-run }
+  note: >
+    Sweep measured on the short-context tuned config (10K max-model-len, auto KV
+    dtype, no parsers) -- see guides/8k1k-optimized.md in the source playbook. Treat
+    it as this node's short-context ceiling, not 131K agentic latency: the Weka
+    trace replay (50 sessions, 131K ctx) measured TTFT p50 5.96 s at 66K avg input.
+  summary:
+    - { concurrency: 1,  ttft_p50_ms: 665, ttft_p95_ms: 671,  itl_p50_ms: 6.0,  tpot_ms: null, throughput_tok_s: 151 }
+    - { concurrency: 4,  ttft_p50_ms: 692, ttft_p95_ms: 708,  itl_p50_ms: 11.0, tpot_ms: null, throughput_tok_s: 339 }
+    - { concurrency: 16, ttft_p50_ms: 738, ttft_p95_ms: 4708, itl_p50_ms: 23.0, tpot_ms: null, throughput_tok_s: 649 }
+  # Sweep raw artifacts live with the internal perf-team run (June 2026 window);
+  # the repo results/ dir holds the WL1/WL2 runs backing the prefix-caching insight.
+  raw: models/glm-5.2/vllm/v0.23.0/single-node/results/
+
+sizing:
+  tool: configiq
+  replicas_for: { rps: 4, slo_ttft_p95_ms: 2000 }
+
+insights:
+  - "Prefix caching is the cheapest win available: 63% lower TTFT p50, 12% higher throughput."
+  - "FP8 KV cache bought ~16% throughput over GLM-5 on the same topology, 14-17% faster TTFT."
+  - "Real agentic sessions overflow 131K: 42 of 50 Weka sessions exceeded the window."
+  - "TTFT p50 flat near 0.7 s from C=1 to C=16 in the 8K/1K sweep; the measured p95 blowup at C=16 (4.7 s) is prefill queueing -- add a replica."
+
+known_issues:
+  - issue: "MTP incompatible with pipeline parallelism"
+    ref: vllm#44697
+    impact: "No speculative decoding on the multi-node path"
+    mitigation: "Stay single-node if MTP matters more than KV headroom"
+  - issue: "GLM tool-call parsing failed intermittently under Claude Code"
+    ref: vllm#42400
+    ref_state: "closed, GLM-5.1"
+    impact: "Missed or malformed tool calls in long agentic sessions"
+    mitigation: "Fix landed upstream. If it persists, test with MTP off to isolate."
+  - issue: "Most real agentic sessions exceed 131K context"
+    impact: "42 of 50 Weka trace sessions failed to complete"
+    mitigation: "Raise --max-model-len, and pay for it in KV capacity"
