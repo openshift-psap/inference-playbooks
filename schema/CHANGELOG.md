@@ -21,3 +21,7 @@
 - Benchmark runs record the hardware-profile revision known when they ran.
 - Benchmark runs must reference their normalized result; result run IDs resolve
   to exactly one run record.
+
+## 2026-09-26
+
+- model.schema.json: add optional `presentation` object (icon_bg, icon_letter, provider, tags) for catalog UI display. Additive; existing instances remain valid.

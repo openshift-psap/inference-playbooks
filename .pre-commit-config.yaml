@@ -9,3 +9,12 @@ repos:
           - PyYAML==6.0.2
           - jsonschema==4.25.1
         pass_filenames: false
+      - id: catalog-check
+        name: check catalog.json is not stale
+        entry: python3 tools/catalog.py --check
+        language: python
+        additional_dependencies:
+          - PyYAML==6.0.2
+          - jsonschema==4.25.1
+        pass_filenames: false
+        files: ^(models/|hardware-profiles/|tools/catalog\.py|catalog/).*

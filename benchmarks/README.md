@@ -14,7 +14,7 @@ they prevent a benchmark from being accidentally directed at the wrong model.
 | `ENDPOINT` | Set to the target's in-cluster base URL, including its port; for example, `http://my-model:8000`. Do not add `/v1/...`. | Both Jobs |
 | `MODEL` | Set to the model identifier accepted by the endpoint. For vLLM, this is normally the `--served-model-name` value. | Both Jobs |
 | `TOKENIZER` | Set to the Hugging Face model ID or another tokenizer path that matches the served model. | Both Jobs |
-| `image` | The templates use `quay.io/rh-ee-thibrahi/aiperf:0.12.0`. Replace it only if the target cluster cannot pull it or requires a different AIPerf version. | AIPerf AgentX |
+| `image` | The templates use `nvcr.io/nvidia/ai-dynamo/aiperf:0.12.0`. Replace it only if the target cluster cannot pull it or requires a different AIPerf version. | AIPerf AgentX |
 
 The target must be reachable from the Job namespace and expose OpenAI-compatible
 endpoints. For AgentX, it must support streaming chat completions and report
@@ -65,14 +65,11 @@ is restricted, provide an approved image/cache strategy before submitting it.
 
 ### AIPerf Image
 
-The AgentX templates use the project image
-`quay.io/rh-ee-thibrahi/aiperf:0.12.0`, built from the supplied Containerfile.
-Confirm that the target cluster can pull it before starting a benchmark. If it
-is made private, create an image pull secret in every benchmark namespace.
-
-NVIDIA's published alternative is `nvcr.io/nvidia/ai-dynamo/aiperf:0.12.0`,
-which requires an NGC pull credential in the benchmark namespace. The obsolete
-`nvcr.io/nvidia/aiperf` and `ghcr.io/nvidia/aiperf` image paths are not usable.
+The AgentX templates use NVIDIA's published image
+`nvcr.io/nvidia/ai-dynamo/aiperf:0.12.0`, which requires an NGC pull credential
+in the benchmark namespace. Confirm that the target cluster can pull it before
+starting a benchmark. The obsolete `nvcr.io/nvidia/aiperf` and
+`ghcr.io/nvidia/aiperf` image paths are not usable.
 
 For clusters without NGC access, build and publish the provided
 [`images/aiperf/Containerfile`](images/aiperf/Containerfile). It starts from
