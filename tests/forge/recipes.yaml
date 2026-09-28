@@ -10,3 +10,5 @@ recipes:
       preparation_guide: models/glm-5.2/rhoai/3.5/README.md
   - id: qwen-pp-validation
     manifest: models/glm-5.2/rhoai/3.5/prerequisites/l4-validation/manifests/pp2-tp1-llmisvc-qwen.yaml
+  - id: qwen-single-gpu-smoke
+    manifest: tests/forge/manifests/qwen-single-gpu-smoke.yaml

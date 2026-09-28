@@ -13,4 +13,6 @@ Forge waits for the `LLMInferenceService` to become Ready, then removes the uniq
 
 For `qwen-pp-validation`, the target needs RHOAI/KServe with `LLMInferenceService` support, LeaderWorkerSet, and two nodes with one compatible NVIDIA GPU each; an L4 with 24 GB is sufficient. The target namespace and model access must already be available.
 
+For `qwen-single-gpu-smoke`, the manifest uses RHOAI's built-in single-node topology with one replica and one NVIDIA GPU. It omits `parallelism` and `worker`, so it does not need LeaderWorkerSet. The target needs `LLMInferenceService` v1alpha2, one schedulable NVIDIA GPU, the target namespace, and access to the public Hugging Face model. This checks deployment readiness and cleanup, not benchmark performance.
+
 The GLM-5.2 catalog entry uses `pvc://glm52-fp8-weights`. Its `model_source` records where the weights came from; it does not make Forge download them. The target PVC must already be bound and populated before launching that recipe.
