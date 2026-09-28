@@ -1,10 +1,12 @@
-# Test input for Forge's clusterless recipe validation, not a Kubernetes resource.
+# Forge recipe inputs point to LLMInferenceService deployment manifests.
 # A PVC URI is usable only after the recipe's preparation steps populate it.
 schema_version: 1
 recipes:
-  - manifest: models/glm-5.2/rhoai/3.5/multi-node-pp/manifests/pp2-tp8-llmisvc.yaml
+  - id: glm-5-2-rhoai-3-5-pp2-tp8
+    manifest: models/glm-5.2/rhoai/3.5/multi-node-pp/manifests/pp2-tp8-llmisvc.yaml
     model_source:
       source_uri: hf://zai-org/GLM-5.2-FP8
       storage: prepopulated-pvc
       preparation_guide: models/glm-5.2/rhoai/3.5/README.md
-  - manifest: models/glm-5.2/rhoai/3.5/prerequisites/l4-validation/manifests/pp2-tp1-llmisvc-qwen.yaml
+  - id: qwen-pp-validation
+    manifest: models/glm-5.2/rhoai/3.5/prerequisites/l4-validation/manifests/pp2-tp1-llmisvc-qwen.yaml
