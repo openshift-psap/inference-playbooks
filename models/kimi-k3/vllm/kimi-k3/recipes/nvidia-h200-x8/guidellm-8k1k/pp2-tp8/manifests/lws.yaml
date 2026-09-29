@@ -1,0 +1,167 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: kimi-k3-pp2
+  labels:
+    app.kubernetes.io/name: kimi-k3-pp2
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: 2
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: kimi-k3-pp2
+          app.kubernetes.io/component: leader
+          leaderworkerset.sigs.k8s.io/worker-index: "0"
+      spec:
+        serviceAccountName: kimi-k3-hostpath
+        automountServiceAccountToken: false
+        containers:
+          - name: vllm
+            image: vllm/vllm-openai:kimi-k3@sha256:e90e2603b2781936651ba019804137714367c69e10a7b25a2e57b46995225616
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                set -euo pipefail
+                patch_root=$(mktemp -d)
+                mkdir -p "$patch_root/vllm"
+                cp -R /usr/local/lib/python3.12/dist-packages/vllm/. "$patch_root/vllm/"
+                humming="$patch_root/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py"
+                grep -q 'MoEActivation.SITU' "$humming" || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' "$humming"
+                export PYTHONPATH="$patch_root${PYTHONPATH:+:$PYTHONPATH}"
+                exec vllm serve /models/Kimi-K3 \
+                  --served-model-name moonshotai/Kimi-K3 \
+                  --tensor-parallel-size 8 \
+                  --pipeline-parallel-size 2 \
+                  --nnodes 2 \
+                  --node-rank 0 \
+                  --master-addr 0.0.0.0 \
+                  --port 8000 \
+                  --trust-remote-code \
+                  --attention-backend FLASHMLA \
+                  --moe-backend humming \
+                  --gpu-memory-utilization 0.90 \
+                  --max-num-seqs 256 \
+                  --max-model-len 10240 \
+                  --max-num-batched-tokens 4096 \
+                  --disable-custom-all-reduce \
+                  --no-enable-flashinfer-autotune \
+                  --enable-auto-tool-choice \
+                  --tool-call-parser kimi_k3 \
+                  --reasoning-parser kimi_k3
+            env:
+              - {name: NCCL_IB_HCA, value: mlx5_5}
+              - {name: NCCL_IB_GID_INDEX, value: "3"}
+              - {name: NCCL_DMABUF_ENABLE, value: "0"}
+              - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
+              - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
+              - {name: HOME, value: /tmp}
+              - {name: HF_HOME, value: /models/hf}
+            ports:
+              - {name: http, containerPort: 8000, protocol: TCP}
+            resources:
+              requests:
+                cpu: "32"
+                memory: 512Gi
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+              limits:
+                memory: 512Gi
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+            startupProbe:
+              httpGet: {path: /health, port: 8000}
+              periodSeconds: 10
+              failureThreshold: 720
+            readinessProbe:
+              httpGet: {path: /health, port: 8000}
+              periodSeconds: 10
+              timeoutSeconds: 5
+            volumeMounts:
+              - {name: model, mountPath: /models}
+              - {name: dshm, mountPath: /dev/shm}
+        volumes:
+          - name: model
+            hostPath:
+              path: /mnt/local/kimi-k3/models
+              type: Directory
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 16Gi
+    workerTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: kimi-k3-pp2
+          app.kubernetes.io/component: worker
+      spec:
+        serviceAccountName: kimi-k3-hostpath
+        automountServiceAccountToken: false
+        containers:
+          - name: vllm
+            image: vllm/vllm-openai:kimi-k3@sha256:e90e2603b2781936651ba019804137714367c69e10a7b25a2e57b46995225616
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                set -euo pipefail
+                patch_root=$(mktemp -d)
+                mkdir -p "$patch_root/vllm"
+                cp -R /usr/local/lib/python3.12/dist-packages/vllm/. "$patch_root/vllm/"
+                humming="$patch_root/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py"
+                grep -q 'MoEActivation.SITU' "$humming" || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' "$humming"
+                export PYTHONPATH="$patch_root${PYTHONPATH:+:$PYTHONPATH}"
+                exec vllm serve /models/Kimi-K3 \
+                  --served-model-name moonshotai/Kimi-K3 \
+                  --tensor-parallel-size 8 \
+                  --pipeline-parallel-size 2 \
+                  --nnodes 2 \
+                  --node-rank $(LWS_WORKER_INDEX) \
+                  --master-addr $(LWS_LEADER_ADDRESS) \
+                  --headless \
+                  --port 8000 \
+                  --trust-remote-code \
+                  --attention-backend FLASHMLA \
+                  --moe-backend humming \
+                  --gpu-memory-utilization 0.90 \
+                  --max-num-seqs 256 \
+                  --max-model-len 10240 \
+                  --max-num-batched-tokens 4096 \
+                  --disable-custom-all-reduce \
+                  --no-enable-flashinfer-autotune \
+                  --enable-auto-tool-choice \
+                  --tool-call-parser kimi_k3 \
+                  --reasoning-parser kimi_k3
+            env:
+              - {name: NCCL_IB_HCA, value: mlx5_5}
+              - {name: NCCL_IB_GID_INDEX, value: "3"}
+              - {name: NCCL_DMABUF_ENABLE, value: "0"}
+              - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
+              - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
+              - {name: HOME, value: /tmp}
+              - {name: HF_HOME, value: /models/hf}
+            resources:
+              requests:
+                cpu: "32"
+                memory: 512Gi
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+              limits:
+                memory: 512Gi
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+            volumeMounts:
+              - {name: model, mountPath: /models}
+              - {name: dshm, mountPath: /dev/shm}
+        volumes:
+          - name: model
+            hostPath:
+              path: /mnt/local/kimi-k3/models
+              type: Directory
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 16Gi

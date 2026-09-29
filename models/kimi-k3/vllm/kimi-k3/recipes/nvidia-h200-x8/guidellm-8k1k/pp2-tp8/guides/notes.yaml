@@ -1,0 +1,34 @@
+schema_version: 1
+profile:
+  label: Kimi K3 candidate on two H200 nodes
+  headline: TP8×PP2 with the Humming MoE backend is prepared for a Forge profile1 validation run.
+  specs:
+    - {label: Checkpoint, value: moonshotai/Kimi-K3}
+    - {label: Hardware, value: 2 nodes · 8× H200 per node}
+    - {label: Parallelism, value: TP=8 × PP=2}
+    - {label: Precision, value: MXFP4 weights}
+    - {label: Context limit, value: 10,240 tokens}
+    - {label: Backend, value: Humming MoE}
+decisions:
+  - subjects: [tensor parallelism, pipeline parallelism]
+    why: The candidate uses one TP8 group per H200 node and pipeline parallelism across the two nodes.
+  - subjects: [moe backend]
+    why: Humming is carried forward from the original Kimi K3 PP2 candidate and still needs validation in this repository.
+  - subjects: [NCCL_IB_HCA, NCCL_IB_GID_INDEX]
+    why: The values target the IPv4-mapped RoCE path used by the intended H200 environment and must be verified before launch.
+known_issues:
+  - issue: Humming requires the Kimi-specific MoEActivation.SITU allowlist patch.
+    impact: The server fails during backend setup when the pinned image lacks the allowlist entry.
+    mitigation: Each pod copies the vLLM package to writable temporary storage and applies the narrow patch there before launch.
+  - issue: The model weights are approximately 1.56 TB and use local hostPath storage.
+    impact: Both GPU nodes need a complete copy and the workload needs a hostPath-capable OpenShift SCC.
+    mitigation: Stage and verify /mnt/local/kimi-k3/models/Kimi-K3 on both nodes, then grant hostmount-anyuid to the isolated kimi-k3-hostpath ServiceAccount.
+  - issue: The checked-in recipe declares GuideLLM 8K/1K, while the first Forge run will use profile1 at 1K/1K.
+    impact: A successful smoke run validates deployment and the shorter workload only.
+    mitigation: Keep maturity at day-zero until the repository-standard 8K/1K workload also succeeds.
+quickstart:
+  - {step: Prepare, detail: Install LeaderWorkerSet, create the kimi-k3-hostpath ServiceAccount, grant its hostPath SCC, and stage moonshotai/Kimi-K3 on both nodes.}
+  - {step: Network, detail: Map rdma/ib to the target RoCE resource and verify NCCL_IB_HCA and NCCL_IB_GID_INDEX on both nodes.}
+  - {step: Deploy, detail: Select recipe kimi-k3-vllm-h200-pp2-tp8 in the Forge PR comment.}
+  - {step: Verify, detail: Wait for the leader health probe, then query /v1/models through the leader-only Service.}
+  - {step: Cleanup, detail: Forge deletes its uniquely named LeaderWorkerSet and Service; delete both manifests after any manual deployment.}
