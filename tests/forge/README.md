@@ -24,7 +24,7 @@ For a Recipe v3 test on Janus, request the GPUs in the PR comment and map the re
 /var inference_playbooks.rdma_resource: nvidia.com/roce
 ```
 
-Recipe v3 model files and other declared prerequisites must already exist on the target. For Recipe v3, Forge does not silently change serving flags, probes, or hostPath model storage. The Kimi K3 recipe therefore requires a complete `/mnt/local/kimi-k3/models/Kimi-K3` copy on both selected GPU nodes. The `kimi-k3-hostpath` ServiceAccount must exist and be allowed to use the `hostmount-anyuid` SCC; Forge does not create or grant it. Restricted targets should use a prepopulated shared PVC instead.
+For a Recipe v3 Hugging Face model, declare `deployment.model_cache` with `volume_name`, `pvc_size`, and `model_directory_name`; set `wait_timeout_seconds` when the download needs longer than the Forge default. The manifest must mount that volume in its LeaderWorkerSet pod template(s). Forge uses the existing Hugging Face cache helper to create or reuse an RWX PVC, download the model declared in `models/<model-id>/model.yaml`, and replace the named volume with that claim before applying the LeaderWorkerSet. The PVC is retained for later runs. Set a capacity that fits the checkpoint; the Kimi K3 recipe declares 2Ti for its approximately 1.56 TB weights. Direct Kubernetes deployments use the manifest's `model` claim name and must provide a populated RWX PVC with the files under `Kimi-K3`.
 
 For `qwen-pp-validation`, the target needs RHOAI/KServe with `LLMInferenceService` support, LeaderWorkerSet, and two nodes with one compatible NVIDIA GPU each; an L4 with 24 GB is sufficient. The target namespace and model access must already be available.
 

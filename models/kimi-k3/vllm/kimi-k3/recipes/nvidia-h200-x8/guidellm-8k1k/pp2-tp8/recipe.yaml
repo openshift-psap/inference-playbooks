@@ -12,7 +12,12 @@ deployment:
   scope: multi-node
   status:
     state: needs-verification
-    note: Run Forge profile1 on Janus after its hostPath model copies and ServiceAccount are prepared.
+    note: Run Forge profile1 on an H200 target with shared model storage prepared from the declared Hugging Face source.
+  model_cache:
+    volume_name: model
+    model_directory_name: Kimi-K3
+    pvc_size: "2Ti"
+    wait_timeout_seconds: 21600
   parallelism: {tensor: 8, pipeline: 2, data: 1}
   manifests:
     - {path: manifests/lws.yaml, kind: LeaderWorkerSet}
@@ -26,17 +31,17 @@ deployment:
           vllm:
             arg_choices:
               - {flag: --node-rank, value: 0, required: true, why: The leader starts rank zero of the two-node pipeline.}
-              - {flag: --tensor-parallel-size, value: 8, required: true, why: One TP group runs on each H200 node.}
-              - {flag: --pipeline-parallel-size, value: 2, required: true, why: The model is split across two nodes.}
-              - {flag: --moe-backend, value: humming, required: true, why: This candidate carries forward the backend selected by the original Kimi K3 sweep.}
-              - {flag: --attention-backend, value: FLASHMLA, required: true, why: The pinned Kimi K3 image uses the MLA attention backend.}
-              - {flag: --max-model-len, value: 10240, required: true, why: Allows the declared 8K input and 1K output workload plus template overhead.}
-              - {flag: --max-num-seqs, value: 256, required: true, why: Scheduler setting carried forward from the measured PP2 candidate.}
+              - {flag: --tensor-parallel-size, value: 8, required: true, why: One TP group per H200 node.}
+              - {flag: --pipeline-parallel-size, value: 2, required: true, why: Splits the model across the two nodes.}
+              - {flag: --moe-backend, value: humming, required: true, why: Best measured 16-GPU backend in the Kimi K3 sweep.}
+              - {flag: --attention-backend, value: FLASHMLA, required: true, why: Kimi K3 MLA attention backend used by the tested image.}
+              - {flag: --max-model-len, value: 8192, required: true, why: Matches the tested 8K serving profile.}
+              - {flag: --max-num-seqs, value: 256, required: true, why: Scheduler setting used in the measured PP2 sweep.}
       worker:
         containers:
           vllm:
             arg_choices:
-              - {flag: --node-rank, value: $(LWS_WORKER_INDEX), required: true, why: LWS injects the worker rank.}
+              - {flag: --node-rank, value: $(LWS_WORKER_INDEX), required: true, why: The worker rank must come from the value injected by LWS.}
               - {flag: --headless, required: true, why: The worker joins the leader without exposing an API server.}
   auxiliary_sources:
     - {path: manifests/service.yaml, kind: Service}
