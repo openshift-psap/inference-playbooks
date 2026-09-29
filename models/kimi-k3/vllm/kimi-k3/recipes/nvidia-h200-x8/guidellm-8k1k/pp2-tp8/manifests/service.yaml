@@ -12,5 +12,4 @@ spec:
       targetPort: 8000
   selector:
     app.kubernetes.io/name: kimi-k3-pp2
-    app.kubernetes.io/component: leader
   type: ClusterIP

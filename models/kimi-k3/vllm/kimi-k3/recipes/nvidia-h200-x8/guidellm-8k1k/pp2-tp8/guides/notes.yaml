@@ -7,7 +7,7 @@ profile:
     - {label: Hardware, value: 2 nodes · 8× H200 per node}
     - {label: Parallelism, value: TP=8 × PP=2}
     - {label: Precision, value: MXFP4 weights}
-    - {label: Context limit, value: 10,240 tokens}
+    - {label: Context limit, value: "8,192 tokens"}
     - {label: Backend, value: Humming MoE}
 decisions:
   - subjects: [tensor parallelism, pipeline parallelism]
@@ -18,16 +18,16 @@ decisions:
     why: The values target the IPv4-mapped RoCE path used by the intended H200 environment and must be verified before launch.
 known_issues:
   - issue: Humming requires the Kimi-specific MoEActivation.SITU allowlist patch.
-    impact: The server fails during backend setup when the pinned image lacks the allowlist entry.
-    mitigation: Each pod copies the vLLM package to writable temporary storage and applies the narrow patch there before launch.
-  - issue: The model weights are approximately 1.56 TB and use local hostPath storage.
-    impact: Both GPU nodes need a complete copy and the workload needs a hostPath-capable OpenShift SCC.
-    mitigation: Stage and verify /mnt/local/kimi-k3/models/Kimi-K3 on both nodes, then grant hostmount-anyuid to the isolated kimi-k3-hostpath ServiceAccount.
+    impact: The server will fail during backend setup if the image does not already contain the allowlist entry.
+    mitigation: The source manifest applies the narrow allowlist insertion before starting vLLM; prefer an image with the upstream fix once available.
+  - issue: The model weights are approximately 1.56 TB.
+    impact: Both pods need simultaneous read access to the checkpoint, and the cache needs enough shared storage capacity.
+    mitigation: Forge prepares or reuses an RWX cache from the model's Hugging Face ID. Direct Kubernetes deployments need a populated RWX PVC named model with the checkpoint under Kimi-K3.
   - issue: The checked-in recipe declares GuideLLM 8K/1K, while the first Forge run will use profile1 at 1K/1K.
     impact: A successful smoke run validates deployment and the shorter workload only.
     mitigation: Keep maturity at day-zero until the repository-standard 8K/1K workload also succeeds.
 quickstart:
-  - {step: Prepare, detail: Install LeaderWorkerSet, create the kimi-k3-hostpath ServiceAccount, grant its hostPath SCC, and stage moonshotai/Kimi-K3 on both nodes.}
+  - {step: Prepare, detail: Install LeaderWorkerSet and provide an RWX PVC with at least 2Ti. Forge fills its declared model cache from moonshotai/Kimi-K3; direct deployments must populate a PVC named model with the weights under Kimi-K3.}
   - {step: Network, detail: Map rdma/ib to the target RoCE resource and verify NCCL_IB_HCA and NCCL_IB_GID_INDEX on both nodes.}
   - {step: Deploy, detail: Select recipe kimi-k3-vllm-h200-pp2-tp8 in the Forge PR comment.}
   - {step: Verify, detail: Wait for the leader health probe, then query /v1/models through the leader-only Service.}
