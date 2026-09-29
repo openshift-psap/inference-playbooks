@@ -1,0 +1,43 @@
+schema_version: 3
+recipe_id: kimi-k3-vllm-h200-pp2-tp8
+model_id: kimi-k3
+platform: {stack: vllm, version: "kimi-k3"}
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+workload_profile: guidellm-8k1k
+deployment_mode: pp2-tp8
+optimization_intent: throughput
+maturity: day-zero
+
+deployment:
+  scope: multi-node
+  status:
+    state: needs-verification
+    note: Run Forge profile1 on Janus after its hostPath model copies and ServiceAccount are prepared.
+  parallelism: {tensor: 8, pipeline: 2, data: 1}
+  manifests:
+    - {path: manifests/lws.yaml, kind: LeaderWorkerSet}
+    - {path: manifests/service.yaml, kind: Service}
+  components:
+    modelserver:
+      kind: LeaderWorkerSet
+      source: manifests/lws.yaml
+      leader:
+        containers:
+          vllm:
+            arg_choices:
+              - {flag: --node-rank, value: 0, required: true, why: The leader starts rank zero of the two-node pipeline.}
+              - {flag: --tensor-parallel-size, value: 8, required: true, why: One TP group runs on each H200 node.}
+              - {flag: --pipeline-parallel-size, value: 2, required: true, why: The model is split across two nodes.}
+              - {flag: --moe-backend, value: humming, required: true, why: This candidate carries forward the backend selected by the original Kimi K3 sweep.}
+              - {flag: --attention-backend, value: FLASHMLA, required: true, why: The pinned Kimi K3 image uses the MLA attention backend.}
+              - {flag: --max-model-len, value: 10240, required: true, why: Allows the declared 8K input and 1K output workload plus template overhead.}
+              - {flag: --max-num-seqs, value: 256, required: true, why: Scheduler setting carried forward from the measured PP2 candidate.}
+      worker:
+        containers:
+          vllm:
+            arg_choices:
+              - {flag: --node-rank, value: $(LWS_WORKER_INDEX), required: true, why: LWS injects the worker rank.}
+              - {flag: --headless, required: true, why: The worker joins the leader without exposing an API server.}
+  auxiliary_sources:
+    - {path: manifests/service.yaml, kind: Service}
+notes: guides/notes.yaml
