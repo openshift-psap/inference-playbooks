@@ -19,7 +19,7 @@ decisions:
 known_issues:
   - issue: Humming requires the Kimi-specific MoEActivation.SITU allowlist patch.
     impact: The server will fail during backend setup if the image does not already contain the allowlist entry.
-    mitigation: The source manifest applies the narrow allowlist insertion before starting vLLM; prefer an image with the upstream fix once available.
+    mitigation: An init container copies the module into a writable volume, applies the narrow allowlist insertion there, and mounts that file into vLLM. Prefer an image with the upstream fix once available.
   - issue: The model weights are approximately 1.56 TB.
     impact: Both pods need simultaneous read access to the checkpoint, and the cache needs enough shared storage capacity.
     mitigation: Forge prepares or reuses an RWX cache from the model's Hugging Face ID. Direct Kubernetes deployments need a populated RWX PVC named model with the checkpoint under Kimi-K3.
