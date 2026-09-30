@@ -15,6 +15,20 @@ spec:
           app.kubernetes.io/name: kimi-k3-pp2
           leaderworkerset.sigs.k8s.io/worker-index: "0"
       spec:
+        initContainers:
+          - name: prepare-humming-patch
+            image: vllm/vllm-openai:kimi-k3
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                set -euo pipefail
+                humming=/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py
+                cp "$humming" /humming-patch/fused_humming_moe.py
+                grep -q 'MoEActivation.SITU' /humming-patch/fused_humming_moe.py || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' /humming-patch/fused_humming_moe.py
+                grep -q 'MoEActivation.SITU' /humming-patch/fused_humming_moe.py
+            volumeMounts:
+              - {name: humming-patch, mountPath: /humming-patch}
         containers:
           - name: vllm
             image: vllm/vllm-openai:kimi-k3
@@ -74,6 +88,7 @@ spec:
             volumeMounts:
               - {name: model, mountPath: /models}
               - {name: dshm, mountPath: /dev/shm}
+              - {name: humming-patch, mountPath: /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py, subPath: fused_humming_moe.py, readOnly: true}
         volumes:
           - name: model
             persistentVolumeClaim:
@@ -82,11 +97,27 @@ spec:
             emptyDir:
               medium: Memory
               sizeLimit: 16Gi
+          - name: humming-patch
+            emptyDir: {}
     workerTemplate:
       metadata:
         labels:
           app.kubernetes.io/name: kimi-k3-pp2
       spec:
+        initContainers:
+          - name: prepare-humming-patch
+            image: vllm/vllm-openai:kimi-k3
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                set -euo pipefail
+                humming=/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py
+                cp "$humming" /humming-patch/fused_humming_moe.py
+                grep -q 'MoEActivation.SITU' /humming-patch/fused_humming_moe.py || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' /humming-patch/fused_humming_moe.py
+                grep -q 'MoEActivation.SITU' /humming-patch/fused_humming_moe.py
+            volumeMounts:
+              - {name: humming-patch, mountPath: /humming-patch}
         containers:
           - name: vllm
             image: vllm/vllm-openai:kimi-k3
@@ -147,6 +178,7 @@ spec:
             volumeMounts:
               - {name: model, mountPath: /models}
               - {name: dshm, mountPath: /dev/shm}
+              - {name: humming-patch, mountPath: /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py, subPath: fused_humming_moe.py, readOnly: true}
         volumes:
           - name: model
             persistentVolumeClaim:
@@ -155,3 +187,5 @@ spec:
             emptyDir:
               medium: Memory
               sizeLimit: 16Gi
+          - name: humming-patch
+            emptyDir: {}
