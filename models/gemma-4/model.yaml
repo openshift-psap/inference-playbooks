@@ -1,0 +1,8 @@
+schema_version: 1
+model_id: gemma-4
+name: Gemma 4 26B-A4B Instruct FP8
+family: Gemma 4
+parameters: 26B-A4B
+huggingface_id: RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
+quantizations:
+  - name: FP8
