@@ -26,3 +26,12 @@ config, MTP speculative decoding, and probes.
 
 The manifest lives in
 [`single-node/manifests/`](single-node/manifests/).
+
+## Forge profile1 smoke
+
+[Recipe v3](recipes/nvidia-h200-sxm-8x-nvlink-r1/guidellm-8k1k/tp1/recipe.yaml)
+runs the FP8 base checkpoint through Forge with TP=1 on one H200 GPU. It leaves
+MTP off because the current Forge cache stages one Hugging Face repository,
+while the draft model is separate. Gemma is gated, so Forge's configured
+Hugging Face credential must have access to the base checkpoint. Forge runs
+profile1 (1K/1K); that smoke does not validate the recipe's 8K/1K workload.
