@@ -15,7 +15,7 @@ decisions:
   - subjects: [moe backend]
     why: PR19 carries Humming; this recipe uses Marlin because the Janus TCP smoke returned readable output. The smoke tested functionality only.
   - subjects: [inter-node network]
-    why: The recipe requests logical rdma/ib and leaves the target resource and transport details to cluster configuration.
+    why: The recipe requests eight composite DRA GPU/NIC pairs per node, matching Janus and the validated multi-node LWS allocation pattern.
 known_issues:
   - issue: The model weights are approximately 1.56 TB.
     impact: Both pods need simultaneous read access to the checkpoint, and the cache needs enough shared storage capacity.
@@ -25,10 +25,10 @@ known_issues:
     mitigation: Keep maturity at day-zero until the context limit and Forge workload path are updated and validated for 8K/1K.
   - issue: The Janus functional smoke used TCP; RDMA/RoCE was not exercised.
     impact: The recipe's multi-node RDMA path is not yet validated by a measured run.
-    mitigation: Map rdma/ib to the target cluster resource and verify transport selection on that cluster.
+    mitigation: Verify NCCL selects RoCE with the composite DRA GPU/NIC pairs before recording benchmark results.
 quickstart:
   - {step: Prepare, detail: Install LeaderWorkerSet and provide an RWX PVC with at least 2Ti. Forge fills its declared model cache from moonshotai/Kimi-K3; direct deployments must populate a PVC named model with the weights under Kimi-K3.}
-  - {step: Network, detail: Provide an RDMA-capable inter-node network and map logical rdma/ib to the target cluster's extended resource; device and transport details belong to that target.}
+  - {step: Network, detail: Provide the composite.dra/gpu-nic-pair resource used by Janus; the recipe requests eight co-located GPU/NIC pairs on each node.}
   - {step: Deploy, detail: Select recipe kimi-k3-vllm-h200-pp2-tp8 in the Forge PR comment.}
   - {step: Verify, detail: Wait for the leader health probe, then query /v1/models through the leader-only Service.}
   - {step: Cleanup, detail: Forge deletes its uniquely named LeaderWorkerSet and Service; delete both manifests after any manual deployment.}
