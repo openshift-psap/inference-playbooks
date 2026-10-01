@@ -55,12 +55,10 @@ spec:
               requests:
                 cpu: "32"
                 memory: 512Gi
-                nvidia.com/gpu: "8"
-                rdma/ib: "1"
+                composite.dra/gpu-nic-pair: "8"
               limits:
                 memory: 512Gi
-                nvidia.com/gpu: "8"
-                rdma/ib: "1"
+                composite.dra/gpu-nic-pair: "8"
             startupProbe:
               httpGet: {path: /health, port: 8000}
               periodSeconds: 10
@@ -126,12 +124,10 @@ spec:
               requests:
                 cpu: "32"
                 memory: 512Gi
-                nvidia.com/gpu: "8"
-                rdma/ib: "1"
+                composite.dra/gpu-nic-pair: "8"
               limits:
                 memory: 512Gi
-                nvidia.com/gpu: "8"
-                rdma/ib: "1"
+                composite.dra/gpu-nic-pair: "8"
             startupProbe:
               httpGet: {path: /health, port: 8000}
               periodSeconds: 10

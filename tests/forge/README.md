@@ -26,7 +26,7 @@ For a recipe with an RDMA resource request, map its logical resource name to the
 /var inference_playbooks.rdma_resource: <target-extended-rdma-resource>
 ```
 
-The Kimi K3 PP2/TP8 recipe needs two H200 nodes with eight GPUs each, an RDMA-capable inter-node network, and shared model storage. Its `rdma/ib` request stays cluster-neutral; supply the resource mapping above for the target. Forge currently runs `profile1` (1K/1K), so that smoke does not validate the recipe's declared GuideLLM 8K/1K workload.
+The Kimi K3 PP2/TP8 recipe needs two H200 nodes with eight GPUs each, the `composite.dra/gpu-nic-pair` resource used by Janus, and shared model storage. It requests eight co-located GPU/NIC pairs per node, so it does not use the logical RDMA resource mapping above. Forge currently runs `profile1` (1K/1K), so that smoke does not validate the recipe's declared GuideLLM 8K/1K workload.
 
 For a Recipe v3 Hugging Face model, declare `deployment.model_cache` with `volume_name`, `pvc_size`, and `model_directory_name`; set `wait_timeout_seconds` when the download needs longer than the Forge default. The manifest must mount that volume in its LeaderWorkerSet pod template(s). Forge uses the existing Hugging Face cache helper to create or reuse an RWX PVC, download the model declared in `models/<model-id>/model.yaml`, and replace the named volume with that claim before applying the LeaderWorkerSet. The PVC is retained for later runs. Set a capacity that fits the checkpoint; the Kimi K3 recipe declares 2Ti for its approximately 1.56 TB weights. Direct Kubernetes deployments use the manifest's `model` claim name and must provide a populated RWX PVC with the files under `Kimi-K3`.
 
