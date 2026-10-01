@@ -1,0 +1,48 @@
+schema_version: 3
+recipe_id: kimi-k3-vllm-h200-pp2-tp8
+model_id: kimi-k3
+platform: {stack: vllm, version: "kimi-k3"}
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-rdma-r1.yaml
+workload_profile: guidellm-8k1k
+deployment_mode: pp2-tp8
+optimization_intent: throughput
+maturity: day-zero
+
+deployment:
+  scope: multi-node
+  status:
+    state: needs-verification
+    note: Forge currently runs profile1 (1K/1K); the declared 8K/1K workload needs a larger context limit and a separate Forge path.
+  model_cache:
+    volume_name: model
+    model_directory_name: Kimi-K3
+    pvc_size: "2Ti"
+    wait_timeout_seconds: 21600
+  parallelism: {tensor: 8, pipeline: 2, data: 1}
+  manifests:
+    - {path: manifests/lws.yaml, kind: LeaderWorkerSet}
+    - {path: manifests/service.yaml, kind: Service}
+  components:
+    modelserver:
+      kind: LeaderWorkerSet
+      source: manifests/lws.yaml
+      leader:
+        containers:
+          vllm:
+            arg_choices:
+              - {flag: --node-rank, value: 0, required: true, why: The leader starts rank zero of the two-node pipeline.}
+              - {flag: --tensor-parallel-size, value: 8, required: true, why: One TP group per H200 node.}
+              - {flag: --pipeline-parallel-size, value: 2, required: true, why: Splits the model across the two nodes.}
+              - {flag: --moe-backend, value: marlin, required: true, why: The functional smoke returned readable text; performance is not yet measured.}
+              - {flag: --attention-backend, value: FLASHMLA, required: true, why: Kimi K3 MLA attention backend used by the tested image.}
+              - {flag: --max-model-len, value: 8192, required: true, why: Retains the original PR19 serving limit; the declared 8K/1K workload is not validated at this limit.}
+              - {flag: --max-num-seqs, value: 256, required: true, why: Scheduler setting used in the measured PP2 sweep.}
+      worker:
+        containers:
+          vllm:
+            arg_choices:
+              - {flag: --node-rank, value: $(LWS_WORKER_INDEX), required: true, why: The worker rank must come from the value injected by LWS.}
+              - {flag: --headless, required: true, why: The worker joins the leader without exposing an API server.}
+  auxiliary_sources:
+    - {path: manifests/service.yaml, kind: Service}
+notes: guides/notes.yaml

@@ -1,0 +1,26 @@
+# One-GPU deployment smoke for the comment-triggered Forge path.
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: qwen-single-gpu-smoke
+spec:
+  replicas: 1
+  model:
+    uri: hf://Qwen/Qwen2.5-7B-Instruct
+    name: Qwen/Qwen2.5-7B-Instruct
+  # Omit parallelism and worker to use RHOAI's built-in single-node topology.
+  template:
+    containers:
+      - name: main
+        env:
+          - name: VLLM_ADDITIONAL_ARGS
+            value: "--trust-remote-code"
+        resources:
+          requests:
+            cpu: 2
+            memory: 16Gi
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: 4
+            memory: 32Gi
+            nvidia.com/gpu: "1"

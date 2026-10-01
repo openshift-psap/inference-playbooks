@@ -38,6 +38,7 @@ workload is specific to that model, framework, or deployment shape.
 | GLM-5.2-FP8 | [vLLM (v0.23.0)](models/glm-5.2/vllm/v0.23.0/) · [RHOAI (3.5)](models/glm-5.2/rhoai/3.5/) | [vLLM guides](models/glm-5.2/vllm/v0.23.0/README.md) · [RHOAI guides](models/glm-5.2/rhoai/3.5/README.md) |
 | GLM-5 / GLM-5-FP8 | [vLLM (latest)](models/glm-5/vllm/latest/) | [Model Ops](models/glm-5/model-ops/) |
 | Gemma-4-26B-A4B-FP8 | [vLLM (v0.24.0)](models/gemma-4/vllm/v0.24.0/) | [Deployment Guides](models/gemma-4/vllm/v0.24.0/README.md) |
+| Kimi K3 | [vLLM (Kimi K3 image)](models/kimi-k3/vllm/kimi-k3/) | [PP2/TP8 H200 recipe](models/kimi-k3/vllm/kimi-k3/recipes/nvidia-h200-x8/guidellm-8k1k/pp2-tp8/recipe.yaml) |
 
 ## Recipe v3 layout
 

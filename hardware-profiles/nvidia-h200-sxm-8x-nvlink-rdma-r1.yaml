@@ -1,0 +1,27 @@
+schema_version: 1
+profile_id: nvidia-h200-sxm-8x-nvlink-rdma-r1
+profile_revision: 1
+kind: hardware-profile
+description: Eight NVIDIA H200 SXM GPUs in one NVLink-connected node with RDMA-capable inter-node networking.
+accelerator_key: nvidia-h200-x8
+
+accelerators:
+  vendor: nvidia
+  model: H200
+  form_factor: SXM
+  count_per_node: 8
+  memory_per_gpu_gib: 141
+  intra_node_interconnect: nvlink
+
+host:
+  cpu_architecture: x86_64
+  memory_min_gib: 512
+
+network:
+  required: true
+  rdma: true
+  notes: Device and extended resource names are supplied by the target cluster.
+
+correction_log:
+  - revision: 1
+    summary: Initial profile.

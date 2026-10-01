@@ -1,0 +1,7 @@
+schema_version: 1
+model_id: kimi-k3
+name: Kimi K3
+family: Kimi
+huggingface_id: moonshotai/Kimi-K3
+quantizations:
+  - name: MXFP4
