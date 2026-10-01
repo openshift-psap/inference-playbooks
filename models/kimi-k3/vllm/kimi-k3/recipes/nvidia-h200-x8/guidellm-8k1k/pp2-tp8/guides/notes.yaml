@@ -1,34 +1,34 @@
 schema_version: 1
 profile:
   label: Kimi K3 candidate on two H200 nodes
-  headline: TP8×PP2 with the Humming MoE backend is prepared for a Forge profile1 validation run.
+  headline: Marlin returned readable output in a Janus TCP smoke; RoCE and the 8K/1K benchmark remain unverified.
   specs:
     - {label: Checkpoint, value: moonshotai/Kimi-K3}
     - {label: Hardware, value: 2 nodes · 8× H200 per node}
     - {label: Parallelism, value: TP=8 × PP=2}
     - {label: Precision, value: MXFP4 weights}
     - {label: Context limit, value: "8,192 tokens"}
-    - {label: Backend, value: Humming MoE}
+    - {label: Backend, value: Marlin MoE}
 decisions:
   - subjects: [tensor parallelism, pipeline parallelism]
     why: The candidate uses one TP8 group per H200 node and pipeline parallelism across the two nodes.
   - subjects: [moe backend]
-    why: Humming is carried forward from the original Kimi K3 PP2 candidate and still needs validation in this repository.
-  - subjects: [NCCL_IB_HCA, NCCL_IB_GID_INDEX]
-    why: The values target the IPv4-mapped RoCE path used by the intended H200 environment and must be verified before launch.
+    why: PR19 carries Humming; this recipe uses Marlin because the Janus TCP smoke returned readable output. The smoke tested functionality only.
+  - subjects: [inter-node network]
+    why: The recipe requests logical rdma/ib and leaves the target resource and transport details to cluster configuration.
 known_issues:
-  - issue: Humming requires the Kimi-specific MoEActivation.SITU allowlist patch.
-    impact: The server will fail during backend setup if the image does not already contain the allowlist entry.
-    mitigation: An init container copies the module into a writable volume, applies the narrow allowlist insertion there, and mounts that file into vLLM. Prefer an image with the upstream fix once available.
   - issue: The model weights are approximately 1.56 TB.
     impact: Both pods need simultaneous read access to the checkpoint, and the cache needs enough shared storage capacity.
     mitigation: Forge prepares or reuses an RWX cache from the model's Hugging Face ID. Direct Kubernetes deployments need a populated RWX PVC named model with the checkpoint under Kimi-K3.
-  - issue: The checked-in recipe declares GuideLLM 8K/1K, while the first Forge run will use profile1 at 1K/1K.
-    impact: A successful smoke run validates deployment and the shorter workload only.
-    mitigation: Keep maturity at day-zero until the repository-standard 8K/1K workload also succeeds.
+  - issue: The recipe declares GuideLLM 8K/1K but keeps the original 8,192-token serving limit; Forge currently runs profile1 at 1K/1K.
+    impact: The 8K/1K workload can exceed the serving limit, and the current Forge smoke will not catch it.
+    mitigation: Keep maturity at day-zero until the context limit and Forge workload path are updated and validated for 8K/1K.
+  - issue: The Janus functional smoke used TCP; RDMA/RoCE was not exercised.
+    impact: The recipe's multi-node RDMA path is not yet validated by a measured run.
+    mitigation: Map rdma/ib to the target cluster resource and verify transport selection on that cluster.
 quickstart:
   - {step: Prepare, detail: Install LeaderWorkerSet and provide an RWX PVC with at least 2Ti. Forge fills its declared model cache from moonshotai/Kimi-K3; direct deployments must populate a PVC named model with the weights under Kimi-K3.}
-  - {step: Network, detail: Map rdma/ib to the target RoCE resource and verify NCCL_IB_HCA and NCCL_IB_GID_INDEX on both nodes.}
+  - {step: Network, detail: Provide an RDMA-capable inter-node network and map logical rdma/ib to the target cluster's extended resource; device and transport details belong to that target.}
   - {step: Deploy, detail: Select recipe kimi-k3-vllm-h200-pp2-tp8 in the Forge PR comment.}
   - {step: Verify, detail: Wait for the leader health probe, then query /v1/models through the leader-only Service.}
   - {step: Cleanup, detail: Forge deletes its uniquely named LeaderWorkerSet and Service; delete both manifests after any manual deployment.}
