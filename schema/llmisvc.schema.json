@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/llmisvc.schema.json",
+  "title": "LLMInferenceService component",
+  "type": "object",
+  "required": ["kind", "source"],
+  "$defs": {
+    "pod": {
+      "type": "object",
+      "required": ["containers"],
+      "properties": {
+        "containers": {"$ref": "container-runtime.schema.json#/$defs/containers"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "kind": {"const": "LLMInferenceService"},
+    "source": {"type": "string", "pattern": "^config/.*\\.ya?ml$"},
+    "template": {"$ref": "#/$defs/pod"},
+    "worker": {"$ref": "#/$defs/pod"},
+    "prefill": {
+      "type": "object",
+      "properties": {
+        "template": {"$ref": "#/$defs/pod"},
+        "worker": {"$ref": "#/$defs/pod"}
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

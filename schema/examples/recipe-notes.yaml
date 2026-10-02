@@ -1,0 +1,46 @@
+schema_version: 1
+profile:
+  label: Agentic / long context
+  sub: 131K context with tool calling
+  headline: Serve the model on one eight-GPU node with a single vLLM process.
+  specs:
+    - {label: Node scope, source: "recipe.yaml#/deployment/scope"}
+    - {label: GPUs per node, source: "hardware_profile#/accelerators/count_per_node"}
+args_lede: The selected flags support long-context agentic serving.
+default_stance: Keep other CLI defaults unless a benchmark supports changing them.
+omissions:
+  - setting: --pipeline-parallel-size
+    why_not: This example runs on one node using tensor parallelism.
+decisions:
+  - subjects: ["--tensor-parallel-size", "nvidia.com/gpu", "hardware accelerator count"]
+    why: Tensor parallelism and the GPU request must agree with the selected node profile.
+  - subjects: ["startup probe budget", "model load time"]
+    why: The probe budget must cover loading weights from the configured storage.
+    status: {state: needs-verification, note: Measure cold startup on the target storage.}
+image_choices:
+  - component: modelserver
+    container: vllm
+    ref: docker.io/vllm/vllm-openai:v0.24.0
+    status: {state: needs-verification, note: Verify this image on the target platform.}
+    why: This version supports the model features used by the recipe.
+    engine_min_version: v0.24.0
+    target:
+      ref: registry.redhat.io/rhaiis/vllm-cuda-rhel9
+      status: {state: needs-verification, note: Confirm the image includes the required engine version.}
+      why: Prefer the supported platform image once it meets the engine requirement.
+features:
+  tool_calling: true
+  prefix_caching: true
+quickstart:
+  - {step: Prepare access, detail: Create the model access secret.}
+  - {step: Deploy, detail: Apply the generated manifest.}
+  - {step: Verify, detail: Check health and a representative tool call.}
+insights:
+  - Benchmark results should be interpreted alongside the selected hardware profile.
+known_issues:
+  - issue: Model startup may exceed the initial probe budget.
+    impact: The pod can restart before the model is ready.
+    mitigation: Measure cold load time and adjust the startup probe in the source manifest.
+sizing:
+  tool: configiq
+  replicas_for: {rps: 4, slo_ttft_p95_ms: 2000}

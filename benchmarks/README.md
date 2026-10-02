@@ -9,12 +9,17 @@ the target Service, after making the required substitutions described below.
 Edit the `env` section in the manifest. The placeholder values are intentional:
 they prevent a benchmark from being accidentally directed at the wrong model.
 
-| Variable | Required change | Used by |
-|---|---|---|
-| `ENDPOINT` | Set to the target's in-cluster base URL, including its port; for example, `http://my-model:8000`. Do not add `/v1/...`. | Both Jobs |
-| `MODEL` | Set to the model identifier accepted by the endpoint. For vLLM, this is normally the `--served-model-name` value. | Both Jobs |
-| `TOKENIZER` | Set to the Hugging Face model ID or another tokenizer path that matches the served model. | Both Jobs |
-| `image` | The templates use `quay.io/rh-ee-thibrahi/aiperf:0.12.0`. Replace it only if the target cluster cannot pull it or requires a different AIPerf version. | AIPerf AgentX |
+| Variable     | Used by       | Required change                                       |
+| ------------ | ------------- | ----------------------------------------------------- |
+| `ENDPOINT`   | Both Jobs     | In-cluster base URL with port, e.g.                   |
+|              |               | `http://my-model:8000`. Do not add `/v1/...`.         |
+| `MODEL`      | Both Jobs     | Model identifier accepted by the endpoint. For vLLM,  |
+|              |               | normally the `--served-model-name` value.              |
+| `TOKENIZER`  | Both Jobs     | Hugging Face model ID or tokenizer path that matches   |
+|              |               | the served model.                                      |
+| `image`      | AIPerf AgentX | Templates use `quay.io/rh-ee-thibrahi/aiperf:0.12.0`. |
+|              |               | Replace only if the cluster cannot pull it or requires |
+|              |               | a different AIPerf version.                            |
 
 The target must be reachable from the Job namespace and expose OpenAI-compatible
 endpoints. For AgentX, it must support streaming chat completions and report
@@ -88,11 +93,9 @@ All benchmark Jobs write artifacts to `/results` on a PersistentVolumeClaim
 named `benchmark-results`. Create that claim in the benchmark namespace before
 applying a Job, choosing a storage class, size, and access mode that fit the
 cluster's storage policy. Completed Jobs and their pods are retained for one day
-to support debugging; results remain on the PVC. A reusable retrieval pod that
-mounts this claim is tracked in
-[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
-The AIPerf cache is still temporary; replace `hf-cache` with a PVC if repeated
-runs should reuse downloads.
+to support debugging; results remain on the PVC. The AIPerf cache is still
+temporary; replace `hf-cache` with a PVC if repeated runs should reuse
+downloads.
 
 This PVC-backed collection workflow is for standalone benchmark runs. It is not
 needed when running through the Forge CI framework, which handles result
@@ -117,9 +120,22 @@ kubectl apply -f benchmarks/manifests/guidellm-8k1k-job.yaml -n <namespace>
 kubectl wait --for=condition=complete job/guidellm-8k1k -n <namespace> --timeout=45m
 ```
 
-Retrieve artifacts by mounting `benchmark-results` in a separate running pod;
-the reusable manifest and commands are tracked in
-[issue #13](https://github.com/openshift-psap/inference-playbooks/issues/13).
+## Retrieve Artifacts
+
+Use the supplied BusyBox pod to mount `benchmark-results` read-only and copy
+artifacts after the benchmark Job has completed or been cleaned up. It is a Pod,
+not a Job, because `kubectl cp` requires a running container.
+
+```bash
+kubectl apply -n <namespace> -f benchmarks/manifests/benchmark-results-download-pod.yaml
+kubectl wait --for=condition=Ready pod/benchmark-results-download -n <namespace> --timeout=5m
+kubectl cp -n <namespace> benchmark-results-download:/results ./benchmark-results
+kubectl delete pod/benchmark-results-download -n <namespace>
+```
+
+The pod runs for one hour. Delete and recreate it if the copy takes longer or
+if it has already completed. The claim must be in the same namespace and allow
+a read-only mount while the benchmark Job is no longer using it.
 
 Use the equivalent AIPerf Job name and allow at least two hours for its
 download, warmup, 30-minute profile, and result export. Check Job logs when a

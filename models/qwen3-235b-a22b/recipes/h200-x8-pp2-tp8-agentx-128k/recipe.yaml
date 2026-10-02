@@ -1,0 +1,105 @@
+schema_version: 4
+recipe_id: qwen3-235b-a22b-fp8-pp2-tp8-rhoai
+model_id: qwen3-235b-a22b
+platforms:
+  - stack: rhoai
+    version: "3.5"
+    overrides: platforms/rhoai-3.5.yaml
+hardware_profile: hardware-profiles/ibmcloud-h200-gx3d-160x1792x8h200.yaml
+workload_profile: aiperf-agentx-128k
+deployment_mode: pp2-tp8
+optimization_intent: throughput
+maturity: day-zero
+
+quantization: FP8
+
+image:
+  recommended:
+    ref: vllm/vllm-openai:v0.24.0
+    status: {state: verified, date: 2026-09-28, method: cluster-run}
+    why: >
+      RHOAI 3.5 GA ships a vLLM version that predates Qwen3 MoE
+      support. Manifest overrides the RHOAI image.
+  pin_for_disconnected:
+    digest: sha256:6d8429e38e3747723ca07ee1b17972e09bb9c51c4032b266f24fb1cc3b22ed8f
+    status: {state: verified, date: 2026-09-28, method: registry-api}
+  target:
+    ref: "registry.redhat.io/rhaiis/vllm-cuda-rhel9:3.5"
+    status:
+      state: needs-verification
+      note: Awaiting RHAIIS 3.5 GA image with Qwen3 MoE support.
+    why: Red Hat image handles OpenShift arbitrary UIDs.
+
+features:
+  tool_calling: true
+  structured_output: true
+  reasoning_parser: qwen3
+  prefix_caching: true
+  kv_cache_dtype: fp8
+
+serving:
+  image: docker.io/vllm/vllm-openai:v0.24.0
+  model: RedHatAI/Qwen3-235B-A22B-Instruct-FP8-dynamic
+  served_model_name: qwen3-235b-a22b-fp8
+  parallelism:
+    mode: tp+pp
+    tp: 8
+    pp: 2
+  resources:
+    requests:
+      cpu: "32"
+      memory: 512Gi
+    limits:
+      cpu: "32"
+      memory: 512Gi
+  env:
+    - name: VLLM_ENGINE_ITERATION_TIMEOUT_S
+      value: "120"
+    - name: NCCL_DEBUG
+      value: INFO
+  port: 8000
+  probes:
+    startup:
+      failure_threshold: 180
+      period_seconds: 10
+      why: "MoE model cold load ~15 min from warm PVC."
+  args:
+    - flag: --kv-cache-dtype
+      value: fp8
+      required: true
+      why: FP8 KV doubles effective KV capacity at 128K context.
+    - flag: --max-model-len
+      value: "131072"
+      required: true
+      why: Full 128K context window for agentic workloads.
+    - flag: --enable-prefix-caching
+      required: true
+      why: Reduces TTFT on shared-prefix agentic traffic.
+    - flag: --enable-chunked-prefill
+      required: true
+      why: Prevents long prefills from starving in-flight decodes.
+    - flag: --tool-call-parser
+      value: qwen25
+      required: true
+      why: Required for structured tool-call parsing.
+    - flag: --reasoning-parser
+      value: qwen3
+      required: true
+      why: Separates thinking tokens from response content.
+    - flag: --enable-auto-tool-choice
+      required: true
+      why: Enables model-driven tool selection in chat completions.
+    - flag: --distributed-executor-backend
+      value: mp
+      required: true
+      why: Required for pipeline parallelism on RHOAI 3.5.
+
+deployment:
+  scope: multi-node
+  storage:
+    type: pvc
+    pvc:
+      name: qwen3-235b-weights
+      size: 500Gi
+      access_modes: [ReadWriteMany]
+    why: "~450 GB FP8 weights. RWX so both PP stages share one copy."

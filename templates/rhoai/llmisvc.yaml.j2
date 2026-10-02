@@ -1,0 +1,64 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: {{ name }}
+spec:
+  model:
+    uri: pvc://{{ pvc_name }}
+    name: {{ model }}
+  storageInitializer:
+    enabled: false
+  replicas: {{ replicas }}
+  parallelism:
+    tensor: {{ tp }}
+  template:
+    containers:
+      - name: main
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: HF_TOKEN
+          - name: VLLM_ADDITIONAL_ARGS
+            value: >-
+{% for arg in args %}
+{% if arg.value is defined and arg.value is not none %}
+              {{ arg.flag }} {{ arg.value }}
+{% else %}
+              {{ arg.flag }}
+{% endif %}
+{% endfor %}
+{% for e in env %}
+{% if e.value is defined %}
+          - name: {{ e.name }}
+            value: "{{ e.value }}"
+{% elif e.value_from is defined %}
+          - name: {{ e.name }}
+            valueFrom: {{ e.value_from | tojson }}
+{% endif %}
+{% endfor %}
+        resources:
+          requests:
+            cpu: "{{ resources.requests.cpu | default('8') }}"
+            memory: {{ resources.requests.memory | default('32Gi') }}
+            nvidia.com/gpu: "{{ gpu_count }}"
+          limits:
+            memory: {{ resources.limits.memory | default('64Gi') }}
+            nvidia.com/gpu: "{{ gpu_count }}"
+        startupProbe:
+          httpGet:
+            path: /health
+            port: {{ port }}
+          failureThreshold: 720
+          periodSeconds: 10
+{% if tp > 1 %}
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 4Gi
+{% endif %}

@@ -1,0 +1,22 @@
+modelserver:
+  kind: Deployment
+  source: config/modelserver.yaml
+  containers:
+    vllm:
+      command: ["/bin/bash", "-c", "vllm serve \"$@\"", "--"]
+      args:
+        - RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
+        - --enable-prefix-caching
+      arg_choices:
+        - flag: --enable-prefix-caching
+          required: false
+          why: Repeated prompt prefixes may benefit; measure this workload before treating it as essential.
+      env:
+        - name: HF_TOKEN
+          value_from:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+      resources:
+        requests: {cpu: "8", memory: 32Gi, nvidia.com/gpu: "1"}
+        limits: {cpu: "8", memory: 64Gi, nvidia.com/gpu: "1"}

@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: benchmark-results-download
+  labels:
+    app.kubernetes.io/name: benchmark-results-download
+    app.kubernetes.io/component: artifact-retrieval
+    app.kubernetes.io/part-of: inference-playbooks
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: busybox
+      image: docker.io/library/busybox:1.37.0
+      imagePullPolicy: IfNotPresent
+      command:
+        - sleep
+        - "3600"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - name: results
+          mountPath: /results
+          readOnly: true
+  volumes:
+    - name: results
+      persistentVolumeClaim:
+        claimName: benchmark-results

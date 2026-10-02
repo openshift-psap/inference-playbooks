@@ -1,0 +1,24 @@
+modelserver:
+  kind: Deployment
+  source: config/modelserver.yaml
+  containers:
+    modelserver:
+      command: ["vllm", "serve"]
+      args: ["Qwen/Qwen3-32B", "--tensor-parallel-size=2"]
+      arg_choices:
+        - flag: --tensor-parallel-size
+          value: 2
+          required: true
+          why: Each model-server replica requests two GPUs and uses both for tensor parallelism.
+      env:
+        - name: HF_TOKEN
+          value_from:
+            secretKeyRef:
+              name: llm-d-hf-token
+              key: HF_TOKEN
+      resources:
+        requests: {cpu: "8", memory: 96Gi, nvidia.com/gpu: "2"}
+        limits: {cpu: "16", memory: 128Gi, nvidia.com/gpu: "2"}
+router:
+  kind: llmd-router
+  values: config/router.values.yaml

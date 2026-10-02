@@ -1,0 +1,12 @@
+schema_version: 2
+model_id: glm-5.2
+name: GLM-5.2
+family: GLM
+huggingface_id: THUDM/GLM-5.2
+source: manual
+model_type: glm_moe_dsa
+architectures:
+  - GlmMoeDsaForCausalLM
+quantizations:
+  - name: FP8
+    huggingface_id: zai-org/GLM-5.2-FP8

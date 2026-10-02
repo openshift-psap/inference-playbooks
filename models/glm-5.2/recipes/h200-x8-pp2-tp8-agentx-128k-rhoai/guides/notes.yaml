@@ -1,0 +1,15 @@
+schema_version: 1
+profile:
+  label: GLM-5.2 RHOAI pipeline-parallel LLMI
+  headline: Two eight-H200 nodes with PP=2 and TP=8.
+  specs:
+    - {label: Node scope, source: "recipe.yaml#/deployment/scope"}
+    - {label: Tensor parallelism, source: "config/llmisvc.yaml#/spec/parallelism/tensor"}
+    - {label: Pipeline parallelism, source: "config/llmisvc.yaml#/spec/parallelism/pipeline"}
+decisions:
+  - subjects: ["PP=2", "TP=8", "worker LLMInferenceServiceConfig"]
+    why: The source service requires a separately installed worker config for the second pipeline stage.
+quickstart:
+  - {step: Prepare, detail: "Install KServe LLMI and LWS controllers; install the worker config using the KServe deployment's CONFIG_PREFIX and CONTROLLER_NAMESPACE substitutions; create the model PVC and token secret."}
+  - {step: Deploy, detail: Apply config/llmisvc.yaml on the stated H200/RoCE environment.}
+  - {step: Benchmark, detail: Run AIPerf AgentX 128K and record sanitized artifacts before claiming validated maturity.}

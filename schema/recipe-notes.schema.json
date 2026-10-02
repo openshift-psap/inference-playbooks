@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/recipe-notes.schema.json",
+  "title": "Recipe reader notes and decision rationale",
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "profile": {
+      "type": "object",
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "sub": {"type": "string"},
+        "headline": {"type": "string", "minLength": 1},
+        "specs": {
+          "type": "array",
+          "description": "Display labels and references; mutable values are read from their source files.",
+          "items": {
+            "type": "object",
+            "required": ["label", "source"],
+            "properties": {
+              "label": {"type": "string", "minLength": 1},
+              "source": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "args_lede": {"type": "string"},
+    "default_stance": {"type": "string"},
+    "omissions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["setting", "why_not"],
+        "properties": {
+          "setting": {"type": "string", "minLength": 1},
+          "why_not": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "description": "A decision may relate multiple settings, hardware facts, and evidence runs.",
+      "items": {
+        "type": "object",
+        "required": ["subjects", "why"],
+        "properties": {
+          "subjects": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "why": {"type": "string", "minLength": 1},
+          "status": {"$ref": "recipe.schema.json#/$defs/status"},
+          "evidence": {"type": "array", "items": {"type": "string", "pattern": "^results/.+/run\\.yaml$"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "image_choices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["component", "container", "ref", "status", "why"],
+        "properties": {
+          "component": {"type": "string", "minLength": 1},
+          "container": {"type": "string", "minLength": 1},
+          "ref": {"type": "string", "minLength": 1},
+          "status": {"$ref": "recipe.schema.json#/$defs/status"},
+          "why": {"type": "string", "minLength": 1},
+          "engine_min_version": {"type": "string"},
+          "pin_for_disconnected": {
+            "type": "object",
+            "required": ["digest", "status"],
+            "properties": {
+              "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+              "status": {"$ref": "recipe.schema.json#/$defs/status"}
+            },
+            "additionalProperties": false
+          },
+          "target": {
+            "type": "object",
+            "required": ["ref", "status"],
+            "properties": {
+              "ref": {"type": "string", "minLength": 1},
+              "status": {"$ref": "recipe.schema.json#/$defs/status"},
+              "why": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": {"type": "boolean"}
+    },
+    "quickstart": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step"],
+        "properties": {
+          "step": {"type": "string", "minLength": 1},
+          "detail": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "insights": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "known_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["issue", "impact"],
+        "properties": {
+          "issue": {"type": "string", "minLength": 1},
+          "ref": {"type": "string"},
+          "ref_state": {"type": "string"},
+          "impact": {"type": "string", "minLength": 1},
+          "mitigation": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "sizing": {
+      "type": "object",
+      "required": ["tool"],
+      "properties": {
+        "tool": {"type": "string", "minLength": 1},
+        "replicas_for": {"type": "object"},
+        "link": {"type": "string", "format": "uri"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,17 @@
+prefill:
+  kind: Deployment
+  source: config/prefill.yaml
+  containers:
+    modelserver:
+      command: ["vllm", "serve"]
+      args: ["openai/gpt-oss-120b", "--tensor-parallel-size=1", "--kv-transfer-config", '{"kv_connector":"NixlConnector","kv_role":"kv_producer"}']
+decode:
+  kind: Deployment
+  source: config/decode.yaml
+  containers:
+    modelserver:
+      command: ["vllm", "serve"]
+      args: ["openai/gpt-oss-120b", "--tensor-parallel-size=4", "--kv-transfer-config", '{"kv_connector":"NixlConnector","kv_role":"kv_consumer"}']
+router:
+  kind: llmd-router
+  values: config/router.values.yaml

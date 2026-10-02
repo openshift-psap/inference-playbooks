@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/container-runtime.schema.json",
+  "title": "Container process settings",
+  "$defs": {
+    "runtime": {
+      "type": "object",
+      "description": "Exact ordered process arguments and environment. Omit command to use the image entrypoint.",
+      "properties": {
+        "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "arg_choices": {
+          "type": "array",
+          "description": "Optional rationale for selected flags. Leave empty when importing a manifest without verified explanations.",
+          "items": {
+            "type": "object",
+            "required": ["flag", "required", "why"],
+            "properties": {
+              "flag": {"type": "string", "pattern": "^--"},
+              "value": {},
+              "required": {"type": "boolean", "description": "Whether the flag is essential to this recipe's intended behavior."},
+              "why": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+              "value": {"type": "string"},
+              "value_from": {"type": "object", "minProperties": 1}
+            },
+            "oneOf": [{"required": ["value"]}, {"required": ["value_from"]}],
+            "additionalProperties": false
+          }
+        },
+        "resources": {
+          "type": "object",
+          "description": "Per-container resource overrides; unspecified resource keys retain their source values.",
+          "properties": {
+            "requests": {"$ref": "#/$defs/resource_quantities"},
+            "limits": {"$ref": "#/$defs/resource_quantities"}
+          },
+          "minProperties": 1,
+          "additionalProperties": false
+        }
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    },
+    "resource_quantities": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"minLength": 1},
+      "additionalProperties": {
+        "anyOf": [
+          {"type": "string", "minLength": 1},
+          {"type": "integer", "minimum": 0}
+        ]
+      }
+    },
+    "containers": {
+      "type": "object",
+      "description": "Container names mapped to exact process settings.",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]*$"},
+      "additionalProperties": {"$ref": "#/$defs/runtime"},
+      "minProperties": 1
+    }
+  }
+}

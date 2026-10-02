@@ -1,0 +1,30 @@
+schema_version: 1
+layers:
+  # Platform-wide: RHOAI 3.5
+  - scope:
+      platform: {stack: rhoai, version: "3.5"}
+    remove:
+      - flag: --num-scheduler-steps
+        reason: Not supported in RHOAI 3.5 serving runtime.
+    force:
+      - flag: --distributed-executor-backend
+        value: mp
+        when:
+          parallelism: {mode: pp}
+        reason: Required for pipeline parallelism on RHOAI 3.5.
+
+  # vLLM version: v0.23.0
+  - scope:
+      platform: {stack: vllm, version: v0.23.0}
+    remove:
+      - flag: --enable-auto-tool-choice
+        reason: Tool calling support added in v0.24.0.
+
+  # Model-level: GLM on RHOAI
+  - scope:
+      model_type: glm
+    remove:
+      - flag: --speculative-config
+        when:
+          platform: {stack: rhoai}
+        reason: RHOAI does not support speculative decoding for GLM models.

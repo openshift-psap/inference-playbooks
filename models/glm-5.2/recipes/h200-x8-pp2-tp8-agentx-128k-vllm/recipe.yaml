@@ -1,0 +1,67 @@
+schema_version: 4
+recipe_id: glm-5.2-vllm-lws-pp2-tp8
+model_id: glm-5.2
+platforms:
+  - stack: vllm
+    version: v0.23.0
+    overrides: platforms/vllm-v0.23.0.yaml
+hardware_profile: hardware-profiles/ibmcloud-h200-gx3d-160x1792x8h200.yaml
+workload_profile: aiperf-agentx-128k
+deployment_mode: pp2-tp8
+optimization_intent: long-context agentic serving
+maturity: day-zero
+
+serving:
+  image: docker.io/vllm/vllm-openai:v0.23.0
+  model: zai-org/GLM-5.2-FP8
+  served_model_name: glm-5.2-fp8
+  parallelism:
+    mode: tp+pp
+    tp: 8
+    pp: 2
+  resources:
+    requests:
+      cpu: "32"
+      memory: 256Gi
+    limits:
+      memory: 512Gi
+  port: 8080
+  probes:
+    startup:
+      failure_threshold: 720
+      period_seconds: 10
+      why: "Multi-node MoE model cold load takes ~12 min."
+  args:
+    - flag: --kv-cache-dtype
+      value: fp8
+      required: true
+      why: FP8 KV-cache for 128K context capacity.
+    - flag: --tool-call-parser
+      value: glm47
+      required: true
+      why: Required for structured tool-call parsing.
+    - flag: --reasoning-parser
+      value: glm45
+      required: true
+      why: Separates thinking tokens from response content.
+    - flag: --enable-prefix-caching
+      required: true
+      why: Reduces TTFT on shared-prefix agentic traffic.
+    - flag: --enable-chunked-prefill
+      required: true
+      why: Prevents long prefills from starving in-flight decodes.
+    - flag: --skip-mm-profiling
+      required: true
+      why: Avoids unnecessary multimodal profiling overhead.
+    - flag: --trust-remote-code
+      required: true
+      why: GLM-5.2 requires remote code for model loading.
+    - flag: --distributed-timeout-seconds
+      value: "1200"
+      required: true
+      why: Extended timeout for multi-node PP initialization.
+
+deployment:
+  scope: multi-node
+
+notes: guides/notes.yaml

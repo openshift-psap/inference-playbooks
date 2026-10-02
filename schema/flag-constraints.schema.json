@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/flag-constraints.schema.json",
+  "title": "Flag Constraints",
+  "type": "object",
+  "required": ["schema_version", "layers"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "layers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["scope"],
+        "properties": {
+          "scope": {
+            "type": "object",
+            "properties": {
+              "model_type": {"type": "string"},
+              "model_id": {"type": "string"},
+              "platform": {
+                "type": "object",
+                "properties": {
+                  "stack": {"enum": ["rhoai", "llm-d", "vllm"]},
+                  "version": {"type": "string"}
+                },
+                "additionalProperties": false
+              },
+              "parallelism": {
+                "type": "object",
+                "properties": {
+                  "mode": {"type": "string"},
+                  "tp": {"type": "integer"},
+                  "pp": {"type": "integer"},
+                  "dp": {"type": "integer"}
+                },
+                "additionalProperties": false
+              },
+              "workload_profile": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["flag", "reason"],
+              "properties": {
+                "flag": {"type": "string", "pattern": "^--[a-z][a-z0-9-]*$"},
+                "reason": {"type": "string", "minLength": 1},
+                "when": {"$ref": "#/$defs/scope"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "force": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["flag", "value", "reason"],
+              "properties": {
+                "flag": {"type": "string", "pattern": "^--[a-z][a-z0-9-]*$"},
+                "value": {"type": "string"},
+                "reason": {"type": "string", "minLength": 1},
+                "when": {"$ref": "#/$defs/scope"}
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "properties": {
+        "model_type": {"type": "string"},
+        "model_id": {"type": "string"},
+        "platform": {
+          "type": "object",
+          "properties": {
+            "stack": {"enum": ["rhoai", "llm-d", "vllm"]},
+            "version": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
+        "parallelism": {
+          "type": "object",
+          "properties": {
+            "mode": {"type": "string"},
+            "tp": {"type": "integer"},
+            "pp": {"type": "integer"},
+            "dp": {"type": "integer"}
+          },
+          "additionalProperties": false
+        },
+        "workload_profile": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

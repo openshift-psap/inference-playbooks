@@ -1,0 +1,19 @@
+schema_version: 2
+model_id: qwen3-235b-a22b
+name: Qwen3 235B A22B Instruct
+family: Qwen3
+parameters: 235B (22B active)
+huggingface_id: Qwen/Qwen3-235B-A22B-Instruct
+source: manual
+model_type: qwen3_moe
+architectures:
+  - Qwen3MoeForCausalLM
+license: apache-2.0
+access:
+  gated: true
+  note: Requires HuggingFace token with accepted license agreement.
+quantizations:
+  - name: FP8
+    huggingface_id: RedHatAI/Qwen3-235B-A22B-Instruct-FP8-dynamic
+  - name: bf16
+    huggingface_id: Qwen/Qwen3-235B-A22B-Instruct
