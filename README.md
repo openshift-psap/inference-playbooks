@@ -82,7 +82,7 @@ Per-platform override files under `platforms/` customize image, args,
 env, resources, or router for a specific stack version. Override merge:
 image/resources/router replace, env appends, args merge by flag.
 
-See [docs/contributing-recipes.md](docs/contributing-recipes.md) and
+See [CONTRIBUTING.md](CONTRIBUTING.md) and
 [schema/examples/recipe-v4-example.yaml](schema/examples/recipe-v4-example.yaml).
 
 ### Recipe v3 (migration required)
@@ -112,7 +112,7 @@ validation. Pre-schema content (guides, manifests) under old
 - [Qwen3-235B PP2+TP8](models/qwen3-235b-a22b/recipes/h200-x8-pp2-tp8-agentx-128k/recipe.yaml) — RHOAI multi-platform
 - [v4 schema example](schema/examples/recipe-v4-example.yaml) — annotated template
 
-See the [contribution guide](docs/contributing-recipes.md) for the full flow.
+See the [contribution guide](CONTRIBUTING.md) for the full flow.
 
 ### Hardware profiles
 
@@ -124,7 +124,7 @@ Changing accelerator type or count requires a new profile, while
 same accelerator type/count.
 
 See [the recipe-evidence guide](docs/recipe-evidence.md) for evidence
-and profile rules, [the recipe contribution guide](docs/contributing-recipes.md)
+and profile rules, [the recipe contribution guide](CONTRIBUTING.md)
 for the creation and review flow, and [AGENTS.md](AGENTS.md) for the
 full contributor contract.
 

@@ -8,7 +8,7 @@ Templates generate Kubernetes YAML from the serving configuration.
 See [recipe-v4-example.yaml](recipe-v4-example.yaml) for a complete v4 recipe.
 
 For the full v4 contributor flow, see
-[docs/contributing-recipes.md](../../docs/contributing-recipes.md).
+[CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## v3 component fragments (legacy)
 
