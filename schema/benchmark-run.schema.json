@@ -29,6 +29,7 @@
     "artifact": {
       "type": "object",
       "required": ["type"],
+      "additionalProperties": false,
       "properties": {
         "type": {
           "type": "string",
@@ -50,7 +51,7 @@
         },
         "uri": {
           "type": "string",
-          "pattern": "^(s3://|gs://|mlflow://|https://)",
+          "pattern": "^(s3://|gs://|mlflow://|https://).+",
           "description": "URI for an externally stored artifact (S3, GCS, MLflow, HTTPS)."
         },
         "checksum": {

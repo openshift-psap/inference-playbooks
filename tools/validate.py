@@ -71,10 +71,10 @@ def contained_path(root: Path, relative_path: object) -> Path | None:
     """Resolve a path only when it stays within the supplied root directory."""
     if not isinstance(relative_path, str):
         return None
-    candidate = (root / relative_path).resolve()
     try:
+        candidate = (root / relative_path).resolve()
         candidate.relative_to(root.resolve())
-    except ValueError:
+    except (OSError, RuntimeError, ValueError):
         return None
     return candidate
 
