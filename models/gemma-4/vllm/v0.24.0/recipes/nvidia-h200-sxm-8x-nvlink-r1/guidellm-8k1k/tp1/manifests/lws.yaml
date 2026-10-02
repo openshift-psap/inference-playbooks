@@ -1,0 +1,126 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: gemma-4-tp1
+  labels:
+    app.kubernetes.io/name: gemma-4-tp1
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: 1
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: gemma-4-tp1
+          leaderworkerset.sigs.k8s.io/worker-index: "0"
+      spec:
+        containers:
+          - name: vllm
+            image: docker.io/vllm/vllm-openai:v0.24.0
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                exec vllm serve /models/Gemma-4-26B-A4B-it-FP8-dynamic \
+                  --served-model-name=RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic \
+                  --tensor-parallel-size 1 \
+                  --max-model-len 16384 \
+                  --enable-prefix-caching
+            env:
+              - {name: HOME, value: /tmp}
+              - {name: TRITON_CACHE_DIR, value: /tmp/triton-cache}
+              - {name: FLASHINFER_WORKSPACE_BASE, value: /tmp}
+            ports:
+              - {name: http, containerPort: 8000, protocol: TCP}
+            volumeMounts:
+              - {name: model, mountPath: /models}
+            resources:
+              requests:
+                cpu: "8"
+                memory: 32Gi
+                nvidia.com/gpu: "1"
+              limits:
+                cpu: "8"
+                memory: 64Gi
+                nvidia.com/gpu: "1"
+            startupProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 30
+              failureThreshold: 60
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 30
+              timeoutSeconds: 10
+              failureThreshold: 5
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 10
+              timeoutSeconds: 5
+        volumes:
+          - name: model
+            persistentVolumeClaim:
+              claimName: model
+    workerTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: gemma-4-tp1
+      spec:
+        containers:
+          - name: vllm
+            image: docker.io/vllm/vllm-openai:v0.24.0
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                exec vllm serve /models/Gemma-4-26B-A4B-it-FP8-dynamic \
+                  --served-model-name=RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic \
+                  --tensor-parallel-size 1 \
+                  --max-model-len 16384 \
+                  --enable-prefix-caching
+            env:
+              - {name: HOME, value: /tmp}
+              - {name: TRITON_CACHE_DIR, value: /tmp/triton-cache}
+              - {name: FLASHINFER_WORKSPACE_BASE, value: /tmp}
+            ports:
+              - {name: http, containerPort: 8000, protocol: TCP}
+            volumeMounts:
+              - {name: model, mountPath: /models}
+            resources:
+              requests:
+                cpu: "8"
+                memory: 32Gi
+                nvidia.com/gpu: "1"
+              limits:
+                cpu: "8"
+                memory: 64Gi
+                nvidia.com/gpu: "1"
+            startupProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 30
+              failureThreshold: 60
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 30
+              timeoutSeconds: 10
+              failureThreshold: 5
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 10
+              timeoutSeconds: 5
+        volumes:
+          - name: model
+            persistentVolumeClaim:
+              claimName: model
