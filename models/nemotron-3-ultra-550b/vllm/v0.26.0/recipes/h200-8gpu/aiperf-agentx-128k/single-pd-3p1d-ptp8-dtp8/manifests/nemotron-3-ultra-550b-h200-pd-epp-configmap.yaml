@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-config
+  namespace: serveit
+data:
+  config.yaml: |
+    prefixCacheWeight: 3
+    kvCacheWeight: 2
+    queueWeight: 2
+    activeRequestWeight: 2
+    sloWeight: 0
+    maxPrefixBlocksToMatch: 256
+    lruCapacityPerServer: 4000000
+    nonCachedTokens: 16
