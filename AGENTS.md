@@ -182,7 +182,7 @@ and immutable checksum plus a durable external location.
   LWS `sh -c` args via `shellquote` filter.
 - `tools/constraints.py` — stackable flag constraint engine. Constraints in
   `schema/flag-constraints.yaml` scope by `model_type`, `platform`, and
-  `parallelism` to remove, force, or warn on specific vLLM flags. Evaluated
+  `parallelism` to remove or force specific vLLM flags. Evaluated
   per platform entry.
 - `tools/resolve-model.py` — populates `model.yaml` from HuggingFace metadata.
   Supports gated models when `HF_TOKEN` is set.
