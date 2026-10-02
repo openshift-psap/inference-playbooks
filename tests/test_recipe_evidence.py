@@ -29,6 +29,7 @@ class RecipeEvidenceTests(unittest.TestCase):
     profile_text = """\
 schema_version: 1
 profile_id: h200-r1
+kind: hardware-profile
 profile_revision: {revision}
 accelerator_key: nvidia-h200-x8
 accelerators:
@@ -246,9 +247,7 @@ correction_log:
     def test_raw_only_leaf_accepts_multidoc_yaml_and_rejects_duplicates(self):
         directory, profile, recipe_path = self.make_repo()
         shutil.copytree(REPO / "schema", directory / "schema")
-        profile.write_text(self.profile_text.format(revision=1, correction="").replace(
-            "profile_id: h200-r1", "profile_id: h200-r1\nkind: hardware-profile"
-        ))
+        profile.write_text(self.profile_text.format(revision=1, correction=""))
         recipe_path.unlink()
         raw = recipe_path.parent / "raw-manifest" / "deployment.yaml"
         raw.parent.mkdir()
@@ -289,9 +288,7 @@ correction_log:
     def test_validator_checks_reader_note_references(self):
         directory, profile, recipe_path = self.make_repo()
         shutil.copytree(REPO / "schema", directory / "schema")
-        profile.write_text(self.profile_text.format(revision=1, correction="").replace(
-            "profile_id: h200-r1", "profile_id: h200-r1\nkind: hardware-profile"
-        ))
+        profile.write_text(self.profile_text.format(revision=1, correction=""))
         recipe = self.sample_recipe()
         recipe["notes"] = "guides/notes.yaml"
         recipe_path.write_text(yaml.safe_dump(recipe))
@@ -340,7 +337,7 @@ correction_log:
             "hardware_profile_revision": 1,
             "harness": "guidellm",
             "result": "result.json",
-            "artifacts": [{}],
+            "artifacts": [{"type": "raw-output", "path": "output.log"}],
         }))
         (run_path.parent / "result.json").write_text(json.dumps({
             "schema_version": 1,
@@ -349,9 +346,118 @@ correction_log:
             "accelerator_key": "nvidia-h200-x8",
             "metrics": {},
         }))
+        (run_path.parent / "output.log").write_text("harness output")
         recipe_path.write_text(yaml.safe_dump(recipe))
         result = self.run_validator(directory, "--current")
         self.assertIn("cannot recommend an unverified image", result.stderr)
+
+    def test_artifact_local_path_validated(self):
+        directory, profile, recipe_path = self.make_repo()
+        shutil.copytree(REPO / "schema", directory / "schema")
+        recipe = self.sample_recipe()
+        recipe_path.write_text(yaml.safe_dump(recipe))
+        recipe["benchmark_runs"] = ["results/run-1/run.yaml"]
+        run_dir = recipe_path.parent / "results" / "run-1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "result.json").write_text(json.dumps({
+            "schema_version": 1, "run_id": "run-1",
+            "deployment_scope": "single-node",
+            "accelerator_key": "nvidia-h200-x8", "metrics": {},
+        }))
+        run = {
+            "schema_version": 1, "run_id": "run-1",
+            "recipe_id": recipe["recipe_id"],
+            "deployment_scope": "single-node",
+            "hardware_profile": recipe["hardware_profile"],
+            "hardware_profile_revision": 1,
+            "harness": "guidellm", "result": "result.json",
+            "artifacts": [{"type": "raw-output", "path": "output.log"}],
+        }
+        (run_dir / "run.yaml").write_text(yaml.safe_dump(run))
+        recipe_path.write_text(yaml.safe_dump(recipe))
+        result = self.run_validator(directory, "--current")
+        self.assertIn("local file does not exist", result.stderr)
+
+        (run_dir / "output.log").write_text("data")
+        result = self.run_validator(directory, "--current")
+        self.assertNotIn("local file does not exist", result.stderr)
+
+    def test_artifact_external_uri_requires_checksum(self):
+        directory, profile, recipe_path = self.make_repo()
+        shutil.copytree(REPO / "schema", directory / "schema")
+        recipe = self.sample_recipe()
+        recipe["benchmark_runs"] = ["results/run-1/run.yaml"]
+        run_dir = recipe_path.parent / "results" / "run-1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "result.json").write_text(json.dumps({
+            "schema_version": 1, "run_id": "run-1",
+            "deployment_scope": "single-node",
+            "accelerator_key": "nvidia-h200-x8", "metrics": {},
+        }))
+        run = {
+            "schema_version": 1, "run_id": "run-1",
+            "recipe_id": recipe["recipe_id"],
+            "deployment_scope": "single-node",
+            "hardware_profile": recipe["hardware_profile"],
+            "hardware_profile_revision": 1,
+            "harness": "guidellm", "result": "result.json",
+            "artifacts": [{
+                "type": "raw-output",
+                "uri": "s3://benchmark-bucket/runs/run-1/output.tar.gz",
+                "checksum": "sha256:" + "a" * 64,
+            }],
+        }
+        (run_dir / "run.yaml").write_text(yaml.safe_dump(run))
+        recipe_path.write_text(yaml.safe_dump(recipe))
+        result = self.run_validator(directory, "--current")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_artifact_schema_rejects_both_path_and_uri(self):
+        validator = self.recipe_validator()
+        schemas = [json.loads(p.read_text()) for p in (REPO / "schema").glob("*.schema.json")]
+        registry = Registry().with_resources(
+            (s["$id"], Resource.from_contents(s)) for s in schemas
+        )
+        run_schema = next(s for s in schemas if s["$id"].endswith("/benchmark-run.schema.json"))
+        run_validator = Draft202012Validator(run_schema, registry=registry)
+        run = {
+            "schema_version": 1, "run_id": "run-1", "recipe_id": "test",
+            "deployment_scope": "single-node",
+            "hardware_profile": "hardware-profiles/h200.yaml",
+            "hardware_profile_revision": 1,
+            "harness": "guidellm", "result": "result.json",
+            "artifacts": [{
+                "type": "raw-output",
+                "path": "output.log",
+                "uri": "s3://bucket/output.log",
+                "checksum": "sha256:" + "b" * 64,
+            }],
+        }
+        errors = list(run_validator.iter_errors(run))
+        self.assertTrue(any("oneOf" in str(e.schema_path) for e in errors),
+                        f"Expected oneOf validation error, got: {errors}")
+
+    def test_artifact_mlflow_uri_accepted(self):
+        schemas = [json.loads(p.read_text()) for p in (REPO / "schema").glob("*.schema.json")]
+        registry = Registry().with_resources(
+            (s["$id"], Resource.from_contents(s)) for s in schemas
+        )
+        run_schema = next(s for s in schemas if s["$id"].endswith("/benchmark-run.schema.json"))
+        run_validator = Draft202012Validator(run_schema, registry=registry)
+        run = {
+            "schema_version": 1, "run_id": "run-1", "recipe_id": "test",
+            "deployment_scope": "single-node",
+            "hardware_profile": "hardware-profiles/h200.yaml",
+            "hardware_profile_revision": 1,
+            "harness": "guidellm", "result": "result.json",
+            "artifacts": [{
+                "type": "metrics-export",
+                "uri": "mlflow://experiment/run-1/artifacts/metrics.json",
+                "checksum": "sha256:" + "c" * 64,
+            }],
+        }
+        errors = list(run_validator.iter_errors(run))
+        self.assertEqual(errors, [], f"Unexpected validation errors: {errors}")
 
     def test_v4_recipes_have_serving_block_and_platforms(self):
         recipes = [

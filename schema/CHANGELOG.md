@@ -1,5 +1,22 @@
 # Schema changelog
 
+## Benchmark artifact external storage
+
+### Structured artifacts
+
+- `benchmark-run.schema.json` `artifacts` items now have a defined schema
+  with required `type` field and `oneOf` location: local `path` or
+  external `uri` with mandatory `checksum`.
+- Supported artifact types: `raw-output`, `log`, `trace`, `model-config`,
+  `harness-config`, `metrics-export`, `profile-snapshot`, `other`.
+- External URIs support `s3://`, `gs://`, `mlflow://`, and `https://`
+  protocols.
+- `checksum` uses `sha256:<64-hex-chars>` format, required for external
+  artifacts.
+- Optional `description` and `size_bytes` fields.
+- Validator checks local artifact paths exist and don't escape the run
+  directory; external URIs require a checksum.
+
 ## Recipe schema v4 layout restructure
 
 ### Flat recipe layout

@@ -71,10 +71,10 @@ def contained_path(root: Path, relative_path: object) -> Path | None:
     """Resolve a path only when it stays within the supplied root directory."""
     if not isinstance(relative_path, str):
         return None
-    candidate = (root / relative_path).resolve()
     try:
+        candidate = (root / relative_path).resolve()
         candidate.relative_to(root.resolve())
-    except ValueError:
+    except (OSError, RuntimeError, ValueError):
         return None
     return candidate
 
@@ -538,6 +538,20 @@ def validate_benchmark_run(repo: Path, path: Path, run: dict) -> tuple[list[str]
         errors.append(f"{path}: result escapes the run directory")
     elif not result_path.is_file():
         errors.append(f"{path}: normalized result does not exist: {run.get('result')}")
+    for i, artifact in enumerate(run.get("artifacts", [])):
+        if not isinstance(artifact, dict):
+            continue
+        artifact_path = artifact.get("path")
+        artifact_uri = artifact.get("uri")
+        if artifact_path:
+            resolved = contained_path(path.parent, artifact_path)
+            if not resolved:
+                errors.append(f"{path}: artifact[{i}] path escapes the run directory: {artifact_path}")
+            elif not resolved.is_file():
+                errors.append(f"{path}: artifact[{i}] local file does not exist: {artifact_path}")
+        elif artifact_uri:
+            if not artifact.get("checksum"):
+                errors.append(f"{path}: artifact[{i}] external URI requires a checksum: {artifact_uri}")
     return errors, result_path
 
 
