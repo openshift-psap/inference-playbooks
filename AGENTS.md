@@ -168,12 +168,73 @@ Do not commit credentials, private prompts, hostnames/IPs, model weights, or
 large sensitive logs. For essential large artifacts, commit their provenance
 and immutable checksum plus a durable external location.
 
-## Validation and generated files
+## Tooling
 
-`tools/validate.py` validates schemas, cross-file references, profile
-revisions, and required benchmark provenance. `tools/render.py` renders
-manifests, recipe READMEs, and catalog outputs. `tools/doctor.py` performs
-configuration linting.
+- `tools/validate.py` — validates JSON schemas (draft 2020-12) with a shared
+  `referencing.Registry` across 13 schema files, cross-file references, profile
+  revisions, recipe layout, per-platform constraint checking, and benchmark
+  provenance. Run `python3 tools/validate.py --current` locally.
+- `tools/render.py` — renders Kubernetes manifests from v4 recipes. Iterates
+  each platform entry, merges overrides, evaluates flag constraints, selects
+  a Jinja2 template from `(platform.stack, parallelism.mode)`, and writes to
+  `manifests/<stack>-<version>/`. Supports pinned manifests (verbatim copy),
+  Kustomize overlays (`config_overrides: true`), and shell-safe quoting for
+  LWS `sh -c` args via `shellquote` filter.
+- `tools/constraints.py` — stackable flag constraint engine. Constraints in
+  `schema/flag-constraints.yaml` scope by `model_type`, `platform`, and
+  `parallelism` to remove, force, or warn on specific vLLM flags. Evaluated
+  per platform entry.
+- `tools/resolve-model.py` — populates `model.yaml` from HuggingFace metadata.
+  Supports gated models when `HF_TOKEN` is set.
+- `tools/recipe_evidence.py` — shared YAML loading with duplicate-key detection.
+
+## Schema files
+
+```text
+schema/
+  recipe.schema.json              # v4 recipe with serving block, platforms array
+  platform-overrides.schema.json  # per-platform override files
+  model.schema.json               # model.yaml (schema_version: 2)
+  hardware-profile.schema.json    # accelerator, topology, networking
+  flag-constraints.schema.json    # stackable flag constraint rules
+  benchmark-run.schema.json       # benchmark run provenance
+  benchmark-result.schema.json    # normalized benchmark results
+  recipe-notes.schema.json        # guides/notes.yaml structure
+  container-runtime.schema.json   # container spec definitions
+  deployment.schema.json          # deployment component refs
+  llmisvc.schema.json             # LLMInferenceService component
+  leaderworkerset.schema.json     # LeaderWorkerSet component
+  llmd-router.schema.json         # llm-d router component
+  flag-constraints.yaml           # constraint rules (data, not schema)
+```
+
+## Template rendering
+
+Templates live in `templates/<stack>/`. Current template map:
+
+| Stack | Mode | Template | K8s Kind |
+|-------|------|----------|----------|
+| vllm | tp, dp, tp+dp | `vllm/deployment.yaml.j2` | Deployment |
+| vllm | pp, tp+pp | `vllm/lws.yaml.j2` | LeaderWorkerSet |
+| rhoai | tp | `rhoai/llmisvc.yaml.j2` | LLMInferenceService |
+| rhoai | pp, tp+pp | `rhoai/llmisvc-pp.yaml.j2` | LLMInferenceService |
+
+Templates use `shellquote` (not `tojson`) for args in LWS templates where
+`command: ["sh", "-c"]` requires shell-safe quoting. PP/TP+PP templates
+support separate `leader_args` and `worker_args` via role blocks.
+
+Pinned manifests (`pinned_manifest` in platform entry) bypass rendering and
+copy a hand-authored manifest verbatim. Use when a converter is WIP.
+
+## Recipe versions
+
+- **v4** (current): flat layout, `serving` block, `platforms` array,
+  template-driven rendering, flag constraints, per-platform overrides.
+- **v3** (migration required): `schema_version: 3` with
+  `deployment.components` referencing hand-authored manifests. No longer
+  validates. Must be migrated to v4.
+
+## Validation and generated files
 
 For raw intake, local `tools/validate.py --current` checks syntax and layout
 without requiring a recipe. CI uses `--require-converted-raw`, so a raw-only PR
@@ -184,7 +245,7 @@ affected-recipe selection applies.
 CI and pre-commit must run the same local commands. CI should calculate the
 affected recipe set from the diff:
 
-- changes below one deployment-mode recipe validate/render only that recipe;
+- changes below one recipe validate/render only that recipe;
 - a newly added hardware profile does not fan out to existing recipes;
 - a corrected hardware profile validates/renders only recipes that explicitly
   reference that profile;
@@ -194,8 +255,7 @@ affected recipe set from the diff:
 After a hardware-profile correction, render only recipes that explicitly
 reference that profile. Catalog generation is a separate required aggregation
 step: regenerate `catalog/` from the validated recipe set after those targeted
-renders, then verify the resulting generated-file diff. Until `tools/render.py`
-lands, CI records the affected recipe matrix but cannot perform this generation.
+renders, then verify the resulting generated-file diff.
 
 Generated-file checks must fail on drift; automation should not silently commit
 changes to a contributor's branch.
