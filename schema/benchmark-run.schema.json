@@ -19,6 +19,69 @@
     "command": {"type": "string"},
     "workload": {"type": "object"},
     "environment": {"type": "object"},
-    "artifacts": {"type": "array", "minItems": 1, "items": {"type": "object"}}
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/artifact"}
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "raw-output",
+            "log",
+            "trace",
+            "model-config",
+            "harness-config",
+            "metrics-export",
+            "profile-snapshot",
+            "other"
+          ],
+          "description": "What kind of artifact this is."
+        },
+        "path": {
+          "type": "string",
+          "description": "Relative path to a local artifact committed in the repository."
+        },
+        "uri": {
+          "type": "string",
+          "pattern": "^(s3://|gs://|mlflow://|https://)",
+          "description": "URI for an externally stored artifact (S3, GCS, MLflow, HTTPS)."
+        },
+        "checksum": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "SHA-256 digest for integrity verification. Required for external artifacts."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable note about this artifact."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Size of the artifact in bytes."
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["path"],
+          "properties": {
+            "uri": false
+          }
+        },
+        {
+          "required": ["uri", "checksum"],
+          "properties": {
+            "path": false
+          }
+        }
+      ]
+    }
   }
 }
