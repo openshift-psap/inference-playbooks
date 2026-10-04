@@ -12,3 +12,5 @@ access:
 quantizations:
   - name: FP8 dynamic
     huggingface_id: RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
+  - name: NVFP4
+    huggingface_id: RedHatAI/gemma-4-26B-A4B-it-NVFP4
