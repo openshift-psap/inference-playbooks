@@ -11,17 +11,26 @@ on:
 jobs:
   hardware-profiles:
     runs-on: ubuntu-latest
+    outputs:
+      base: ${{ steps.comparison.outputs.base }}
+      head: ${{ steps.comparison.outputs.head }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+      - id: comparison
+        name: Resolve comparison against the tested merge parent
+        run: python3 tools/ci_baseline.py
       - name: Validate profiles, recipes, and raw-manifest conversion
+        env:
+          BASE: ${{ steps.comparison.outputs.base }}
+          HEAD: ${{ steps.comparison.outputs.head }}
         run: >-
           python3 -m pip install --disable-pip-version-check -r tools/requirements.txt &&
           python3 tools/validate.py
           --require-converted-raw
-          --base "${{ github.event.pull_request.base.sha || github.event.before }}"
-          --head "${{ github.sha }}"
+          --base "$BASE"
+          --head "$HEAD"
 
   affected-recipes:
     needs: hardware-profiles
@@ -34,11 +43,14 @@ jobs:
           fetch-depth: 0
       - id: affected
         name: Find recipes affected by this change
+        env:
+          BASE: ${{ needs.hardware-profiles.outputs.base }}
+          HEAD: ${{ needs.hardware-profiles.outputs.head }}
         run: |
           python3 -m pip install --disable-pip-version-check -r tools/requirements.txt
           matrix=$(python3 tools/recipe_evidence.py \
-            --base "${{ github.event.pull_request.base.sha || github.event.before }}" \
-            --head "${{ github.sha }}" affected-recipes)
+            --base "$BASE" \
+            --head "$HEAD" affected-recipes)
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   manifest-drift:
