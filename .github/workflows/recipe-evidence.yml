@@ -15,10 +15,11 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - name: Validate hardware profiles and corrections
+      - name: Validate profiles, recipes, and raw-manifest conversion
         run: >-
           python3 -m pip install --disable-pip-version-check -r tools/requirements.txt &&
           python3 tools/validate.py
+          --require-converted-raw
           --base "${{ github.event.pull_request.base.sha || github.event.before }}"
           --head "${{ github.sha }}"
 

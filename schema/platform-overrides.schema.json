@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/platform-overrides.schema.json",
+  "title": "Platform Override",
+  "description": "Per-platform overrides applied on top of the base serving block.",
+  "type": "object",
+  "properties": {
+    "image": {"type": "string", "minLength": 1},
+    "served_model_name": {"type": "string", "minLength": 1},
+    "env": {
+      "type": "array",
+      "items": {"$ref": "recipe.schema.json#/$defs/serving/properties/env/items"}
+    },
+    "args": {
+      "type": "array",
+      "items": {"$ref": "recipe.schema.json#/$defs/serving/properties/args/items"}
+    },
+    "router": {"$ref": "recipe.schema.json#/$defs/serving/properties/router"},
+    "probes": {"$ref": "recipe.schema.json#/$defs/serving/properties/probes"},
+    "resources": {"$ref": "recipe.schema.json#/$defs/serving/properties/resources"},
+    "image_lifecycle": {"$ref": "recipe.schema.json#/$defs/image_lifecycle"}
+  },
+  "additionalProperties": false
+}

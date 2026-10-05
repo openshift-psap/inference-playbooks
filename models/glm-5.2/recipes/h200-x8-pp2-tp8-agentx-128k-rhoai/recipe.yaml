@@ -1,0 +1,71 @@
+schema_version: 4
+recipe_id: glm-5.2-rhoai-pp2-tp8
+model_id: glm-5.2
+platforms:
+  - stack: rhoai
+    version: "3.5"
+    overrides: platforms/rhoai-3.5.yaml
+hardware_profile: hardware-profiles/ibmcloud-h200-gx3d-160x1792x8h200.yaml
+workload_profile: aiperf-agentx-128k
+deployment_mode: pp2-tp8
+optimization_intent: long-context agentic serving
+maturity: day-zero
+
+serving:
+  image: docker.io/vllm/vllm-openai:v0.23.0
+  model: zai-org/GLM-5.2-FP8
+  served_model_name: glm-5.2-fp8
+  parallelism:
+    mode: tp+pp
+    tp: 8
+    pp: 2
+  resources:
+    requests:
+      cpu: "32"
+      memory: 256Gi
+    limits:
+      memory: 1024Gi
+  env:
+    - name: VLLM_ENGINE_READY_TIMEOUT_S
+      value: "3600"
+  port: 8000
+  probes:
+    startup:
+      failure_threshold: 720
+      period_seconds: 10
+      why: "Multi-node MoE model cold load from PVC takes ~12 min."
+  args:
+    - flag: --kv-cache-dtype
+      value: fp8
+      required: true
+      why: FP8 KV-cache for 128K context capacity.
+    - flag: --tool-call-parser
+      value: glm47
+      required: true
+      why: Required for structured tool-call parsing.
+    - flag: --reasoning-parser
+      value: glm45
+      required: true
+      why: Separates thinking tokens from response content.
+    - flag: --enable-auto-tool-choice
+      required: true
+      why: Enables model-driven tool selection in chat completions.
+    - flag: --skip-mm-profiling
+      required: true
+      why: Avoids unnecessary multimodal profiling overhead.
+    - flag: --trust-remote-code
+      required: true
+      why: GLM-5.2 requires remote code for model loading.
+    - flag: --distributed-timeout-seconds
+      value: "3600"
+      required: true
+      why: Extended timeout for multi-node PP initialization.
+    - flag: --distributed-executor-backend
+      value: mp
+      required: true
+      why: Required for pipeline parallelism on RHOAI 3.5.
+
+deployment:
+  scope: multi-node
+
+notes: guides/notes.yaml

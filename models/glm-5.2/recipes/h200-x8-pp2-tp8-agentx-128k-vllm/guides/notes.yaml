@@ -1,0 +1,18 @@
+schema_version: 1
+profile:
+  label: GLM-5.2 vLLM LeaderWorkerSet
+  headline: Two eight-H200 nodes with distinct leader and worker startup commands.
+  specs:
+    - {label: Node scope, source: "recipe.yaml#/deployment/scope"}
+    - {label: Worker group size, source: "config/lws.yaml#/spec/leaderWorkerTemplate/size"}
+decisions:
+  - subjects: [leader command, worker command, LWS_WORKER_INDEX]
+    why: The worker startup resolves its rank and leader address from LWS-injected variables; these commands must remain role-specific.
+known_issues:
+  - issue: RoCE interface and HCA environment values are commented out in the source manifest.
+    impact: Multi-node traffic may use an unintended transport.
+    mitigation: Set provider-specific values symmetrically in leader and worker before deployment.
+quickstart:
+  - {step: Prepare, detail: "Install the LWS controller, stage model access, and create llm-d-hf-token."}
+  - {step: Deploy, detail: Apply config/lws.yaml and config/service.yaml together.}
+  - {step: Benchmark, detail: Run AIPerf AgentX 128K and record sanitized artifacts before claiming validated maturity.}

@@ -1,0 +1,32 @@
+prefill:
+  kind: LeaderWorkerSet
+  source: config/prefill-lws.yaml
+  leader:
+    containers:
+      vllm:
+        command: ["vllm", "serve"]
+        args: ["deepseek-ai/DeepSeek-R1-0528", "--data-parallel-start-rank=0"]
+  worker:
+    containers:
+      vllm:
+        command: ["vllm", "serve"]
+        args: ["deepseek-ai/DeepSeek-R1-0528", "--data-parallel-start-rank=8"]
+decode:
+  kind: LeaderWorkerSet
+  source: config/decode-lws.yaml
+  leader:
+    containers:
+      vllm:
+        command: ["vllm", "serve"]
+        args: ["deepseek-ai/DeepSeek-R1-0528", "--port=8200", "--data-parallel-start-rank=0"]
+  worker:
+    containers:
+      vllm:
+        command: ["vllm", "serve"]
+        args: ["deepseek-ai/DeepSeek-R1-0528", "--port=8200", "--data-parallel-start-rank=8"]
+    init_containers:
+      routing-proxy:
+        args: ["--port=8000", "--vllm-port=8200", "--kv-connector=nixlv2"]
+router:
+  kind: llmd-router
+  values: config/router.values.yaml

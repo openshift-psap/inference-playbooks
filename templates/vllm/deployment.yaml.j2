@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ name }}
+  labels:
+    app.kubernetes.io/name: {{ name }}
+    app.kubernetes.io/managed-by: inference-playbooks
+spec:
+  replicas: {{ replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ name }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vllm
+          image: {{ image }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              vllm serve "$@"
+            - --
+          args:
+            - {{ model | tojson }}
+            - {{ ("--served-model-name=" ~ model) | tojson }}
+{% for arg in args %}
+{% if arg.value is defined and arg.value is not none %}
+            - {{ (arg.flag ~ "=" ~ arg.value) | tojson }}
+{% else %}
+            - {{ arg.flag | tojson }}
+{% endif %}
+{% endfor %}
+{% if tp > 1 %}
+            - {{ ("--tensor-parallel-size=" ~ tp) | tojson }}
+{% endif %}
+{% if dp > 1 %}
+            - {{ ("--data-parallel-size=" ~ dp) | tojson }}
+{% endif %}
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+{% for e in env %}
+{% if e.value is defined %}
+            - name: {{ e.name | tojson }}
+              value: {{ e.value | tojson }}
+{% elif e.value_from is defined %}
+            - name: {{ e.name | tojson }}
+              valueFrom: {{ e.value_from | tojson }}
+{% endif %}
+{% endfor %}
+          ports:
+            - name: http
+              containerPort: {{ port }}
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "{{ resources.requests.cpu | default('8') }}"
+              memory: {{ resources.requests.memory | default('32Gi') }}
+              nvidia.com/gpu: "{{ gpu_count }}"
+            limits:
+              cpu: "{{ resources.limits.cpu | default('8') }}"
+              memory: {{ resources.limits.memory | default('64Gi') }}
+              nvidia.com/gpu: "{{ gpu_count }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ port }}
+            periodSeconds: 30
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ port }}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ port }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /home/nobody/.cache
+            - name: tmp
+              mountPath: /tmp
+{% if tp > 1 %}
+            - name: dshm
+              mountPath: /dev/shm
+{% endif %}
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{% if tp > 1 %}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
+{% endif %}

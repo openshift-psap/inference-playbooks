@@ -11,6 +11,11 @@ pull request. A direct push is permitted only as a break-glass response with
 explicit approval from a repository owner; record the approval and reason in
 the resulting commit or incident record.
 
+## Container images
+
+Use fully qualified container image references; never use a short image name.
+Use a maintained upstream image appropriate for the workload.
+
 ## Repository layout
 
 Use this hierarchy for new model playbooks:
@@ -18,46 +23,45 @@ Use this hierarchy for new model playbooks:
 ```text
 schema/
   recipe.schema.json
+  platform-overrides.schema.json
   model.schema.json
   CHANGELOG.md
 hardware-profiles/
   <hardware-profile>.yaml
 models/<model-id>/
   model.yaml
-  <stack>/<stack-version>/
-    model-ops/
-    recipes/<hardware-profile>/
-      <workload-profile>/
-        <deployment-mode>[--<suffix>]/
-          recipe.yaml
-          manifests/
-          guides/
-          benchmarks/
-          results/
+  recipes/<recipe-id>/
+    recipe.yaml
+    platforms/
+      <stack>-<version>.yaml   # per-platform override files
+    raw-manifest/              # initial-release intake, when used
+    config/
+    manifests/
+      <stack>-<version>/       # generated per platform
+    guides/
+    benchmarks/
+    results/
 catalog/
 tools/
 .github/workflows/
 ```
 
-`<stack>` is a serving stack such as `rhoai` or `llm-d`. `<stack-version>` is
-the version the recipe targets (for example, `3.5`). Do not place RHOAI- or
-llm-d-specific model operations directly under the model root: downstream
-framework limitations are part of the stack/version context.
+`<recipe-id>` encodes hardware and deployment context as a prefix, such as
+`h200-x8-pp2-tp8-agentx-128k` or `h200-x8-mtp-single-gpu-8k1k`. Stack,
+version, hardware, and workload are no longer path segments — they are fields
+in `recipe.yaml`.
 
-`<hardware-profile>` is a normalized, lowercase, hyphenated identifier such as
-`h200-sxm8` or `mi300x-8gpu`. In a recipe path it is a navigation selector, not
-the source of physical facts. Each `recipe.yaml` must explicitly reference the
-matching root-level `hardware-profiles/<hardware-profile>.yaml`.
-`<workload-profile>` is one of the reusable benchmark workloads from PR #7:
-`guidellm-8k1k`, `aiperf-agentx-128k`, or
-`aiperf-agentx-unlimited-context`. `<deployment-mode>` identifies the
-configuration pattern, such as `tp8-aggregated`, `tp8-replicas-2`, or
-`pp2-tp8`. A suffix is allowed only when more than one recipe shares the same
-deployment mode (for example, `tp8-aggregated--prefix-cache-off`).
+Each `recipe.yaml` declares a `platforms` array with one or more entries.
+Each platform entry specifies `stack`, `version`, and `overrides` (path to a
+file under `platforms/`). Override files are validated against
+`platform-overrides.schema.json`. A platform with no customizations uses an
+empty override file.
 
-Recipe v3 requires `deployment.scope` to be either `single-node` or
-`multi-node`. `match.nodes` is retired; do not reintroduce it as a second node
-scope field.
+Each `recipe.yaml` must explicitly reference the matching root-level
+`hardware-profiles/<hardware-profile>.yaml`.
+
+Recipe v4 requires `deployment.scope` to be either `single-node` or
+`multi-node`.
 
 Each recipe declares `optimization_intent` as a concise catalog label.
 `latency` and `throughput` are the standard values, but a recipe creator may
@@ -65,7 +69,32 @@ use a more specific free-form intent. This is not a directory level or a claim
 inferred from the path. Multiple recipes for the same workload may have the
 same intent.
 
+Each recipe declares `maturity` with one of four levels:
+
+- `day-zero` — initial config with minimal confidence.
+- `contributed` — provided by other Red Hat engineers, reviewed but not
+  independently tested on our infrastructure.
+- `validated` — tested on our silicon with benchmark evidence against ground
+  truth. Schema requires `benchmark_runs` and `image`.
+- `production` — validated and hardened for production use. Same schema
+  enforcement as `validated`.
+
+Use `day-zero` for brand-new or raw-intake recipes. Use `contributed` when
+a recipe comes from a trusted internal source but has not been independently
+tested on our infrastructure. Do not set `validated` or `production` without
+committed benchmark evidence.
+
 ## Ownership and source of truth
+
+For the initial release only, a contributor may open a PR containing raw YAML
+or JSON manifests under a leaf's `raw-manifest/` without creating
+`recipe.yaml`. The PR should identify the model, stack/version, hardware,
+workload, deployment pattern, and known prerequisites; uncertain details may
+be called out for review. Thibrahi or Saketh converts the submission in the
+same PR before merge. CI checks raw syntax and duplicate keys on submission,
+then requires a sibling `recipe.yaml` and full validation before merge. Do not
+require raw-only contributors to author notes, benchmark results, or generated
+files. This exception ends after the initial release.
 
 - `models/<model-id>/model.yaml` owns model identity and model-wide metadata:
   family, parameter count, Hugging Face identifier, license/access
@@ -74,16 +103,32 @@ same intent.
   applicable network/interconnect facts. Keep GPU model/count/memory,
   topology, host requirements, and any RDMA/RoCE/DRA/SR-IOV configuration
   together.
-- `recipe.yaml` owns the workload-specific serving configuration, compatibility
-  claim, references to manifests/benchmark runs, and display-safe summary.
+- `recipe.yaml` owns the workload-specific serving configuration via the
+  `serving` block (image, model, parallelism, args, env, resources, port),
+  multi-platform targeting via `platforms`, and references to
+  manifests/benchmark runs.
+- `platforms/` contains per-platform override files referenced by
+  `platforms[].overrides`. Override merge: image/resources/router replace,
+  env appends, args merge by flag. Templates derive the K8s component kind
+  from `(platform.stack, parallelism.mode)`.
+- `config/` contains optional Kustomize overlay patches when
+  `serving.config_overrides` is true.
+- `raw-manifest/` preserves the initial submitted inputs for maintainer
+  conversion. It may contain multi-document YAML or JSON and an optional
+  README. After conversion, `config/` and `recipe.yaml` are authoritative.
 - `manifests/` contains generated deployment artifacts. Do not hand-edit them;
-  change recipe inputs and run the renderer.
+  change recipe inputs in `recipe.yaml` or `config/` and run the renderer.
 - `benchmarks/` contains reproducible harness inputs, workload definitions, and
   trace references. `results/` contains sanitized raw run artifacts and their
   parser-generated normalized results.
 - `guides/` contains explanatory prose. It may embed generated tables, but it
   must link to the underlying recipe, manifest, and evidence rather than copy
-  mutable values.
+  mutable values. Optional `guides/notes.yaml` holds catalog presentation,
+  decision rationale, intentional omissions, image-choice status, feature
+  claims, quickstart steps, insights, known issues, and sizing pointers. Recipe
+  `notes` references it. Display specs point to source fields rather than copy
+  mutable values. A manifest import may leave rationale fields empty; do not
+  invent explanations or evidence.
 - `catalog/` is generated output and must not be hand-edited.
 
 ## Immutable hardware profiles
@@ -138,17 +183,84 @@ Do not commit credentials, private prompts, hostnames/IPs, model weights, or
 large sensitive logs. For essential large artifacts, commit their provenance
 and immutable checksum plus a durable external location.
 
+## Tooling
+
+- `tools/validate.py` — validates JSON schemas (draft 2020-12) with a shared
+  `referencing.Registry` across 13 schema files, cross-file references, profile
+  revisions, recipe layout, per-platform constraint checking, and benchmark
+  provenance. Run `python3 tools/validate.py --current` locally.
+- `tools/render.py` — renders Kubernetes manifests from v4 recipes. Iterates
+  each platform entry, merges overrides, evaluates flag constraints, selects
+  a Jinja2 template from `(platform.stack, parallelism.mode)`, and writes to
+  `manifests/<stack>-<version>/`. Supports pinned manifests (verbatim copy),
+  Kustomize overlays (`config_overrides: true`), and shell-safe quoting for
+  LWS `sh -c` args via `shellquote` filter.
+- `tools/constraints.py` — stackable flag constraint engine. Constraints in
+  `schema/flag-constraints.yaml` scope by `model_type`, `platform`, and
+  `parallelism` to remove or force specific vLLM flags. Evaluated
+  per platform entry.
+- `tools/resolve-model.py` — populates `model.yaml` from HuggingFace metadata.
+  Supports gated models when `HF_TOKEN` is set.
+- `tools/recipe_evidence.py` — shared YAML loading with duplicate-key detection.
+
+## Schema files
+
+```text
+schema/
+  recipe.schema.json              # v4 recipe with serving block, platforms array
+  platform-overrides.schema.json  # per-platform override files
+  model.schema.json               # model.yaml (schema_version: 2)
+  hardware-profile.schema.json    # accelerator, topology, networking
+  flag-constraints.schema.json    # stackable flag constraint rules
+  benchmark-run.schema.json       # benchmark run provenance
+  benchmark-result.schema.json    # normalized benchmark results
+  recipe-notes.schema.json        # guides/notes.yaml structure
+  container-runtime.schema.json   # container spec definitions
+  deployment.schema.json          # deployment component refs
+  llmisvc.schema.json             # LLMInferenceService component
+  leaderworkerset.schema.json     # LeaderWorkerSet component
+  llmd-router.schema.json         # llm-d router component
+  flag-constraints.yaml           # constraint rules (data, not schema)
+```
+
+## Template rendering
+
+Templates live in `templates/<stack>/`. Current template map:
+
+| Stack | Mode | Template | K8s Kind |
+|-------|------|----------|----------|
+| vllm | tp, dp, tp+dp | `vllm/deployment.yaml.j2` | Deployment |
+| vllm | pp, tp+pp | `vllm/lws.yaml.j2` | LeaderWorkerSet |
+| rhoai | tp | `rhoai/llmisvc.yaml.j2` | LLMInferenceService |
+| rhoai | pp, tp+pp | `rhoai/llmisvc-pp.yaml.j2` | LLMInferenceService |
+
+Templates use `shellquote` (not `tojson`) for args in LWS templates where
+`command: ["sh", "-c"]` requires shell-safe quoting. PP/TP+PP templates
+support separate `leader_args` and `worker_args` via role blocks.
+
+Pinned manifests (`pinned_manifest` in platform entry) bypass rendering and
+copy a hand-authored manifest verbatim. Use when a converter is WIP.
+
+## Recipe versions
+
+- **v4** (current): flat layout, `serving` block, `platforms` array,
+  template-driven rendering, flag constraints, per-platform overrides.
+- **v3** (migration required): `schema_version: 3` with
+  `deployment.components` referencing hand-authored manifests. No longer
+  validates. Must be migrated to v4.
+
 ## Validation and generated files
 
-`tools/validate.py` validates schemas, cross-file references, profile
-revisions, and required benchmark provenance. `tools/render.py` renders
-manifests, recipe READMEs, and catalog outputs. `tools/doctor.py` performs
-configuration linting.
+For raw intake, local `tools/validate.py --current` checks syntax and layout
+without requiring a recipe. CI uses `--require-converted-raw`, so a raw-only PR
+cannot merge until maintainer conversion and normal recipe validation pass.
+Raw-only leaves are not rendered; once `recipe.yaml` is added, normal
+affected-recipe selection applies.
 
 CI and pre-commit must run the same local commands. CI should calculate the
 affected recipe set from the diff:
 
-- changes below one deployment-mode recipe validate/render only that recipe;
+- changes below one recipe validate/render only that recipe;
 - a newly added hardware profile does not fan out to existing recipes;
 - a corrected hardware profile validates/renders only recipes that explicitly
   reference that profile;
@@ -158,8 +270,7 @@ affected recipe set from the diff:
 After a hardware-profile correction, render only recipes that explicitly
 reference that profile. Catalog generation is a separate required aggregation
 step: regenerate `catalog/` from the validated recipe set after those targeted
-renders, then verify the resulting generated-file diff. Until `tools/render.py`
-lands, CI records the affected recipe matrix but cannot perform this generation.
+renders, then verify the resulting generated-file diff.
 
 Generated-file checks must fail on drift; automation should not silently commit
 changes to a contributor's branch.

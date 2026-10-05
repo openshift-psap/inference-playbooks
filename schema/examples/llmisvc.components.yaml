@@ -1,0 +1,31 @@
+modelserver:
+  kind: LLMInferenceService
+  source: config/modelserver.yaml
+  template:
+    containers:
+      main:
+        env:
+          - name: VLLM_ADDITIONAL_ARGS
+            value: '--kv_transfer_config {"kv_connector":"NixlConnector","kv_role":"kv_consumer"}'
+        resources:
+          requests: {cpu: "64", memory: 256Gi, nvidia.com/gpu: "8", rdma/roce_gdr: "1"}
+          limits: {cpu: "128", memory: 512Gi, nvidia.com/gpu: "8", rdma/roce_gdr: "1"}
+  worker:
+    containers:
+      main:
+        env:
+          - name: VLLM_ADDITIONAL_ARGS
+            value: '--kv_transfer_config {"kv_connector":"NixlConnector","kv_role":"kv_consumer"}'
+  prefill:
+    template:
+      containers:
+        main:
+          env:
+            - name: VLLM_ADDITIONAL_ARGS
+              value: '--kv_transfer_config {"kv_connector":"NixlConnector","kv_role":"kv_producer"}'
+    worker:
+      containers:
+        main:
+          env:
+            - name: VLLM_ADDITIONAL_ARGS
+              value: '--kv_transfer_config {"kv_connector":"NixlConnector","kv_role":"kv_producer"}'

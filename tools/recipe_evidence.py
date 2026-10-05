@@ -19,7 +19,7 @@ import yaml
 
 PROFILE_ROOT = "hardware-profiles"
 RECIPE_PATH = re.compile(
-    r"^models/[^/]+/[^/]+/[^/]+/recipes/[^/]+/[^/]+/[^/]+/recipe\.yaml$"
+    r"^models/[^/]+/recipes/[^/]+/recipe\.yaml$"
 )
 
 
@@ -45,11 +45,20 @@ UniqueKeyLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
     construct_unique_mapping,
 )
+UniqueKeyLoader.add_constructor(
+    "tag:yaml.org,2002:timestamp",
+    lambda loader, node: loader.construct_scalar(node),
+)
 
 
 def load_unique_yaml(text: str) -> object:
     """Safely load YAML while rejecting duplicate mapping keys."""
     return yaml.load(text, Loader=UniqueKeyLoader)
+
+
+def load_unique_yaml_all(text: str) -> list[object]:
+    """Safely load a multi-document YAML stream with duplicate-key checks."""
+    return list(yaml.load_all(text, Loader=UniqueKeyLoader))
 
 
 def git_lines(repo: Path, arguments: list[str]) -> list[str]:

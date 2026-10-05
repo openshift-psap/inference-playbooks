@@ -26,7 +26,16 @@
       }
     },
     "host": {"type": "object"},
-    "network": {"type": "object"},
+    "network": {
+      "type": "object",
+      "properties": {
+        "inter_node_transport": {"enum": ["roce", "infiniband", "tcp", "none"]},
+        "inter_node_bandwidth_gbe": {"type": "number", "exclusiveMinimum": 0},
+        "rdma": {"type": "boolean"},
+        "accelerator_nic_allocation": {"type": "string"},
+        "notes": {"type": "string"}
+      }
+    },
     "correction_log": {
       "type": "array",
       "minItems": 1,

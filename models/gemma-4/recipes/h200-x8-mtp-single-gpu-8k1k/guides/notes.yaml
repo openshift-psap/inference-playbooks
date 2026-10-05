@@ -1,0 +1,16 @@
+schema_version: 1
+profile:
+  label: Gemma 4 single-GPU Deployment
+  sub: One GPU requested from an eight-H200 host profile.
+  headline: One vLLM Deployment using MTP speculative decoding.
+  specs:
+    - {label: Node scope, source: "recipe.yaml#/deployment/scope"}
+    - {label: GPU request, source: "config/modelserver.yaml#/spec/template/spec/containers/0/resources/requests/nvidia.com~1gpu"}
+decisions:
+  - subjects: ["--speculative-config", "companion assistant model"]
+    why: The source manifest uses the gated companion assistant model for MTP.
+    status: {state: needs-verification, note: Verify access to both gated repositories before deployment.}
+quickstart:
+  - {step: Prepare access, detail: Create hf-token with an HF_TOKEN authorized for both model repositories.}
+  - {step: Deploy, detail: Apply config/modelserver.yaml on a node with an available H200 GPU.}
+  - {step: Benchmark, detail: Run the GuideLLM 8K/1K workload and record the artifacts before claiming validated maturity.}

@@ -1,0 +1,176 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: {{ name }}
+spec:
+  replicas: {{ replicas }}
+  leaderWorkerTemplate:
+    size: {{ pp }}
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata:
+        labels:
+          role: leader
+          app.kubernetes.io/name: {{ name }}
+          app.kubernetes.io/managed-by: inference-playbooks
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+          - name: vllm-leader
+            image: {{ image }}
+            command: ["sh", "-c"]
+            args:
+              - |
+                vllm serve {{ model | shellquote }} \
+                  --served-model-name={{ model | shellquote }} \
+                  --tensor-parallel-size {{ tp }} \
+                  --pipeline-parallel-size {{ pp }} \
+                  --nnodes {{ pp }} \
+                  --node-rank 0 \
+                  --master-addr 0.0.0.0 \
+                  --port {{ port }} \
+{% for arg in leader_args %}
+{% if arg.value is defined and arg.value is not none %}
+                  {{ (arg.flag ~ "=" ~ arg.value) | shellquote }} \
+{% else %}
+                  {{ arg.flag | shellquote }} \
+{% endif %}
+{% endfor %}
+
+            env:
+              - name: HF_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: hf-token
+                    key: HF_TOKEN
+{% for e in env %}
+{% if e.value is defined %}
+              - name: {{ e.name | tojson }}
+                value: {{ e.value | tojson }}
+{% elif e.value_from is defined %}
+              - name: {{ e.name | tojson }}
+                valueFrom: {{ e.value_from | tojson }}
+{% endif %}
+{% endfor %}
+            ports:
+              - containerPort: {{ port }}
+            resources:
+              requests:
+                cpu: "{{ resources.requests.cpu | default('8') }}"
+                memory: {{ resources.requests.memory | default('32Gi') }}
+                nvidia.com/gpu: "{{ gpu_count }}"
+              limits:
+                cpu: "{{ resources.limits.cpu | default('8') }}"
+                memory: {{ resources.limits.memory | default('64Gi') }}
+                nvidia.com/gpu: "{{ gpu_count }}"
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                  - ALL
+            startupProbe:
+              httpGet:
+                path: /health
+                port: {{ port }}
+              failureThreshold: 720
+              periodSeconds: 10
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: {{ port }}
+              initialDelaySeconds: 15
+              periodSeconds: 10
+            volumeMounts:
+              - name: dshm
+                mountPath: /dev/shm
+              - name: hf-cache
+                mountPath: /home/nobody/.cache
+              - name: tmp
+                mountPath: /tmp
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 4Gi
+          - name: hf-cache
+            emptyDir: {}
+          - name: tmp
+            emptyDir: {}
+    workerTemplate:
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+          - name: vllm-worker
+            image: {{ image }}
+            command: ["sh", "-c"]
+            args:
+              - |
+                vllm serve {{ model | shellquote }} \
+                  --served-model-name={{ model | shellquote }} \
+                  --tensor-parallel-size {{ tp }} \
+                  --pipeline-parallel-size {{ pp }} \
+                  --nnodes {{ pp }} \
+                  --node-rank $(LWS_WORKER_INDEX) \
+                  --master-addr $(LWS_LEADER_ADDRESS) \
+                  --headless \
+{% for arg in worker_args %}
+{% if arg.value is defined and arg.value is not none %}
+                  {{ (arg.flag ~ "=" ~ arg.value) | shellquote }} \
+{% else %}
+                  {{ arg.flag | shellquote }} \
+{% endif %}
+{% endfor %}
+
+            env:
+              - name: HF_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: hf-token
+                    key: HF_TOKEN
+{% for e in env %}
+{% if e.value is defined %}
+              - name: {{ e.name | tojson }}
+                value: {{ e.value | tojson }}
+{% elif e.value_from is defined %}
+              - name: {{ e.name | tojson }}
+                valueFrom: {{ e.value_from | tojson }}
+{% endif %}
+{% endfor %}
+            resources:
+              requests:
+                cpu: "{{ resources.requests.cpu | default('8') }}"
+                memory: {{ resources.requests.memory | default('32Gi') }}
+                nvidia.com/gpu: "{{ gpu_count }}"
+              limits:
+                cpu: "{{ resources.limits.cpu | default('8') }}"
+                memory: {{ resources.limits.memory | default('64Gi') }}
+                nvidia.com/gpu: "{{ gpu_count }}"
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                  - ALL
+            volumeMounts:
+              - name: dshm
+                mountPath: /dev/shm
+              - name: hf-cache
+                mountPath: /home/nobody/.cache
+              - name: tmp
+                mountPath: /tmp
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 4Gi
+          - name: hf-cache
+            emptyDir: {}
+          - name: tmp
+            emptyDir: {}

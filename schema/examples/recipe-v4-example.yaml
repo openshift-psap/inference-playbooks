@@ -1,0 +1,43 @@
+schema_version: 4
+recipe_id: gemma-4-tp1-tool-calling
+model_id: gemma-4
+platforms:
+  - stack: vllm
+    version: v0.24.0
+    overrides: platforms/vllm-v0.24.0.yaml
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+workload_profile: guidellm-8k1k
+deployment_mode: tp1-tool-calling
+optimization_intent: single-GPU agentic serving
+maturity: day-zero
+deployment:
+  scope: single-node
+serving:
+  image: docker.io/vllm/vllm-openai:v0.24.0
+  model: RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
+  parallelism:
+    mode: tp
+    tp: 1
+  resources:
+    requests:
+      cpu: "8"
+      memory: 32Gi
+    limits:
+      cpu: "8"
+      memory: 64Gi
+  env:
+    - name: VLLM_ENGINE_ITERATION_TIMEOUT_S
+      value: "120"
+  port: 8000
+  args:
+    - flag: --enable-auto-tool-choice
+      required: true
+      why: Enables tool calling detection in chat completions.
+    - flag: --max-model-len
+      value: "16384"
+      required: true
+      why: Memory-bound on single GPU at FP8.
+    - flag: --reasoning-parser
+      value: gemma4
+      required: true
+      why: Gemma 4 uses a model-specific thinking format.

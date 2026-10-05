@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/leaderworkerset.schema.json",
+  "title": "LeaderWorkerSet component",
+  "type": "object",
+  "required": ["kind", "source"],
+  "$defs": {
+    "pod": {
+      "type": "object",
+      "required": ["containers"],
+      "properties": {
+        "containers": {"$ref": "container-runtime.schema.json#/$defs/containers"},
+        "init_containers": {"$ref": "container-runtime.schema.json#/$defs/containers"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "kind": {"const": "LeaderWorkerSet"},
+    "source": {"type": "string", "pattern": "^config/.*\\.ya?ml$"},
+    "leader": {"$ref": "#/$defs/pod"},
+    "worker": {"$ref": "#/$defs/pod"}
+  },
+  "additionalProperties": false
+}

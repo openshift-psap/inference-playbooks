@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/llmd-router.schema.json",
+  "title": "llm-d router component",
+  "type": "object",
+  "required": ["kind", "values"],
+  "properties": {
+    "kind": {"const": "llmd-router"},
+    "values": {"type": "string", "pattern": "^config/.*\\.ya?ml$"}
+  },
+  "additionalProperties": false
+}

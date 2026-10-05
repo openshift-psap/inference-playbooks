@@ -4,3 +4,4 @@ kubeconfig*.yaml
 *.secret
 *.log
 temp/
+samples-shared-by-yuchen/

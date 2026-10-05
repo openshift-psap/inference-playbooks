@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/deployment.schema.json",
+  "title": "Kubernetes Deployment component",
+  "type": "object",
+  "required": ["kind", "source"],
+  "properties": {
+    "kind": {"const": "Deployment"},
+    "source": {"type": "string", "pattern": "^config/.*\\.ya?ml$"},
+    "containers": {"$ref": "container-runtime.schema.json#/$defs/containers"}
+  },
+  "additionalProperties": false
+}
