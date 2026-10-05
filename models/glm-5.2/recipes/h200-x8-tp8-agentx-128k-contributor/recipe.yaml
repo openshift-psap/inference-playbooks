@@ -1,0 +1,31 @@
+schema_version: 4
+recipe_id: h200-x8-tp8-agentx-128k-contributor
+model_id: glm-5.2
+platforms:
+  - stack: rhoai
+    version: '3.5'
+    overrides: platforms/rhoai-3.5.yaml
+    pinned_manifest: manifests/rhoai-3.5/llmisvc-h200-single-agentic.yaml
+    pinned_reason: Preserve the contributor deployment while template conversion is reviewed.
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+workload_profile: aiperf-agentx-128k
+deployment_mode: tp8-aggregated
+optimization_intent: latency
+maturity: contributed
+quantization: FP8
+serving:
+  image: docker.io/vllm/vllm-openai:v0.24.0
+  image_usage:
+    kind: custom
+    note: Contributor-supplied upstream vLLM image rather than the platform default; engine declaration is not independently verified.
+  engine:
+    name: vllm
+    image: docker.io/vllm/vllm-openai:v0.24.0
+    version: 0.24.0
+    source: https://github.com/openshift-psap/inference-playbooks/blob/9d397e8439faa3143fae4a8c40a39cde680072a4/models/glm-5.2/rhoai/3.5/recipes/nvidia-h200-x8/guidellm-8k1k/tp8-aggregated/results/guidellm-8k1k-c16-r1/run.yaml
+  model: zai-org/GLM-5.2-FP8
+  parallelism: {mode: tp, tp: 8}
+  args: []
+deployment:
+  scope: single-node
+notes: guides/notes.yaml

@@ -5,3 +5,7 @@ kubeconfig*.yaml
 *.log
 temp/
 samples-shared-by-yuchen/
+site/catalog.json
+.build/
+__pycache__/
+.pytest_cache/

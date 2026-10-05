@@ -130,6 +130,10 @@ files. This exception ends after the initial release.
   mutable values. A manifest import may leave rationale fields empty; do not
   invent explanations or evidence.
 - `catalog/` is generated output and must not be hand-edited.
+  The UI catalog JSON specifically is an uncommitted CI build artifact at
+  `.build/site/catalog.json`; it is exempt from committed-generated-output
+  policy. Local previews use the same ignored path. This exemption does not
+  apply to deployment manifests or other generated outputs.
 
 ## Immutable hardware profiles
 

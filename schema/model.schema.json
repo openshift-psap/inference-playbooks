@@ -31,6 +31,15 @@
           "huggingface_id": {"type": "string"}
         }
       }
+    },
+    "presentation": {
+      "type": "object",
+      "properties": {
+        "icon_bg": {"type": "string"},
+        "icon_letter": {"type": "string"},
+        "provider": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}}
+      }
     }
   },
   "if": {

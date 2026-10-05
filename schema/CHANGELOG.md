@@ -157,6 +157,7 @@
 - Benchmark runs record the hardware-profile revision known when they ran.
 - Benchmark runs must reference their normalized result; result run IDs
   resolve to exactly one run record.
+
 ## Engine metadata foundation
 
 - Added optional image-bound `serving.engine` and platform override `engine`.
@@ -166,3 +167,6 @@
   a recipe image digest is not required for engine resolution.
 - New recipes require image identification and resolved metadata during Git-diff validation;
   existing recipes remain compatible with unknown engine versions.
+## 2026-09-26
+
+- model.schema.json: add optional `presentation` object (icon_bg, icon_letter, provider, tags) for catalog UI display. Additive; existing instances remain valid.

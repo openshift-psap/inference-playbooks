@@ -25,7 +25,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: aiperf
-          image: quay.io/rh-ee-thibrahi/aiperf:0.12.0
+          image: nvcr.io/nvidia/ai-dynamo/aiperf:0.12.0
           imagePullPolicy: IfNotPresent
           env:
             # Set to an OpenAI-compatible Service reachable from this Job's namespace.

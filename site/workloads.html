@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workloads | AI Hub</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="nav">
+    <nav aria-label="Primary" style="display:flex;gap:24px;font-size:14px;font-weight:500">
+      <a href="index.html" style="color:#fff;padding-bottom:17px">Model catalog</a>
+      <a href="workloads.html" aria-current="page" style="color:#fff;border-bottom:2px solid #EE0000;padding-bottom:17px">Workloads</a>
+    </nav>
+    <div style="flex:1"></div>
+    <input disabled placeholder="Search unavailable" aria-label="AI Hub search unavailable" title="AI Hub search is not available" style="background:#3C3F42;border:1px solid #4F5255;border-radius:4px;color:#fff;padding:6px 10px;font-size:13px;width:220px">
+    <div style="width:28px;height:28px;border-radius:50%;background:#4F5255;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600">AI</div>
+  </div>
+
+  <main class="workload-page">
+    <h1>Workloads</h1>
+    <p>A workload describes benchmark traffic, not deployment geometry. GPU type and count, parallelism, and single-node or multi-node scope describe the serving configuration. The catalog shows only combinations backed by actual recipes.</p>
+
+    <div class="workload-grid">
+      <section class="workload-card" aria-labelledby="synthetic-heading">
+        <h2 id="synthetic-heading">8k/1k</h2>
+        <p>GuideLLM generates synthetic text requests with a target of <strong>8,000 prompt tokens and 1,000 output tokens</strong>. These are workload targets, not measured results.</p>
+        <p>The job exercises fixed concurrent streams with a controlled input/output shape. Use this profile when that synthetic request shape matches the question you want to investigate; it does not replay a multi-turn coding session.</p>
+        <p>The server must accept the requested input plus output tokens, including chat-template overhead. Selecting this workload does not configure the server's maximum model length.</p>
+        <p><a href="https://github.com/openshift-psap/inference-playbooks/blob/main/benchmarks/manifests/guidellm-8k1k-job.yaml">GuideLLM job manifest</a></p>
+      </section>
+
+      <section class="workload-card" aria-labelledby="agentic-heading">
+        <h2 id="agentic-heading">Agentic workload</h2>
+        <p>AIPerf AgentX replays long-context, multi-turn coding-session traces, using pre-canned assistant responses. Its traffic shape is not a fixed 8k/1k request.</p>
+        <p>Both context variants belong to the catalog's <strong>Agentic workload</strong> filter:</p>
+        <ul>
+          <li><strong>128K cap:</strong> the harness sets <code>--max-context-length 128000</code>, filtering out larger traces. The server must accept the retained contexts; compare results only with runs using the same cap.</li>
+          <li><strong>Uncapped / unlimited:</strong> the harness omits that cap. “Unlimited” means no harness context filter, not infinite model context. The server must accept every trace request in the corpus; server-side context rejections contribute to the context-overflow rate and can invalidate a run.</li>
+        </ul>
+        <p>Neither variant sets the server's maximum model length. Use this profile to investigate trace-replayed session traffic, choosing the context variant to match the corpus coverage and server context support you intend to test.</p>
+        <p><a href="https://github.com/openshift-psap/inference-playbooks/blob/main/benchmarks/manifests/aiperf-agentx-128k-job.yaml">AgentX 128K job manifest</a> · <a href="https://github.com/openshift-psap/inference-playbooks/blob/main/benchmarks/manifests/aiperf-agentx-unlimited-context-job.yaml">AgentX uncapped job manifest</a></p>
+      </section>
+    </div>
+
+    <aside class="workload-note" aria-labelledby="comparison-heading">
+      <h2 id="comparison-heading">Choose by traffic shape, compare like for like</h2>
+      <p>8k/1k isolates a synthetic input/output shape; Agentic replays long-context session traffic. Neither label identifies the fastest recipe or guarantees performance on your application.</p>
+      <p>For meaningful comparisons, align the workload profile and context cap, trace corpus, tokenizer, hardware, model and serving image, and harness settings. Check run provenance and committed benchmark evidence before interpreting measurements. Unbacked measurements do not establish validation or promote recipe maturity.</p>
+      <p>The <a href="https://github.com/openshift-psap/inference-playbooks/blob/main/benchmarks/README.md">benchmark guide</a> and linked job manifests are authoritative for current harness versions, images, replay settings, prerequisites, and artifact collection.</p>
+    </aside>
+  </main>
+</body>
+</html>
