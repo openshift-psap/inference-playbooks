@@ -132,6 +132,8 @@ class EngineVersionTests(unittest.TestCase):
 
     def test_release_index_includes_patch_and_ea_versions(self):
         index = load_engine_index(REPO)
+        self.assertEqual(set(index["source"]), {"title", "export", "sha256"})
+        self.assertTrue(all(set(entry) == {"version", "vllm_version"} for entry in index["releases"]))
         expected = {
             "3.3.0": "0.13.0", "3.3.1": "0.13.0", "3.3.2": None,
             "3.3.3": "0.13.0", "3.3.5": "0.13.0", "3.3.6": "0.13.0",
@@ -165,10 +167,6 @@ class EngineVersionTests(unittest.TestCase):
             index["releases"].append(dict(index["releases"][0]))
             path.write_text(yaml.safe_dump(index))
             with self.assertRaisesRegex(ValueError, "duplicate release component"):
-                load_engine_index(repo)
-            index["releases"][-1]["version"] = "3.9.0"
-            path.write_text(yaml.safe_dump(index))
-            with self.assertRaisesRegex(ValueError, "duplicate release source column"):
                 load_engine_index(repo)
             index["releases"].pop()
             index["releases"][0]["version"] = "3.3.0 GA"

@@ -18,14 +18,10 @@ def load_engine_index(repo: Path) -> dict:
     schema = json.loads((repo / "schema/engine-index.schema.json").read_text())
     Draft202012Validator(schema).validate(index)
     versions = set()
-    columns = set()
     for entry in index["releases"]:
         if entry["version"] in versions:
             raise ValueError(f"duplicate release component mapping: {entry['version']}")
-        if entry["source_column"] in columns:
-            raise ValueError(f"duplicate release source column: {entry['source_column']}")
         versions.add(entry["version"])
-        columns.add(entry["source_column"])
     return index
 
 

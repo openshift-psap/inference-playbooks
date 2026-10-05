@@ -71,8 +71,8 @@ The blank 3.3.2 cell is null; absent releases such as 3.3.4 are not invented.
 Release lookup is exact: `3.5` does not silently select `3.5.0` or a latest patch.
 The sheet records component associations, not proof that a release has shipped.
 
-The source export filename, SHA-256, header/component rows, and per-entry columns
-retain extraction provenance without committing the internal spreadsheet. The
+The source title, export filename, and SHA-256 retain extraction provenance
+without committing the internal spreadsheet or its row/column coordinates. The
 original shareable source URL has not been supplied; maintainers should retain
 the matching export or add durable provenance before publishing this source as
 publicly auditable.
@@ -86,7 +86,7 @@ through blank cells or infer engine versions from image tags.
 
 `tools/engine_versions.py` provides:
 
-- `load_engine_index(repo)`: schema validation and duplicate-release/source-column checks.
+- `load_engine_index(repo)`: schema validation and duplicate-release checks.
 - `release_vllm_version(index, release)`: exact release-component lookup.
 - `resolve_engine(serving, overrides, platform, index)`: effective image and engine
   resolution after overrides, using the contributor's image classification.
