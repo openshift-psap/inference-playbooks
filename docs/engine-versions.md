@@ -59,7 +59,7 @@ may be inherited only when the effective image reference is unchanged.
 ## Single maintained index
 
 `engine-versions/index.yaml` contains 19 release entries extracted from the
-operator-supplied 2026 RHAI component sheet, row 12 (`vLLM [CUDA, ROCM, CPU]`).
+operator-supplied 2026 RHAI component sheet for `vLLM [CUDA, ROCM, CPU]`.
 TPU, Spyre, Neuron, Gaudi, and Omni have distinct rows and must not inherit these
 versions. Each release can optionally list known default `images`, using tags
 or digests; those references are informational and do not gate release lookup.
