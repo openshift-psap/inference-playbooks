@@ -212,7 +212,10 @@ layout. The renderer generates manifests from the serving block.
 
 Put harness inputs and trace provenance in `benchmarks/`, commit
 `results/<run-id>/run.yaml` and `result.json`. Link from `benchmark_runs`.
-Use `maturity: day-zero` if no benchmark run is available.
+Use `maturity: day-zero` for initial configs with minimal confidence, or
+`maturity: contributed` for reviewed recipes provided by other Red Hat
+engineers that have not been independently tested on our infrastructure.
+`validated` and `production` require benchmark evidence.
 
 Benchmark artifacts can be stored locally (`path`) or externally
 (`uri` with `sha256:` checksum). Supported external protocols: `s3://`,

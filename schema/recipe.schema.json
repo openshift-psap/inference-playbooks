@@ -295,7 +295,7 @@
       "minLength": 1,
       "description": "Catalog label. Use latency or throughput when applicable; custom text is allowed."
     },
-    "maturity": {"enum": ["day-zero", "validated", "production"]},
+    "maturity": {"enum": ["day-zero", "contributed", "validated", "production"]},
     "quantization": {
       "type": "string",
       "minLength": 1,

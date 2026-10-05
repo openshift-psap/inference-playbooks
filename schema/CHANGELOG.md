@@ -1,5 +1,14 @@
 # Schema changelog
 
+## Add `contributed` maturity level
+
+- `maturity` enum now accepts four values:
+  `day-zero`, `contributed`, `validated`, `production`.
+- `contributed` marks recipes provided by other Red Hat engineers that have
+  been reviewed but not independently tested on our infrastructure.
+- Same schema enforcement as `day-zero`: `benchmark_runs` and `image` are
+  not required. `validated` and `production` still require both.
+
 ## Benchmark artifact external storage
 
 ### Structured artifacts
