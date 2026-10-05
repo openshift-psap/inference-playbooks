@@ -215,7 +215,8 @@ Put harness inputs and trace provenance in `benchmarks/`, commit
 Use `maturity: day-zero` for initial configs with minimal confidence, or
 `maturity: contributed` for reviewed recipes provided by other Red Hat
 engineers that have not been independently tested on our infrastructure.
-`validated` and `production` require benchmark evidence.
+`validated` and `production` require `benchmark_runs` and a top-level
+`image` lifecycle block.
 
 Benchmark artifacts can be stored locally (`path`) or externally
 (`uri` with `sha256:` checksum). Supported external protocols: `s3://`,
