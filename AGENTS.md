@@ -69,6 +69,21 @@ use a more specific free-form intent. This is not a directory level or a claim
 inferred from the path. Multiple recipes for the same workload may have the
 same intent.
 
+Each recipe declares `maturity` with one of four levels:
+
+- `day-zero` — initial config with minimal confidence.
+- `contributed` — provided by other Red Hat engineers, reviewed but not
+  independently tested on our infrastructure.
+- `validated` — tested on our silicon with benchmark evidence against ground
+  truth. Schema requires `benchmark_runs` and `image`.
+- `production` — validated and hardened for production use. Same schema
+  enforcement as `validated`.
+
+Use `day-zero` for brand-new or raw-intake recipes. Use `contributed` when
+a recipe comes from a trusted internal source but has not been independently
+tested on our infrastructure. Do not set `validated` or `production` without
+committed benchmark evidence.
+
 ## Ownership and source of truth
 
 For the initial release only, a contributor may open a PR containing raw YAML
