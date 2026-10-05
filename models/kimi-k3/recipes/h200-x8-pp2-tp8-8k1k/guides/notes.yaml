@@ -1,0 +1,44 @@
+schema_version: 1
+profile:
+  label: Kimi K3 throughput on two H200 nodes
+  headline: Contributed TP8×PP2 configuration with the Humming MoE backend; not independently validated on our infrastructure.
+  specs:
+    - {label: Checkpoint, source: "model.yaml#/huggingface_id"}
+    - {label: Hardware, source: "hardware_profile#/accelerators"}
+    - {label: Parallelism, source: "recipe.yaml#/serving/parallelism"}
+    - {label: Precision, source: "recipe.yaml#/quantization"}
+    - {label: Context and backend, source: "recipe.yaml#/serving/args"}
+decisions:
+  - subjects: [tensor parallelism, pipeline parallelism, moe backend]
+    why: Preserve the submitted TP8×PP2 Humming configuration without asserting performance superiority.
+  - subjects: [NCCL_IB_HCA, NCCL_IB_GID_INDEX]
+    why: Preserve submitted RoCE settings; HCA and GID values require target-cluster verification.
+known_issues:
+  - issue: The RHOAI 3.5 LLMInferenceService is hand-authored and pinned, not independently deployment-tested.
+    impact: Pinning bypasses serving-flag and override merging; controller compatibility and runtime behavior require target-cluster checks.
+    mitigation: Follow guides/rhoai.md and keep the pin synchronized with recipe.yaml. Verify server-side dry-run and reconciled leader/worker pods before benchmarking.
+  - issue: Upstream vLLM main supports Kimi K3 and Humming SITU, but the legacy bootstrap is not compatible with its refactored Humming implementation.
+    impact: Source support does not establish compatibility of a specific container or this TP8×PP2 configuration. The retained bootstrap is specific to the submitted custom image.
+    mitigation: >-
+      Before switching images, verify a main-derived image digest and remove or
+      adapt the legacy bootstrap. Source inspection used upstream commit
+      f9c9e8ac248cd19c1e1826693761e69b0eec1822 (2026-10-05):
+      https://github.com/vllm-project/vllm/blob/f9c9e8ac248cd19c1e1826693761e69b0eec1822/vllm/model_executor/layers/quantization/utils/humming/activation.py
+  - issue: The custom kimi-k3 image tag has no verified registry digest or upstream release mapping.
+    impact: Image availability and compatibility remain unverified; this is not a standard versioned vLLM release claim.
+    mitigation: Confirm the tag and record an immutable digest before deployment; do not substitute a newer image without testing Kimi and Humming support.
+  - issue: Humming requires the Kimi-specific MoEActivation.SITU allowlist patch.
+    impact: The bootstrap modifies site-packages as root, which may be denied by restricted cluster security policies.
+    mitigation: Prefer a verified image containing the fix; otherwise obtain explicit approval for the required security policy. The overlay checks that the insertion succeeded.
+  - issue: The submitted model storage estimate is approximately 1.56 TB per node on local NVMe.
+    impact: Each node needs a complete local copy; storage capacity and placement require verification.
+    mitigation: Stage and verify /mnt/local/kimi-k3/models/Kimi-K3 on both selected nodes before deployment.
+  - issue: The reported source sweep used 1000 input and 1000 output tokens; its artifacts are not committed here.
+    impact: No published throughput metric or validation claim can be made for the target GuideLLM 8K/1K workload.
+    mitigation: Commit sanitized benchmark provenance and results before promoting maturity. Verify the context limit accommodates the complete target request.
+quickstart:
+  - {step: Prepare, detail: Install the LeaderWorkerSet controller and RDMA device plugin; stage the model on both nodes and verify image availability and security permissions.}
+  - {step: Network, detail: Verify target-cluster HCA and GID settings symmetrically; see recipe.yaml and the referenced hardware profile.}
+  - {step: Render, detail: Run tools/render.py for this recipe; config/ is an overlay and must not be applied directly.}
+  - {step: Deploy, detail: "Apply manifests/vllm-kimi-k3/leaderworkerset.yaml, which contains both the LeaderWorkerSet and leader-only Service."}
+  - {step: Verify, detail: "Wait for leader health, query /v1/models through the Service, then benchmark and record sanitized artifacts."}

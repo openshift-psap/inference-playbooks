@@ -17,7 +17,7 @@ spec:
       spec:
         containers:
           - name: vllm
-            image: vllm/vllm-openai:kimi-k3
+            image: docker.io/vllm/vllm-openai:kimi-k3
             imagePullPolicy: IfNotPresent
             command: ["/bin/bash", "-c"]
             args:
@@ -90,7 +90,7 @@ spec:
       spec:
         containers:
           - name: vllm
-            image: vllm/vllm-openai:kimi-k3
+            image: docker.io/vllm/vllm-openai:kimi-k3
             imagePullPolicy: IfNotPresent
             command: ["/bin/bash", "-c"]
             args:

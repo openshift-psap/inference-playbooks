@@ -1,0 +1,152 @@
+# Hand-authored pinned input: the renderer preserves this file verbatim.
+# Contributed configuration, prepared for RHOAI 3.5 testing, not validated.
+# Requires LLMInferenceService v1alpha2 and pipeline-parallel controller support,
+# LWS, eight H200 GPUs and rdma/ib on each of two nodes, staged local weights,
+# and a policy allowing root plus hostPath. No cluster permissions are created.
+# The custom image tag and 8192 context limit still require confirmation.
+# Go-template expressions below are resolved by the KServe controller.
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: kimi-k3-pp2
+spec:
+  model:
+    uri: hf://moonshotai/Kimi-K3
+    name: kimi-k3
+  storageInitializer:
+    enabled: false
+  replicas: 1
+  parallelism:
+    pipeline: 2
+    tensor: 8
+  template:
+    securityContext: &pod_security
+      runAsNonRoot: false
+      runAsUser: 0
+      seccompProfile:
+        type: RuntimeDefault
+    containers:
+      - name: main
+        image: docker.io/vllm/vllm-openai:kimi-k3
+        imagePullPolicy: IfNotPresent
+        command: [/bin/bash, -c]
+        args:
+          - |
+            set -euo pipefail
+            humming=/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py
+            grep -q 'MoEActivation.SITU' "$humming" || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' "$humming"
+            grep -q 'MoEActivation.SITU' "$humming"
+            read -r -a serving_args <<< "$VLLM_ADDITIONAL_ARGS"
+            tls_args=()
+            {{ if .GlobalConfig.EnableTLS }}
+            tls_args=(--enable-ssl-refresh --ssl-certfile /var/run/kserve/tls/tls.crt --ssl-keyfile /var/run/kserve/tls/tls.key)
+            {{ end }}
+            exec vllm serve /models/Kimi-K3 \
+              --served-model-name kimi-k3 "publishers/{{ .ObjectMeta.Namespace }}/models/kimi-k3" \
+              --tensor-parallel-size 8 \
+              --pipeline-parallel-size 2 \
+              --nnodes 2 \
+              --node-rank 0 \
+              --master-addr 0.0.0.0 \
+              --port 8000 \
+              "${tls_args[@]}" "${serving_args[@]}"
+        env: &serving_env
+          # Keep these flags in sync with recipe.yaml; pinning bypasses merging.
+          - name: VLLM_ADDITIONAL_ARGS
+            value: >-
+              --trust-remote-code
+              --attention-backend FLASHMLA
+              --moe-backend humming
+              --gpu-memory-utilization 0.90
+              --max-num-seqs 256
+              --max-model-len 8192
+              --max-num-batched-tokens 4096
+              --disable-custom-all-reduce
+              --no-enable-flashinfer-autotune
+              --enable-auto-tool-choice
+              --tool-call-parser kimi_k3
+              --reasoning-parser kimi_k3
+          - {name: NCCL_IB_HCA, value: mlx5_5}
+          - {name: NCCL_IB_GID_INDEX, value: "3"}
+          - {name: NCCL_DMABUF_ENABLE, value: "0"}
+          - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
+          - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
+          - {name: HF_HOME, value: /models/hf}
+        ports:
+          - {name: http, containerPort: 8000, protocol: TCP}
+        resources: &serving_resources
+          requests:
+            cpu: "32"
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+            rdma/ib: "1"
+          limits:
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+            rdma/ib: "1"
+        securityContext: &container_security
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: '{{ if .GlobalConfig.EnableTLS }}HTTPS{{else}}HTTP{{- end }}'
+          periodSeconds: 10
+          failureThreshold: 720
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: '{{ if .GlobalConfig.EnableTLS }}HTTPS{{else}}HTTP{{- end }}'
+          periodSeconds: 10
+          timeoutSeconds: 5
+        volumeMounts: &serving_mounts
+          - {name: model, mountPath: /models}
+          - {name: dshm, mountPath: /dev/shm}
+          - {name: tls-certs, mountPath: /var/run/kserve/tls, readOnly: true}
+    volumes: &serving_volumes
+      - name: model
+        hostPath:
+          path: /mnt/local/kimi-k3/models
+          type: Directory
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+      - name: tls-certs
+        secret:
+          secretName: '{{ ChildName .ObjectMeta.Name `-kserve-self-signed-certs` }}'
+          optional: true
+  worker:
+    securityContext: *pod_security
+    containers:
+      - name: main
+        image: docker.io/vllm/vllm-openai:kimi-k3
+        imagePullPolicy: IfNotPresent
+        command: [/bin/bash, -c]
+        args:
+          - |
+            set -euo pipefail
+            : "${LWS_WORKER_INDEX:?LWS worker rank is required}"
+            : "${LWS_LEADER_ADDRESS:?LWS leader address is required}"
+            humming=/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py
+            grep -q 'MoEActivation.SITU' "$humming" || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' "$humming"
+            grep -q 'MoEActivation.SITU' "$humming"
+            read -r -a serving_args <<< "$VLLM_ADDITIONAL_ARGS"
+            exec vllm serve /models/Kimi-K3 \
+              --served-model-name kimi-k3 "publishers/{{ .ObjectMeta.Namespace }}/models/kimi-k3" \
+              --tensor-parallel-size 8 \
+              --pipeline-parallel-size 2 \
+              --nnodes 2 \
+              --node-rank "$LWS_WORKER_INDEX" \
+              --master-addr "$LWS_LEADER_ADDRESS" \
+              --headless \
+              --port 8000 \
+              "${serving_args[@]}"
+        env: *serving_env
+        resources: *serving_resources
+        securityContext: *container_security
+        volumeMounts: *serving_mounts
+    volumes: *serving_volumes

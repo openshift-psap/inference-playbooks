@@ -1,0 +1,71 @@
+schema_version: 4
+recipe_id: kimi-k3-vllm-h200-pp2-tp8
+model_id: kimi-k3
+platforms:
+  - stack: vllm
+    version: kimi-k3
+    overrides: platforms/vllm-kimi-k3.yaml
+  - stack: rhoai
+    version: "3.5"
+    overrides: platforms/rhoai-3.5.yaml
+    pinned_manifest: manifests/rhoai-3.5/llmisvc.yaml
+    pinned_reason: Custom Kimi SITU bootstrap, local hostPath storage, and explicit pipeline leader/worker startup are not supported by the RHOAI template. Prepared for testing; not independently validated.
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-roce-r1.yaml
+workload_profile: guidellm-8k1k
+deployment_mode: pp2-tp8
+optimization_intent: throughput
+maturity: contributed
+quantization: MXFP4
+
+serving:
+  image: docker.io/vllm/vllm-openai:kimi-k3
+  model: /models/Kimi-K3
+  parallelism:
+    mode: tp+pp
+    tp: 8
+    pp: 2
+  resources:
+    requests:
+      cpu: "32"
+      memory: 512Gi
+      nvidia.com/gpu: "8"
+      rdma/ib: "1"
+    limits:
+      memory: 512Gi
+      nvidia.com/gpu: "8"
+      rdma/ib: "1"
+  port: 8000
+  config_overrides: true
+  decode:
+    worker_args:
+      - {flag: --port, value: "8000", required: true, why: Preserve the port in the submitted worker command.}
+  env:
+    - {name: NCCL_IB_HCA, value: mlx5_5}
+    - {name: NCCL_IB_GID_INDEX, value: "3"}
+    - {name: NCCL_DMABUF_ENABLE, value: "0"}
+    - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
+    - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
+    - {name: HF_HOME, value: /models/hf}
+  args:
+    - {flag: --trust-remote-code, required: true, why: Retained from the submitted Kimi startup command.}
+    - {flag: --attention-backend, value: FLASHMLA, required: true, why: Attention backend in the submitted configuration.}
+    - {flag: --moe-backend, value: humming, required: true, why: MoE backend in the submitted configuration.}
+    - {flag: --gpu-memory-utilization, value: "0.90", required: true, why: Retain the submitted memory budget.}
+    - {flag: --max-num-seqs, value: "256", required: true, why: Retain the submitted scheduler setting.}
+    - {flag: --max-model-len, value: "8192", required: true, why: Retain the submitted context limit; the target workload still needs validation.}
+    - {flag: --max-num-batched-tokens, value: "4096", required: true, why: Retain the submitted batching budget.}
+    - {flag: --disable-custom-all-reduce, required: true, why: Retained from the submitted multi-node configuration.}
+    - {flag: --no-enable-flashinfer-autotune, required: true, why: Retained from the submitted backend configuration.}
+    - {flag: --enable-auto-tool-choice, required: true, why: Enable the submitted tool-calling configuration.}
+    - {flag: --tool-call-parser, value: kimi_k3, required: true, why: Kimi-specific parser in the submitted configuration.}
+    - {flag: --reasoning-parser, value: kimi_k3, required: true, why: Kimi-specific parser in the submitted configuration.}
+
+deployment:
+  scope: multi-node
+  storage:
+    type: hostpath
+    why: Each node uses a pre-staged local copy of the model weights.
+  manifests:
+    - {path: manifests/vllm-kimi-k3/leaderworkerset.yaml, kind: LeaderWorkerSet, generated: true}
+    - {path: manifests/rhoai-3.5/llmisvc.yaml, kind: LLMInferenceService, generated: false}
+notes: guides/notes.yaml
