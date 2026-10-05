@@ -214,7 +214,7 @@ def affected_recipes(repo: Path, base: str, head: str, cached: bool) -> dict[str
     recipes = recipe_directories(repo, candidate_revision)
     changed = changed_paths(repo, base, head, cached)
     global_change = any(
-        any(path.startswith(prefix) for prefix in ("tools/", "schema/", ".github/workflows/"))
+        any(path.startswith(prefix) for prefix in ("tools/", "schema/", "templates/", "engine-versions/", ".github/workflows/", ".pre-commit-config.yaml"))
         for _, paths in changed
         for path in paths
     )
@@ -228,10 +228,14 @@ def affected_recipes(repo: Path, base: str, head: str, cached: bool) -> dict[str
         for path in paths
         if path == recipe or path.startswith(f"{recipe}/")
     }
-    changed_profiles = {path for _, path in profile_paths(changed)}
+    changed_profiles = {path for status, path in profile_paths(changed) if not status.startswith("A")}
     for recipe in recipes:
         recipe_text = git_file(repo, candidate_revision, f"{recipe}/recipe.yaml")
-        if any(profile in recipe_text for profile in changed_profiles):
+        recipe_data = load_unique_yaml(recipe_text)
+        model_path = str(Path(recipe).parent.parent / "model.yaml")
+        if recipe_data.get("hardware_profile") in changed_profiles or any(
+            model_path in paths for _, paths in changed
+        ):
             affected.add(recipe)
     return {"all": False, "recipes": sorted(affected)}
 

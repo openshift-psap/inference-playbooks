@@ -364,6 +364,7 @@ class RenderRecipeIntegrationTests(unittest.TestCase):
 
         (self.tmpdir / "schema").mkdir()
         import shutil
+        shutil.copytree(REPO / "templates", self.tmpdir / "templates")
         for schema_file in (REPO / "schema").glob("*.schema.json"):
             shutil.copy2(schema_file, self.tmpdir / "schema")
         for schema_file in (REPO / "schema").glob("*.yaml"):

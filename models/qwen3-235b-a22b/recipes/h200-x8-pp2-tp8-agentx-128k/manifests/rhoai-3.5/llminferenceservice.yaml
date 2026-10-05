@@ -1,0 +1,108 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: qwen3-235b-a22b-fp8-pp2-tp8-rhoai
+spec:
+  model:
+    uri: pvc://qwen3-235b-weights
+    name: RedHatAI/Qwen3-235B-A22B-Instruct-FP8-dynamic
+  storageInitializer:
+    enabled: false
+  replicas: 1
+  parallelism:
+    pipeline: 2
+    tensor: 8
+  template:
+    containers:
+      - name: main
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: HF_TOKEN
+          - name: VLLM_ADDITIONAL_ARGS
+            value: >-
+              --kv-cache-dtype fp8
+              --max-model-len 131072
+              --enable-prefix-caching
+              --enable-chunked-prefill
+              --tool-call-parser qwen25
+              --reasoning-parser qwen3
+              --enable-auto-tool-choice
+              --distributed-executor-backend mp
+          - name: VLLM_ENGINE_ITERATION_TIMEOUT_S
+            value: "120"
+          - name: NCCL_DEBUG
+            value: "INFO"
+        resources:
+          requests:
+            cpu: "32"
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+          limits:
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          failureThreshold: 720
+          periodSeconds: 10
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: models
+            mountPath: /mnt/models
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+      - name: models
+        persistentVolumeClaim:
+          claimName: qwen3-235b-weights
+  worker:
+    containers:
+      - name: main
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: HF_TOKEN
+          - name: VLLM_ADDITIONAL_ARGS
+            value: >-
+              --kv-cache-dtype fp8
+              --max-model-len 131072
+              --enable-prefix-caching
+              --enable-chunked-prefill
+              --tool-call-parser qwen25
+              --reasoning-parser qwen3
+              --enable-auto-tool-choice
+              --distributed-executor-backend mp
+          - name: VLLM_ENGINE_ITERATION_TIMEOUT_S
+            value: "120"
+          - name: NCCL_DEBUG
+            value: "INFO"
+        resources:
+          requests:
+            cpu: "32"
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+          limits:
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: models
+            mountPath: /mnt/models
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+      - name: models
+        persistentVolumeClaim:
+          claimName: qwen3-235b-weights

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/engine-index.schema.json",
+  "title": "Default runtime release-engine index",
+  "type": "object",
+  "required": ["schema_version", "purpose", "variants", "source", "releases"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "purpose": {"const": "default-runtime-engine-resolution"},
+    "variants": {"const": ["cuda", "rocm", "cpu"]},
+    "source": {
+      "type": "object",
+      "required": ["title", "export", "sha256", "header_row", "component_row"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "export": {"const": "2026.html"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "header_row": {"type": "integer", "minimum": 1},
+        "component_row": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "releases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["version", "vllm_version", "source_column"],
+        "properties": {
+          "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-ea[1-9][0-9]*)?$"},
+          "vllm_version": {"type": ["string", "null"], "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+          "source_column": {"type": "string", "pattern": "^[A-Z]+$"},
+          "images": {
+            "description": "Optional known default image references; no digest is required. Informational provenance, not a prerequisite for release-based resolution.",
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[^/]+[.:][^/]*/.+"}
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

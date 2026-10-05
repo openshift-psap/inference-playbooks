@@ -1,0 +1,32 @@
+# Release mapping for contributor-identified default CUDA/ROCm/CPU runtimes.
+# Custom images require their own declaration. This is not release availability
+# evidence or inspection of a particular image.
+schema_version: 1
+purpose: default-runtime-engine-resolution
+variants: [cuda, rocm, cpu]
+source:
+  title: RHAI Release to Component Version Mapping — 2026
+  export: 2026.html
+  sha256: d7c91384d5b0128b35456da73037f16c3afa4f4602e5c8bb55a8d86c171159fd
+  header_row: 1
+  component_row: 12
+releases:
+  - {version: 3.3.0, vllm_version: 0.13.0, source_column: B}
+  - {version: 3.3.1, vllm_version: 0.13.0, source_column: C}
+  - {version: 3.3.2, vllm_version: null, source_column: D}
+  - {version: 3.3.3, vllm_version: 0.13.0, source_column: E}
+  - {version: 3.3.5, vllm_version: 0.13.0, source_column: F}
+  - {version: 3.3.6, vllm_version: 0.13.0, source_column: G}
+  - {version: 3.4.0-ea1, vllm_version: 0.14.1, source_column: H}
+  - {version: 3.4.0-ea2, vllm_version: 0.16.0, source_column: I}
+  - {version: 3.4.0, vllm_version: 0.18.0, source_column: J}
+  - {version: 3.4.1, vllm_version: 0.18.0, source_column: K}
+  - {version: 3.4.2, vllm_version: 0.18.0, source_column: L}
+  - {version: 3.4.3, vllm_version: 0.18.0, source_column: M}
+  - {version: 3.4.5, vllm_version: 0.18.0, source_column: N}
+  - {version: 3.5.0-ea1, vllm_version: 0.19.1, source_column: O}
+  - {version: 3.5.0-ea2, vllm_version: 0.21.0, source_column: P}
+  - {version: 3.5.0, vllm_version: 0.24.0, source_column: Q}
+  - {version: 3.5.1, vllm_version: 0.24.0, source_column: R}
+  - {version: 3.6.0-ea1, vllm_version: 0.26.0, source_column: S}
+  - {version: 3.6.0-ea2, vllm_version: 0.28.0, source_column: T}

@@ -71,6 +71,20 @@
       },
       "additionalProperties": false
     },
+    "image_usage": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["default", "custom"]},
+        "variant": {"enum": ["cuda", "rocm", "cpu", "tpu", "spyre", "neuron", "gaudi", "omni"]},
+        "note": {"type": "string", "pattern": "\\S"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "custom"}}}, "then": {"required": ["note"]}},
+        {"if": {"properties": {"kind": {"const": "default"}}}, "then": {"required": ["variant"]}}
+      ],
+      "additionalProperties": false
+    },
     "probe_override": {
       "type": "object",
       "properties": {
@@ -123,6 +137,8 @@
           "type": "string",
           "description": "Fully qualified container image reference. Must match image.recommended.ref when the image lifecycle block is present."
         },
+        "engine": {"$ref": "engine-version.schema.json"},
+        "image_usage": {"$ref": "#/$defs/image_usage"},
         "model": {
           "type": "string",
           "description": "HuggingFace model ID passed to vllm serve"
