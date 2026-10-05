@@ -5,8 +5,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from tools.ci_baseline import git, resolve_baseline
+from tools.ci_baseline import git, github_pr_head, resolve_baseline
 from tools.recipe_evidence import affected_recipes, changed_paths
 
 REPO = Path(__file__).resolve().parents[1]
@@ -88,6 +89,57 @@ class CiBaselineTests(unittest.TestCase):
     def test_rejects_other_event(self):
         with self.assertRaisesRegex(ValueError, "unsupported"):
             self.resolve(event_name="workflow_dispatch")
+
+    def test_empty_fork_payload_uses_independent_head_lookup(self):
+        lookup = Mock(return_value=self.pr)
+        self.assertEqual(self.resolve(event={}, head_lookup=lookup),
+                         {"base": self.main, "head": self.head})
+        lookup.assert_called_once_with(17)
+
+    def test_partial_payload_uses_lookup_without_requiring_number(self):
+        self.assertEqual(self.resolve(event={"pull_request": {"head": {}}},
+                                      head_lookup=lambda number: self.pr)["base"], self.main)
+        self.assertEqual(self.resolve(event={"pull_request": {"head": {"sha": self.pr}}})["base"], self.main)
+
+    def test_event_head_avoids_live_lookup_even_after_pr_advances(self):
+        lookup = Mock(side_effect=AssertionError("event-bound head must take precedence"))
+        self.assertEqual(self.resolve(head_lookup=lookup)["head"], self.head)
+        lookup.assert_not_called()
+
+    def test_empty_payload_cannot_skip_identity_check(self):
+        with self.assertRaisesRegex(ValueError, "requires a GitHub metadata lookup"):
+            self.resolve(event={})
+        with self.assertRaisesRegex(ValueError, "PR may have advanced"):
+            self.resolve(event={}, head_lookup=lambda number: self.stale)
+
+    def test_wrong_event_number_is_rejected(self):
+        self.event["number"] = 18
+        with self.assertRaisesRegex(ValueError, "PR number differs"):
+            self.resolve()
+
+    def test_lookup_reads_explicit_github_repository_not_origin(self):
+        with patch("tools.ci_baseline.git", return_value=f"{self.pr}\trefs/pull/17/head") as run:
+            self.assertEqual(github_pr_head(self.repo, "https://github.com", "owner/repo", 17), self.pr)
+        run.assert_called_once_with(self.repo, "ls-remote", "--exit-code",
+                                    "https://github.com/owner/repo.git", "refs/pull/17/head")
+
+    def test_lookup_rejects_invalid_or_missing_identity(self):
+        for response in ["", f"{self.pr}\trefs/pull/18/head", "invalid\trefs/pull/17/head",
+                         f"{self.pr}\trefs/pull/17/head\n{self.pr}\trefs/pull/17/head"]:
+            with self.subTest(response=response), patch("tools.ci_baseline.git", return_value=response):
+                with self.assertRaises(ValueError):
+                    github_pr_head(self.repo, "https://github.com", "owner/repo", 17)
+        with patch("tools.ci_baseline.git", side_effect=subprocess.CalledProcessError(2, "git")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                github_pr_head(self.repo, "https://github.com", "owner/repo", 17)
+
+    def test_lookup_rejects_untrusted_url_shapes(self):
+        for server, repository in [("http://github.com", "owner/repo"),
+                                   ("https://user:pass@github.com", "owner/repo"),
+                                   ("https://github.com/path", "owner/repo"),
+                                   ("https://github.com", "../repo")]:
+            with self.subTest(server=server, repository=repository), self.assertRaises(ValueError):
+                github_pr_head(self.repo, server, repository, 17)
 
     def test_cli_emits_shared_comparison_outputs(self):
         event_path = self.repo / "event.json"
