@@ -27,7 +27,7 @@ spec:
                   --pipeline-parallel-size 2 \
                   --nnodes 2 \
                   --node-rank 0 \
-                  --master-addr 0.0.0.0 \
+                  --master-addr $(LWS_LEADER_ADDRESS) \
                   --port 8000 \
                   --trust-remote-code \
                   --attention-backend FLASHMLA \
@@ -55,10 +55,12 @@ spec:
               requests:
                 cpu: "32"
                 memory: 512Gi
-                composite.dra/gpu-nic-pair: "8"
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
               limits:
                 memory: 512Gi
-                composite.dra/gpu-nic-pair: "8"
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
             startupProbe:
               httpGet: {path: /health, port: 8000}
               periodSeconds: 10
@@ -124,18 +126,12 @@ spec:
               requests:
                 cpu: "32"
                 memory: 512Gi
-                composite.dra/gpu-nic-pair: "8"
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
               limits:
                 memory: 512Gi
-                composite.dra/gpu-nic-pair: "8"
-            startupProbe:
-              httpGet: {path: /health, port: 8000}
-              periodSeconds: 10
-              failureThreshold: 720
-            readinessProbe:
-              httpGet: {path: /health, port: 8000}
-              periodSeconds: 10
-              timeoutSeconds: 5
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
             volumeMounts:
               - {name: model, mountPath: /models}
               - {name: dshm, mountPath: /dev/shm}
