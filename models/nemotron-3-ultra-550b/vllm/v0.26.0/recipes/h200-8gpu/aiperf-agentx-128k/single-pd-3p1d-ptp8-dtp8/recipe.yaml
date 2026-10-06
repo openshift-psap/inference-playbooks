@@ -1,0 +1,53 @@
+schema_version: 3
+recipe_id: nemotron-3-ultra-550b-h200-pd-split
+model_id: nemotron-3-ultra-550b
+platform:
+  stack: vllm
+  version: v0.26.0
+hardware_profile: hardware-profiles/h200-8gpu.yaml
+workload_profile: aiperf-agentx-128k
+deployment_mode: single-pd-3p1d-ptp8-dtp8
+optimization_intent: latency
+maturity: day-zero
+
+description: |
+  Nemotron-3-Ultra-550B deployed on H200 cluster using Prefill/Decode (PD) disaggregation.
+
+  **Workload**: Multi-user agentic scenario simulating a large software project being collaboratively
+  developed by multiple users. Each user session runs a 540-turn conversation with:
+  - Initial context: 160K tokens (project codebase, documentation, chat history)
+  - Per-turn input: 1,500 ± 1,200 tokens (code snippets, questions, clarifications)
+  - Per-turn output: 425 ± 825 tokens (code suggestions, explanations, analysis)
+  - Turn delay: 15s ± 55s (simulates user think time and interactions)
+  - Prefix caching: 3,000 tokens (project system prompt reused across sessions)
+  - Concurrent users: 30
+
+  **Configuration**: Prefill/Decode split with tensor parallelism (TP8 per pod):
+  - 3 prefill pods (24 GPUs) — encode user inputs and context into KV cache
+  - 1 decode pod (8 GPUs) — generate responses one token at a time
+  - EPP scheduler dynamically routes requests based on prefix cache hits, KV pressure, and queue depth
+  - FP8 KV cache reduces memory footprint by 50%
+
+  **Optimization target**: Minimize Time-to-First-Token (TTFT) for responsive user experience in
+  collaborative workflows. PD split allows prefill to handle large contexts efficiently while
+  decode remains dedicated to low-latency token generation.
+
+deployment:
+  scope: multi-node
+  parallelism:
+    tensor: 8
+  manifests:
+    - path: "manifests/nemotron-3-ultra-550b-h200-pd-prefill.yaml"
+      kind: "LeaderWorkerSet"
+    - path: "manifests/nemotron-3-ultra-550b-h200-pd-decode.yaml"
+      kind: "LeaderWorkerSet"
+    - path: "manifests/nemotron-3-ultra-550b-h200-pd-epp-configmap.yaml"
+      kind: "ConfigMap"
+
+benchmark_runs: []
+
+tags:
+  - long-context
+  - agentic
+  - multi-user
+  - disaggregation

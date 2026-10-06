@@ -1,0 +1,228 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: prefill-tp8
+  namespace: serveit
+  labels:
+    app: llm-d
+    component: serveit-test
+    test-id: single-pd-3p1d-ptp8-dtp8
+    architecture: pd
+    role: prefill
+spec:
+  replicas: 3
+  leaderWorkerTemplate:
+    size: 1
+    leaderTemplate:
+      metadata:
+        labels:
+          llm-d.ai/inferenceServing: "true"
+          llm-d.ai/inference-serving: "true"
+          llm-d.ai/model: RedHatAI-NVIDIA-Nemotron-3-Ultra-550B-A55B-FP8-block
+          llm-d.ai/role: prefill
+          llm-d.ai/guide: serveit-pd
+          llm-d.ai/test-id: single-pd-3p1d-ptp8-dtp8
+      spec:
+        serviceAccountName: llm-d-modelserver
+        tolerations:
+          - key: node.kubernetes.io/disk-pressure
+            operator: Exists
+            effect: NoSchedule
+          - key: node.kubernetes.io/memory-pressure
+            operator: Exists
+            effect: NoSchedule
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 2Gi
+          - name: hf-cache
+            hostPath:
+              path: /mnt/local/model-cache
+              type: DirectoryOrCreate
+          - name: jit-cache
+            emptyDir: {}
+          - name: rdma-script
+            configMap:
+              name: rdma-discovery-script
+              defaultMode: 0755
+          - name: dev-infiniband
+            hostPath:
+              path: /dev/infiniband
+        containers:
+          - name: vllm
+            image: vllm/vllm-openai:v0.26.0
+            command:
+              - /bin/bash
+              - -c
+            args:
+              - |
+                ulimit -l unlimited || true
+
+                # Pin to allocated GPUs (privileged pods see all host GPUs)
+                if [ -d /var/run/nvidia-container-devices ]; then
+                  GPU_INDICES=""
+                  for uuid in $(ls /var/run/nvidia-container-devices/); do
+                    idx=$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader | grep "$uuid" | cut -d',' -f1 | tr -d ' ')
+                    [ -n "$idx" ] && GPU_INDICES="${GPU_INDICES:+$GPU_INDICES,}$idx"
+                  done
+                  if [ -n "$GPU_INDICES" ]; then
+                    export CUDA_VISIBLE_DEVICES="$GPU_INDICES"
+                    echo "--- CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES ---"
+                  fi
+                fi
+
+                # Source RDMA discovery script if available
+                if [ -f /scripts/discover_ib_hca.sh ]; then
+                  source /scripts/discover_ib_hca.sh
+                  echo "--- Loaded RDMA environment ---"
+                fi
+
+                echo "========================================="
+                echo "ServeIt Studio Test: single-pd-3p1d-ptp8-dtp8"
+                echo "Architecture: PD (Prefill)"
+                echo "Model: RedHatAI/NVIDIA-Nemotron-3-Ultra-550B-A55B-FP8-block"
+                echo "TP: 8"
+                echo "NCCL_IB_HCA: ${NCCL_IB_HCA}"
+                echo "UCX_NET_DEVICES: ${UCX_NET_DEVICES:-not set}"
+                echo "NCCL_SOCKET_IFNAME: ${NCCL_SOCKET_IFNAME:-not set}"
+                echo "========================================="
+
+                if [ -z "${UCX_NET_DEVICES:-}" ] || [ -z "${NCCL_IB_HCA:-}" ]; then
+                  echo "FATAL: RDMA env vars not set (UCX_NET_DEVICES=${UCX_NET_DEVICES:-}, NCCL_IB_HCA=${NCCL_IB_HCA:-}). Sleeping to prevent node crash."
+                  sleep infinity
+                fi
+
+                # Patch vllm#43396: FP8 MoE CUTLASS OOB at batch 8192
+                _MOE_FILE=$(python3 -c "import vllm; print(vllm.__path__[0])" 2>/dev/null)/model_executor/layers/fused_moe/moe_permute_unpermute.py
+                if [ -f "$_MOE_FILE" ] && grep -q 'a1q_scale\[permuted_idx.clamp' "$_MOE_FILE"; then
+                  sed -i 's|a1q_scale = a1q_scale\[permuted_idx.clamp(max=n_token \* topk - 1) // topk\]|scale_idx = permuted_idx.clamp(max=n_token * topk - 1) // topk; scale_idx = scale_idx.clamp(max=a1q_scale.shape[0] - 1); a1q_scale = a1q_scale[scale_idx]|' "$_MOE_FILE"
+                  echo "--- Applied vllm#43396 FP8 MoE patch ---"
+                fi
+
+                vllm serve RedHatAI/NVIDIA-Nemotron-3-Ultra-550B-A55B-FP8-block \
+                  --port 8000 \
+                  --trust-remote-code \
+                  --tensor-parallel-size 8 \
+                  --api-server-count 1 \
+                  --gpu-memory-utilization 0.95 \
+                  --kv-transfer-config '{"kv_connector":"MultiConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"connectors":[{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_connector_extra_config":{"bidirectional_kv_xfer":true}},{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"cpu_bytes_to_use":214748364800,"lazy_offload":true}}]}}' \
+                  --enable-expert-parallel \
+                  --max-model-len 262144 \
+                  --enable-prefix-caching \
+                  --kv-cache-dtype fp8 \
+                  --max-num-seqs 64 \
+                  --enable-auto-tool-choice \
+                  --tool-call-parser qwen3_coder \
+                  --model-loader-extra-config '{"enable_multithread_load": true, "num_threads": 96}' \
+                  --disable-uvicorn-access-log \
+                  || sleep infinity
+            env:
+              - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              - name: NCCL_IB_HCA
+                value: "mlx"
+              - name: HF_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: llm-d-hf-token
+                    key: HF_TOKEN
+                    optional: true
+              - name: HF_HOME
+                value: "/model-cache/huggingface"
+              - name: HF_HUB_CACHE
+                value: "/model-cache/huggingface"
+              - name: VLLM_SKIP_P2P_CHECK
+                value: "1"
+              - name: NVIDIA_GDRCOPY
+                value: "enabled"
+              - name: VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
+                value: "1"
+              - name: GLOO_SOCKET_IFNAME
+                value: "eth0"
+              - name: NCCL_SOCKET_IFNAME
+                value: "eth0"
+              - name: VLLM_USE_DEEP_GEMM
+                value: "0"
+              - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+                value: "1"
+              - name: NVSHMEM_REMOTE_TRANSPORT
+                value: "ibgda"
+              - name: NVSHMEM_IB_ENABLE_IBGDA
+                value: "true"
+              - name: NVSHMEM_DISABLE_CUDA_VMM
+                value: "0"
+              - name: NVSHMEM_SYMMETRIC_SIZE
+                value: "None"
+              - name: NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME
+                value: "eth0"
+              - name: VLLM_LOGGING_LEVEL
+                value: "ERROR"
+              - name: NCCL_DEBUG
+                value: "ERROR"
+              - name: TRITON_LIBCUDA_PATH
+                value: /usr/lib64
+              - name: CUDA_CACHE_PATH
+                value: /var/cache/vllm/cuda
+              - name: CCACHE_DIR
+                value: /var/cache/vllm/ccache
+              - name: VLLM_CACHE_ROOT
+                value: /var/cache/vllm/vllm
+              - name: FLASHINFER_WORKSPACE_BASE
+                value: /var/cache/vllm/flashinfer
+              - name: VLLM_NIXL_ABORT_REQUEST_TIMEOUT
+                value: "600"
+              - name: SHARED_STORAGE_PATH
+                value: "/data"
+              - name: TP_SIZE
+                value: "8"
+              - name: DP_SIZE
+                value: "1"
+              - name: DP_SIZE_LOCAL
+                value: "1"
+              - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                value: "120"
+              - name: VLLM_PREFIX_CACHE_RETENTION_INTERVAL
+                value: "0"
+              - name: VLLM_SSM_CONV_STATE_LAYOUT
+                value: "DS"
+            ports:
+              - containerPort: 8000
+                name: vllm
+              - containerPort: 5555
+                name: rpc
+            securityContext:
+              runAsUser: 0
+              privileged: true
+              capabilities:
+                add:
+                  - "IPC_LOCK"
+                  - "SYS_RAWIO"
+                  - "SYS_RESOURCE"
+            resources:
+              limits:
+                cpu: "45"
+                memory: "1711Gi"
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+              requests:
+                cpu: "45"
+                memory: "1711Gi"
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+            volumeMounts:
+              - name: dshm
+                mountPath: /dev/shm
+              - name: hf-cache
+                mountPath: /model-cache
+              - name: jit-cache
+                mountPath: /var/cache/vllm
+              - name: rdma-script
+                mountPath: /scripts
+              - name: dev-infiniband
+                mountPath: /dev/infiniband
+    workerTemplate:
+      spec:
+        containers: []
