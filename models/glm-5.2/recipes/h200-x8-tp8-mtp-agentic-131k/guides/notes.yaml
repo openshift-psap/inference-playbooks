@@ -1,0 +1,37 @@
+schema_version: 1
+profile:
+  label: GLM-5.2 single-node TP8/MTP
+  headline: Single-node TP8/MTP on RHOAI with a pre-populated model PVC; serving and benchmarks remain unvalidated.
+  specs:
+    - {label: Checkpoint, source: "recipe.yaml#/serving/model"}
+    - {label: Parallelism, source: "recipe.yaml#/serving/parallelism"}
+    - {label: Node scope, source: "recipe.yaml#/deployment/scope"}
+    - {label: Storage declaration, source: "recipe.yaml#/deployment/storage/pvc"}
+decisions:
+  - subjects: [single-node, TP8, MTP]
+    why: Prefill and decode share one eight-GPU node, with tensor parallelism across its GPUs and MTP speculative decoding.
+  - subjects: [RHOAI 3.5.0-GA, single-node support]
+    why: LLMInferenceService manages the single-node runtime. This configuration has not been independently runtime- or benchmark-validated.
+  - subjects: [custom image, image overlay, engine declaration]
+    why: The custom upstream image has an image-bound engine declaration. The image-only overlay supplies its container image field; engine provenance is linked in recipe.yaml serving.engine.source.
+  - subjects: [workload profile]
+    why: AIPerf AgentX 128K is the target benchmark workload; no committed benchmark runs are referenced.
+  - subjects: [hardware profile]
+    why: The capability profile describes the required accelerators and interconnect. Verify actual host CPU and memory availability against the resource requests before deployment.
+  - subjects: [model storage, shared memory, probes, served model alias]
+    why: A pre-populated PVC is mounted read-only at /mnt/models, separately from shared memory. The runtime overlay supplies the API alias and probes. See guides/storage.md for preparation, adaptation and TLS behavior.
+  - subjects: [maturity, benchmark evidence]
+    why: There are no committed benchmark runs for this configuration. Static checks and rendering do not establish serving correctness or performance.
+  - subjects: [speculative config encoding]
+    why: The runtime consumes additional arguments as shell text, so the platform override quotes the JSON payload to preserve its structure.
+known_issues:
+  - issue: Exact checkpoint storage preparation and GLM TP8/MTP runtime validation remain deployment prerequisites.
+    impact: Source validation and faithful rendering do not prove weights availability, schedulability, serving correctness or AgentX performance.
+    mitigation: Follow guides/storage.md, verify installed controller presets and namespace security, and record separate compliant evidence before any maturity promotion.
+quickstart:
+  - step: Prepare existing storage and access
+    detail: Follow guides/storage.md; choose the deployment namespace and a fully populated exact-checkpoint PVC. No PVC or downloader is provisioned here.
+  - step: Adapt and regenerate
+    detail: Keep recipe/config PVC names and any subpath or token-secret adaptation consistent, then validate, render and check drift without hand-editing generated files.
+  - step: Verify serving and benchmark
+    detail: Verify model loading, API and probe behavior, tool calling and MTP before measuring the target workload; source/schema checks alone do not establish these results.

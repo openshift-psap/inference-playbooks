@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../manifests/rhoai-3.5/llminferenceservice.yaml
+patches:
+  - path: image.yaml
+    target:
+      group: serving.kserve.io
+      version: v1alpha2
+      kind: LLMInferenceService
+      name: glm-5-2-fp8-h200-agentic
+  - path: runtime.yaml
+    target:
+      group: serving.kserve.io
+      version: v1alpha2
+      kind: LLMInferenceService
+      name: glm-5-2-fp8-h200-agentic

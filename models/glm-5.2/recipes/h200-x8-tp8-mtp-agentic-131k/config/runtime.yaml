@@ -1,0 +1,49 @@
+# Recipe-local JSON6902 customization, not a standalone deployment.
+# glm52-weights is a concrete example pre-populated PVC in the deployer's namespace.
+# Adapt this claimName and recipe.yaml deployment.storage.pvc.name together.
+# 16Gi memory-backed shared memory is separate from the read-only weights PVC.
+- op: test
+  path: /spec/template/containers/0/name
+  value: main
+- op: test
+  path: /spec/storageInitializer/enabled
+  value: false
+- op: add
+  path: /spec/model/name
+  value: glm-5.2-fp8
+- op: add
+  path: /spec/template/volumes/-
+  value:
+    name: model-weights
+    persistentVolumeClaim:
+      claimName: glm52-weights
+      readOnly: true
+- op: add
+  path: /spec/template/containers/0/volumeMounts/-
+  value:
+    name: model-weights
+    mountPath: /mnt/models
+    readOnly: true
+- op: add
+  path: /spec/template/containers/0/startupProbe
+  value:
+    httpGet:
+      path: /health
+      port: 8000
+    failureThreshold: 180
+    periodSeconds: 10
+- op: add
+  path: /spec/template/containers/0/readinessProbe
+  value:
+    httpGet:
+      path: /v1/models
+      port: 8000
+    periodSeconds: 10
+- op: test
+  path: /spec/template/volumes/0/name
+  value: dshm
+- op: add
+  path: /spec/template/volumes/0/emptyDir
+  value:
+    medium: Memory
+    sizeLimit: 16Gi

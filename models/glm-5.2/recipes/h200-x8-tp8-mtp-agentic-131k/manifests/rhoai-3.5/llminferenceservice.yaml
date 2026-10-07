@@ -1,0 +1,61 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: glm-5-2-fp8-h200-agentic
+spec:
+  model:
+    name: glm-5.2-fp8
+    uri: pvc://glm52-weights
+  parallelism:
+    tensor: 8
+  replicas: 1
+  storageInitializer:
+    enabled: false
+  template:
+    containers:
+    - env:
+      - name: HF_TOKEN
+        valueFrom:
+          secretKeyRef:
+            key: HF_TOKEN
+            name: hf-token
+      - name: VLLM_ADDITIONAL_ARGS
+        value: --kv-cache-dtype fp8 --max-model-len 131072 --enable-prefix-caching
+          --enable-chunked-prefill --tool-call-parser glm47 --reasoning-parser glm45
+          --enable-auto-tool-choice --speculative-config '{"method":"mtp","num_speculative_tokens":5}'
+      image: docker.io/vllm/vllm-openai:v0.24.0
+      name: main
+      readinessProbe:
+        httpGet:
+          path: /v1/models
+          port: 8000
+        periodSeconds: 10
+      resources:
+        limits:
+          memory: 512Gi
+          nvidia.com/gpu: "8"
+        requests:
+          cpu: "32"
+          memory: 512Gi
+          nvidia.com/gpu: "8"
+      startupProbe:
+        failureThreshold: 180
+        httpGet:
+          path: /health
+          port: 8000
+        periodSeconds: 10
+      volumeMounts:
+      - mountPath: /dev/shm
+        name: dshm
+      - mountPath: /mnt/models
+        name: model-weights
+        readOnly: true
+    volumes:
+    - emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+      name: dshm
+    - name: model-weights
+      persistentVolumeClaim:
+        claimName: glm52-weights
+        readOnly: true

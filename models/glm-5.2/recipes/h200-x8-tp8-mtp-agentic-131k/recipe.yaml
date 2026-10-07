@@ -1,0 +1,115 @@
+# Single-node TP8/MTP serving on RHOAI 3.5.0-GA.
+# Serving and benchmark behavior have not been independently validated.
+schema_version: 4
+recipe_id: glm-5.2-fp8_h200_agentic
+model_id: glm-5.2
+quantization: FP8
+platforms:
+  - stack: rhoai
+    version: "3.5"
+    overrides: platforms/rhoai-3.5.yaml
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+workload_profile: aiperf-agentx-128k  # Target workload; no committed benchmark evidence.
+deployment_mode: tp8-mtp
+optimization_intent: long-context agentic serving
+# No committed benchmark evidence is available for this configuration.
+maturity: day-zero
+
+serving:
+  image: docker.io/vllm/vllm-openai:v0.24.0
+  image_usage:
+    kind: custom
+    note: Upstream image override on RHOAI 3.5.0-GA; not the bundled default runtime.
+  engine:
+    name: vllm
+    version: "0.24.0"
+    image: docker.io/vllm/vllm-openai:v0.24.0
+    source: https://github.com/vllm-project/vllm/releases/tag/v0.24.0
+  # The TP RHOAI template omits image; the local image-only overlay supplies it.
+  config_overrides: true
+  model: zai-org/GLM-5.2-FP8
+  served_model_name: glm-5.2-fp8
+  parallelism:
+    mode: tp
+    tp: 8
+  resources:
+    requests:
+      cpu: "32"
+      memory: 512Gi
+      nvidia.com/gpu: "8"
+    limits:
+      memory: 512Gi
+      nvidia.com/gpu: "8"
+  port: 8000
+  probes:
+    startup:
+      path: /health
+      port: 8000
+      failure_threshold: 180
+      period_seconds: 10
+      why: Startup budget for model loading; cold-load duration is unverified.
+    readiness:
+      path: /v1/models
+      port: 8000
+      period_seconds: 10
+  args:
+    - flag: --kv-cache-dtype
+      value: fp8
+      required: true
+      why: FP8 KV-cache configuration for the declared context limit.
+    - flag: --max-model-len
+      value: "131072"
+      required: true
+      why: Context limit for long-context agentic requests.
+    - flag: --enable-prefix-caching
+      required: true
+      why: Enable caching of repeated prompt prefixes; performance is unvalidated.
+    - flag: --enable-chunked-prefill
+      required: true
+      why: Enable chunked prefill for long prompts alongside decoding.
+    - flag: --speculative-config
+      value: '{"method":"mtp","num_speculative_tokens":5}'
+      required: true
+      why: MTP speculative decoding with five speculative tokens.
+    - flag: --tool-call-parser
+      value: glm47
+      required: true
+      why: Parse model-generated tool calls with glm47.
+    - flag: --reasoning-parser
+      value: glm45
+      required: true
+      why: Separate reasoning output with glm45.
+    - flag: --enable-auto-tool-choice
+      required: true
+      why: Enable model-directed tool selection.
+
+features:
+  tool_calling: true
+  speculative_decoding: mtp
+  reasoning_parser: glm45
+  prefix_caching: true
+  kv_cache_dtype: fp8
+
+deployment:
+  scope: single-node
+  status:
+    state: needs-verification
+    note: >-
+      Single-node RHOAI configuration with a custom image, pre-populated model PVC
+      and separate memory-backed shared memory. Deployment prerequisites,
+      GLM TP8/MTP serving and benchmarks have not been independently validated.
+  storage:
+    type: pvc
+    pvc:
+      # Concrete example existing PVC; adapt together with config/runtime.yaml.
+      name: glm52-weights
+    why: >-
+      Pre-populated exact FP8 checkpoint mounted read-only at /mnt/models.
+      PVC name, storage class, access mode and capacity are deployment-selected;
+      no PVC is provisioned and no universal 800Gi or RWX requirement is imposed.
+  manifests:
+    - path: manifests/rhoai-3.5/llminferenceservice.yaml
+      kind: LLMInferenceService
+      generated: true
+
+notes: guides/notes.yaml
