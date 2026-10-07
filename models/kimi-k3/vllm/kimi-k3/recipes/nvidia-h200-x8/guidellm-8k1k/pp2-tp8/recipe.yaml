@@ -1,0 +1,54 @@
+schema_version: 3
+recipe_id: kimi-k3-vllm-h200-pp2-tp8
+model_id: kimi-k3
+platform: {stack: vllm, version: "kimi-k3"}
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-roce-r1.yaml
+workload_profile: guidellm-8k1k
+deployment_mode: pp2-tp8
+optimization_intent: throughput
+maturity: day-zero
+
+deployment:
+  scope: multi-node
+  status:
+    state: needs-verification
+    note: Forge profile1 is a 1K/1K smoke; the declared 8K/1K workload and RoCE path remain unverified.
+  model_cache:
+    volume_name: model
+    model_directory_name: Kimi-K3
+    pvc_size: "2Ti"
+    wait_timeout_seconds: 21600
+  parallelism: {tensor: 8, pipeline: 2, data: 1}
+  manifests:
+    - {path: manifests/lws.yaml, kind: LeaderWorkerSet}
+    - {path: manifests/service.yaml, kind: Service}
+  components:
+    modelserver:
+      kind: LeaderWorkerSet
+      source: manifests/lws.yaml
+      leader:
+        containers:
+          vllm:
+            arg_choices:
+              - {flag: --node-rank, value: 0, required: true, why: The leader starts rank zero of the two-node pipeline.}
+              - {flag: --tensor-parallel-size, value: 8, required: true, why: One TP group uses all eight H200 GPUs on each node.}
+              - {flag: --pipeline-parallel-size, value: 2, required: true, why: Splits the model across the two nodes.}
+              - {flag: --attention-backend, value: FLASHMLA, required: true, why: Preserve the submitted Kimi attention backend.}
+              - {flag: --moe-backend, value: humming, required: true, why: Preserve the submitted Kimi Humming backend.}
+              - {flag: --max-model-len, value: 8192, required: true, why: Preserve the submitted context limit; it does not fit the declared 8K input plus 1K output.}
+              - {flag: --max-num-seqs, value: 256, required: true, why: Preserve the submitted scheduler setting.}
+              - {flag: --max-num-batched-tokens, value: 4096, required: true, why: Preserve the submitted batching budget.}
+              - {flag: --disable-custom-all-reduce, required: true, why: Preserve the submitted multi-node setting.}
+              - {flag: --no-enable-flashinfer-autotune, required: true, why: Preserve the submitted backend setting.}
+              - {flag: --enable-auto-tool-choice, required: true, why: Preserve the submitted tool-calling setting.}
+              - {flag: --tool-call-parser, value: kimi_k3, required: true, why: Use the Kimi-specific tool parser.}
+              - {flag: --reasoning-parser, value: kimi_k3, required: true, why: Use the Kimi-specific reasoning parser.}
+      worker:
+        containers:
+          vllm:
+            arg_choices:
+              - {flag: --node-rank, value: $(LWS_WORKER_INDEX), required: true, why: The worker rank comes from the value injected by LWS.}
+              - {flag: --headless, required: true, why: The worker joins the leader without exposing an API server.}
+  auxiliary_sources:
+    - {path: manifests/service.yaml, kind: Service}
+notes: guides/notes.yaml

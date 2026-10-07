@@ -1,0 +1,43 @@
+schema_version: 1
+profile:
+  label: Kimi K3 on two H200 nodes
+  headline: Forge profile1 is a 1K/1K smoke; the declared 8K/1K workload and RoCE path remain unverified.
+  specs:
+    - {label: Checkpoint, value: moonshotai/Kimi-K3}
+    - {label: Hardware, value: 2 nodes with 8 H200 GPUs each}
+    - {label: Parallelism, value: TP=8 × PP=2}
+    - {label: Precision, value: MXFP4}
+    - {label: Backend, value: Humming MoE}
+    - {label: Forge workload, value: profile1 (1K/1K)}
+decisions:
+  - subjects: [tensor parallelism, pipeline parallelism]
+    why: Preserve the submitted TP8×PP2 Kimi layout, with one eight-GPU tensor-parallel group per node.
+  - subjects: [moe backend]
+    why: Preserve the submitted Humming configuration and Kimi SITU bootstrap for this first Forge smoke.
+  - subjects: [network]
+    why: Preserve the submitted RoCE requirement and NCCL HCA/GID settings; verify them on the target cluster.
+known_issues:
+  - issue: The custom kimi-k3 image tag has no verified digest or upstream release mapping.
+    impact: Image availability and compatibility are not established by the recipe.
+    mitigation: Confirm the tag and record an immutable digest before treating the recipe as validated.
+  - issue: Humming needs a Kimi-specific MoEActivation.SITU patch in site-packages.
+    impact: The bootstrap runs as root and may be rejected by the target cluster's security policy.
+    mitigation: Prefer an image with the fix; otherwise confirm the required security policy and inspect both pod logs.
+  - issue: The recipe declares GuideLLM 8K/1K, while Forge currently runs profile1 at 1K/1K and the model length is 8192.
+    impact: A 1K/1K pass does not validate 8K/1K; 8K input plus 1K output exceeds the configured model length.
+    mitigation: Keep maturity at day-zero until the context limit and intended workload are tested.
+  - issue: The recipe requests RoCE with submitted HCA mlx5_5 and GID index 3.
+    impact: The configured NIC and GID may not match the selected target nodes.
+    mitigation: Verify symmetric HCA/GID availability and the Forge RDMA resource mapping before launch.
+  - issue: FlashInfer and Triton need writable cache directories during startup.
+    impact: The configured /tmp paths have not been verified with this image on the target cluster.
+    mitigation: Confirm /tmp/triton-cache and the FlashInfer workspace are writable, then inspect startup logs before benchmarking.
+  - issue: The cache is configured at 2Ti for the Kimi checkpoint.
+    impact: The required PVC capacity depends on the downloaded checkpoint and filesystem overhead.
+    mitigation: Check the populated cache size and available filesystem capacity before benchmarking.
+quickstart:
+  - {step: Prepare, detail: Forge stages moonshotai/Kimi-K3 in a shared 2Ti cache; its configured Hugging Face credential must be able to read the checkpoint.}
+  - {step: Network, detail: Provide two H200 nodes with eight GPUs each and map rdma/ib to the target cluster's advertised RoCE resource.}
+  - {step: Deploy, detail: Select recipe kimi-k3-vllm-h200-pp2-tp8 in the Forge PR comment and request 16 H200 GPUs across two nodes.}
+  - {step: Verify, detail: Wait for the LWS leader health endpoint, then query /v1/models through the leader-only Service and inspect both pod logs.}
+  - {step: Cleanup, detail: Forge removes its per-run LeaderWorkerSet and Service; the shared model-cache PVC is retained.}
