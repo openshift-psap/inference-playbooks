@@ -186,6 +186,14 @@ No `config/` directory needed. Templates handle Kubernetes boilerplate
 
 For multi-node or P/D disaggregated deployments, add role blocks:
 
+For the bounded multi-node vLLM `tp+dp` path, `tp` is GPUs within each pod/node
+and `dp` is participating nodes, one local DP rank per node. This renders a DP
+LeaderWorkerSet plus a leader-only API Service, not the PP template or a
+TP*DP-sized Deployment. It requires an image-bound source-resolved vLLM 0.24.0
+engine; other versions are blocked pending a version-specific contract audit.
+Single-node `tp+dp` retains TP*DP GPUs in a Deployment. See
+[distributed DP](docs/distributed-dp.md) for role flags, prerequisites and limits.
+
 ```yaml
 serving:
   decode:
@@ -210,16 +218,46 @@ When templates do not cover a requirement (custom sidecars, init containers,
 non-standard volumes), add `config/` with a `kustomization.yaml` for
 Kustomize patches over the generated base. Set `config_overrides: true`.
 
+Prefer canonical serving inputs for recognized alias/probes/resources and
+`shared_memory.size`, plus `deployment.storage.pvc.mount_path`, optional
+`model_path`, and explicit `read_only` for pre-populated local weights. These
+render on TP RHOAI and vLLM Deployment without kind-specific patches. Claim
+name/class/mode/capacity remain deployment-configurable; no downloader is created.
+
+For multi-platform recipes, set each `platforms[].config` to its own directory
+(for example `config/rhoai`) or `null` for no overlay. Omission preserves legacy
+shared `config_overrides` behavior, but automatic companions reject unscoped or
+runtime-changing overlays. Migrate reviewed settings to declarations and remove
+superseded active patches; do not translate arbitrary JSON patches or apply a
+RHOAI patch to Deployment. Prepared companions always declare `config: null`.
+
 ### 5. Validate and render
 
 ```bash
 python3 -m pip install -r tools/requirements.txt
+python3 tools/prepare_companions.py models/.../recipe.yaml
 python3 tools/validate.py --current
-python3 tools/render.py models/.../recipe.yaml --dry-run
+python3 tools/render.py models/.../recipe.yaml
+python3 tools/check_manifests.py models/.../recipes/...
 ```
 
 The validator checks schema, flag constraints, role block consistency, and
 layout. The renderer generates manifests from the serving block.
+
+Single-node recipes without an active, explicitly authored vLLM target must
+prepare a companion before validation/rendering. Preparation writes an explicit
+`platforms` entry and override file in the same recipe, never a second recipe.
+It reuses the source platform's effective image and serving overrides at the
+source-backed resolved engine version; it does not choose an upstream image,
+guess a version from a tag, or select latest. Review the input diff, then render
+and commit the inputs and generated manifests together. The YAML inputs are
+reserialized by preparation. See [single-node companions](docs/single-node-companions.md)
+for explicit newer selection, independent verification, and mapping blockers.
+
+`prepare_companions.py --check` is read-only. CI and pre-commit enforce the same
+policy through validation and manifest-drift checking; they never prepare inputs
+or silently commit contributor changes. Multi-node and existing explicitly
+authored vLLM targets remain unchanged.
 
 ### 6. Add benchmark evidence when available
 

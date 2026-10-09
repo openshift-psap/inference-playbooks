@@ -110,9 +110,16 @@ files. This exception ends after the initial release.
 - `platforms/` contains per-platform override files referenced by
   `platforms[].overrides`. Override merge: image/resources/router replace,
   env appends, args merge by flag. Templates derive the K8s component kind
-  from `(platform.stack, parallelism.mode)`.
+  from `(platform.stack, parallelism.mode, deployment.scope)`; unsupported tuples
+  fail instead of silently falling back to Deployment.
 - `config/` contains optional Kustomize overlay patches when
-  `serving.config_overrides` is true.
+  `serving.config_overrides` is true (legacy shared selection). Optional
+  `platforms[].config` explicitly selects a platform-owned config directory;
+  null disables overlays. Prepared vLLM companions never inherit source overlays.
+  Prefer canonical alias/probes/resources, `serving.shared_memory.size`, and
+  explicit read-only PVC mount/model paths over runtime patches. Local-weight
+  rendering is supported by TP RHOAI and vLLM Deployment; no PVC/downloader is
+  provisioned. Unknown runtime/security overlay mapping remains blocked.
 - `raw-manifest/` preserves the initial submitted inputs for maintainer
   conversion. It may contain multi-document YAML or JSON and an optional
   README. After conversion, `config/` and `recipe.yaml` are authoritative.
@@ -191,7 +198,7 @@ and immutable checksum plus a durable external location.
   provenance. Run `python3 tools/validate.py --current` locally.
 - `tools/render.py` — renders Kubernetes manifests from v4 recipes. Iterates
   each platform entry, merges overrides, evaluates flag constraints, selects
-  a Jinja2 template from `(platform.stack, parallelism.mode)`, and writes to
+  a Jinja2 template from `(platform.stack, parallelism.mode, deployment.scope)`, and writes to
   `manifests/<stack>-<version>/`. Supports pinned manifests (verbatim copy),
   Kustomize overlays (`config_overrides: true`), and shell-safe quoting for
   LWS `sh -c` args via `shellquote` filter.
@@ -227,12 +234,22 @@ schema/
 
 Templates live in `templates/<stack>/`. Current template map:
 
-| Stack | Mode | Template | K8s Kind |
-|-------|------|----------|----------|
-| vllm | tp, dp, tp+dp | `vllm/deployment.yaml.j2` | Deployment |
-| vllm | pp, tp+pp | `vllm/lws.yaml.j2` | LeaderWorkerSet |
-| rhoai | tp | `rhoai/llmisvc.yaml.j2` | LLMInferenceService |
-| rhoai | pp, tp+pp | `rhoai/llmisvc-pp.yaml.j2` | LLMInferenceService |
+| Stack | Mode | Scope | Template | K8s Kind |
+|-------|------|-------|----------|----------|
+| vllm | tp, dp, tp+dp | single-node | `vllm/deployment.yaml.j2` | Deployment |
+| vllm | tp+dp | multi-node | `vllm/dp-lws.yaml.j2` | LeaderWorkerSet + leader API Service |
+| vllm | pp, tp+pp | single-node / multi-node (legacy unchanged) | `vllm/lws.yaml.j2` | LeaderWorkerSet |
+| rhoai | tp | single-node / multi-node (selection unchanged) | `rhoai/llmisvc.yaml.j2` | LLMInferenceService |
+| rhoai | pp, tp+pp | single-node / multi-node (selection unchanged) | `rhoai/llmisvc-pp.yaml.j2` | LLMInferenceService |
+
+Multi-node vLLM `tp+dp` means TP within one node-sized pod and one local DP rank
+per node. LWS size is global DP; each pod requests TP GPUs (not TP*DP). vLLM owns
+GPU/process ranks. Internal LB uses one API leader and headless secondary nodes;
+it does not reuse PP `nnodes`/`node-rank` startup. The bounded contract currently
+requires a source-resolved image-bound vLLM 0.24.0 engine and LWS v0.7.0-or-later
+controller behavior. See `docs/distributed-dp.md` for upstream sources, prerequisites,
+role/probe/storage ownership, and unsupported cases. Multi-node recipes never
+receive automatic single-node companions.
 
 Templates use `shellquote` (not `tojson`) for args in LWS templates where
 `command: ["sh", "-c"]` requires shell-safe quoting. PP/TP+PP templates
@@ -240,6 +257,8 @@ support separate `leader_args` and `worker_args` via role blocks.
 
 Pinned manifests (`pinned_manifest` in platform entry) bypass rendering and
 copy a hand-authored manifest verbatim. Use when a converter is WIP.
+The new distributed-DP path rejects pins/overlays rather than bypassing its audited
+startup/routing contract; existing PP/RHOAI pin behavior remains unchanged.
 
 ## Recipe versions
 

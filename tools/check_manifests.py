@@ -20,7 +20,7 @@ import yaml
 from jinja2 import TemplateError
 
 from recipe_evidence import affected_recipes, git_lines
-from render import COMPONENT_KIND, load_yaml_file, render_recipe
+from render import COMPONENT_KIND, component_kind, load_yaml_file, render_recipe
 
 
 def check_recipe(repo: Path, recipe_dir: Path) -> list[str]:
@@ -36,7 +36,7 @@ def check_recipe(repo: Path, recipe_dir: Path) -> list[str]:
         if platform.get("pinned_manifest"):
             filename = Path(platform["pinned_manifest"]).name
         else:
-            kind = COMPONENT_KIND[(platform["stack"], recipe["serving"]["parallelism"]["mode"])]
+            kind = component_kind(platform["stack"], recipe["serving"]["parallelism"]["mode"], recipe["deployment"]["scope"])
             filename = f"{kind.lower()}.yaml"
         outputs.append(Path("manifests") / directory / filename)
     with tempfile.TemporaryDirectory(prefix="playbook-render-") as temporary:
@@ -46,6 +46,9 @@ def check_recipe(repo: Path, recipe_dir: Path) -> list[str]:
         shutil.copytree(recipe_dir, target)
         shutil.copytree(repo / "schema", scratch / "schema")
         shutil.copytree(repo / "templates", scratch / "templates")
+        for directory in ("engine-versions", "hardware-profiles"):
+            if (repo / directory).is_dir():
+                shutil.copytree(repo / directory, scratch / directory)
         model = repo / "models" / recipe["model_id"] / "model.yaml"
         if model.is_file():
             destination = scratch / "models" / recipe["model_id"] / "model.yaml"

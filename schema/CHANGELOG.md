@@ -1,5 +1,46 @@
 # Schema changelog
 
+## Scope-aware multi-node vLLM TP+DP interpretation (no new schema fields)
+
+- Template selection includes `deployment.scope`; unsupported tuples fail rather
+  than defaulting to Deployment. Existing PP/TP+PP and RHOAI choices are retained.
+- In multi-node vLLM `tp+dp`, existing `tp` means GPUs per node-sized pod and
+  existing `dp` means nodes/DP ranks. Single-node keeps TP*DP GPUs per pod.
+- The separate distributed-DP LWS/internal-LB template is enabled only for the
+  source-audited image-bound vLLM 0.24.0 contract. No arbitrary rank-mode fields,
+  newer-version inference, or source image-tag guesses are introduced.
+
+## Declarative local weights, shared memory, and platform overlays
+
+- PVC `mount_path`, optional child `model_path`, and explicit `read_only` extend
+  existing storage metadata. Mounted local weights require a claim name and a
+  complete contract; neither renderer provisions/downloads weights.
+- `serving.shared_memory.size` (also in platform overrides) selects memory-backed
+  shm size without changing the legacy 4Gi/TP>1 default.
+- Optional `platforms[].config` selects a platform-owned Kustomize directory;
+  null disables overlays, omission preserves legacy shared config selection.
+- TP RHOAI/Deployment now honor the existing served alias and probe fields,
+  declared image/local weights, resources and shm. Canonical JSON args are
+  shell-safe; automatic companions never inherit a RHOAI overlay.
+- Automatic overlay mapping is conservative: unchanged canonical runtime/object
+  identity plus informational description only. Unknown runtime/security and
+  admission effects remain blocked, not translated.
+
+## Independent platform verification and single-node companions
+
+- Optional `platforms[].verification` records its own `maturity`,
+  `deployment_status`, and `benchmark_runs` (which may be empty). It never
+  inherits recipe-wide assessments. Platform `validated`/`production` requires
+  a verified deployment and non-empty platform-owned benchmark evidence.
+- Optional `platforms[].companion` records the non-vLLM source platform and
+  explicit `same`/`newer` version policy; it requires independent verification.
+- Optional benchmark `run.platform` records exact stack/version. Platform-local
+  evidence requires this provenance and matching recipe, scope, and hardware.
+  Legacy recipe-wide fields and runs remain compatible; no metadata migration.
+- Preparation materializes explicit source-backed vLLM platform inputs for
+  single-node recipes. Validation/render/drift reject missing or stale inputs
+  without mutating them. Existing explicit vLLM targets are preserved.
+
 ## Add `contributed` maturity level
 
 - `maturity` enum now accepts four values:

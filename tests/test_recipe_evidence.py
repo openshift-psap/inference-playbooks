@@ -59,6 +59,14 @@ correction_log:
         platforms_dir = recipe.parent / "platforms"
         platforms_dir.mkdir()
         (platforms_dir / "rhoai-3.5.yaml").write_text("{}\n")
+        # Evidence/engine tests already have an explicitly authored companion;
+        # automatic preparation is tested with synthetic fixtures in test_render.
+        (platforms_dir / "vllm-v0.24.0.yaml").write_text(yaml.safe_dump({
+            "image": "registry.example.org/fixture:runtime",
+            "image_usage": {"kind": "custom", "note": "Synthetic test runtime."},
+            "engine": {"name": "vllm", "image": "registry.example.org/fixture:runtime",
+                       "version": "0.24.0", "source": "https://example.org/fixture"},
+        }))
         git(directory, "add", ".")
         git(directory, "commit", "-qm", "initial")
         return directory, profile, recipe
@@ -92,7 +100,10 @@ correction_log:
             "schema_version": 4,
             "recipe_id": "glm-guidellm-tp8",
             "model_id": "glm",
-            "platforms": [{"stack": "rhoai", "version": "3.5", "overrides": "platforms/rhoai-3.5.yaml"}],
+            "platforms": [
+                {"stack": "rhoai", "version": "3.5", "overrides": "platforms/rhoai-3.5.yaml"},
+                {"stack": "vllm", "version": "v0.24.0", "overrides": "platforms/vllm-v0.24.0.yaml"},
+            ],
             "hardware_profile": "hardware-profiles/h200-r1.yaml",
             "workload_profile": "guidellm-8k1k",
             "deployment_mode": "tp8-aggregated",

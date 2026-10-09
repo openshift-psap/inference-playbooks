@@ -1,0 +1,177 @@
+{% from 'probes.yaml.j2' import probe %}
+{% macro pod(role) -%}
+metadata:
+  labels:
+    role: {{ role }}
+    app.kubernetes.io/name: {{ name }}
+    app.kubernetes.io/managed-by: inference-playbooks
+spec:
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ name }}
+          topologyKey: kubernetes.io/hostname
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: vllm-{{ role }}
+      image: {{ image | tojson }}
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -eu
+          test "${LWS_GROUP_SIZE:?LWS must inject group size}" -eq {{ dp }}
+{% if role == 'leader' %}
+          test "${LWS_WORKER_INDEX:?LWS must inject worker index}" -eq 0
+          DP_ADDRESS="${POD_IP:?Pod IP is required}"
+          case "$POD_IP" in *:*) API_HOST=:: ;; *) API_HOST=0.0.0.0 ;; esac
+{% else %}
+          case "${LWS_WORKER_INDEX:?LWS must inject worker index}" in *[!0-9]*|'') exit 2 ;; esac
+          test "$LWS_WORKER_INDEX" -gt 0
+          test "$LWS_WORKER_INDEX" -lt {{ dp }}
+          DP_ADDRESS=$(python3 - <<'PY'
+          import os, socket, time
+          family = socket.AF_INET6 if ':' in os.environ['POD_IP'] else socket.AF_INET
+          while True:
+              try:
+                  print(socket.getaddrinfo(os.environ['LWS_LEADER_ADDRESS'], None, family, socket.SOCK_STREAM)[0][4][0])
+                  break
+              except socket.gaierror:
+                  time.sleep(1)
+          PY
+          )
+{% endif %}
+          exec vllm serve {{ model_path | shellquote }} \
+            {{ ('--served-model-name=' ~ served_model_name) | shellquote }} \
+            --tensor-parallel-size {{ tp }} \
+            --distributed-executor-backend mp \
+            --data-parallel-backend mp \
+            --data-parallel-size {{ dp }} \
+            --data-parallel-size-local 1 \
+            --data-parallel-address "$DP_ADDRESS" \
+            --data-parallel-rpc-port 13345 \
+{% if role == 'leader' %}
+            --host "$API_HOST" --port {{ port }} --api-server-count 1 \
+{% else %}
+            --headless --data-parallel-start-rank "$LWS_WORKER_INDEX" \
+{% endif %}
+{% for arg in leader_args if role == 'leader' %}
+            {{ (arg.flag ~ '=' ~ arg.value if arg.value is defined and arg.value is not none else arg.flag) | shellquote }} \
+{% endfor %}
+{% for arg in worker_args if role == 'worker' %}
+            {{ (arg.flag ~ '=' ~ arg.value if arg.value is defined and arg.value is not none else arg.flag) | shellquote }} \
+{% endfor %}
+
+      env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: VLLM_HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+{% for entry in env %}
+        - name: {{ entry.name | tojson }}
+{% if entry.value is defined %}
+          value: {{ entry.value | tojson }}
+{% else %}
+          valueFrom: {{ entry.value_from | tojson }}
+{% endif %}
+{% endfor %}
+{% if role == 'leader' %}
+      ports:
+        - name: dp-rpc
+          containerPort: 13345
+        - name: http
+          containerPort: {{ port }}
+{% endif %}
+      resources:
+        requests:
+          cpu: {{ resources.requests.cpu | default('8') | tojson }}
+          memory: {{ resources.requests.memory | default('32Gi') | tojson }}
+          nvidia.com/gpu: "{{ gpu_count }}"
+        limits:
+{% if resources.limits.cpu is defined or resources.requests.cpu is not defined %}
+          cpu: {{ resources.limits.cpu | default('8') | tojson }}
+{% endif %}
+          memory: {{ resources.limits.memory | default('64Gi') | tojson }}
+          nvidia.com/gpu: "{{ gpu_count }}"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+{% if role == 'leader' %}
+{% for probe_name, values in probes.items() %}
+{{ probe(probe_name, values) | trim | indent(6, true) }}
+{% endfor %}
+{% endif %}
+      volumeMounts:
+        - name: hf-cache
+          mountPath: /home/nobody/.cache
+        - name: tmp
+          mountPath: /tmp
+{% if weights %}
+        - name: model-weights
+          mountPath: {{ weights.mount_path | tojson }}
+          readOnly: {{ weights.read_only | tojson }}
+{% endif %}
+{% if use_shared_memory %}
+        - name: dshm
+          mountPath: /dev/shm
+{% endif %}
+  volumes:
+    - name: hf-cache
+      emptyDir: {}
+    - name: tmp
+      emptyDir: {}
+{% if weights %}
+    - name: model-weights
+      persistentVolumeClaim:
+        claimName: {{ weights.name | tojson }}
+        readOnly: {{ weights.read_only | tojson }}
+{% endif %}
+{% if use_shared_memory %}
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: {{ shared_memory }}
+{% endif %}
+{%- endmacro %}
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: {{ name }}
+spec:
+  replicas: 1
+  startupPolicy: LeaderCreated
+  leaderWorkerTemplate:
+    size: {{ dp }}
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+{{ pod('leader') | trim | indent(6, true) }}
+    workerTemplate:
+{{ pod('worker') | trim | indent(6, true) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ api_service_name }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ name }}
+    role: leader
+  ports:
+    - name: http
+      port: {{ port }}
+      targetPort: http
