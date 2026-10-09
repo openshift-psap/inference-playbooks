@@ -1,0 +1,70 @@
+# Retain the submitted security context; non-root hostPath/cache access needs
+# target-cluster verification. The upstream image needs no site-packages patch.
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsNonRoot
+  value: false
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsUser
+  value: 0
+- op: replace
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsNonRoot
+  value: false
+- op: replace
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsUser
+  value: 0
+# Local model staging does not require the template's HF_TOKEN secret.
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/env/0
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0
+# The template does not emit extended RDMA resources.
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/requests/rdma~1ib
+  value: "1"
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/rdma~1ib
+  value: "1"
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/requests/rdma~1ib
+  value: "1"
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/rdma~1ib
+  value: "1"
+# Preserve the source's CPU request without the template's eight-core cap.
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/cpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/cpu
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/imagePullPolicy
+  value: IfNotPresent
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/imagePullPolicy
+  value: IfNotPresent
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/volumeMounts/-
+  value: &model_mount {name: model, mountPath: /models}
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/volumeMounts/-
+  value: *model_mount
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/volumes/-
+  value: &model_volume
+    name: model
+    hostPath:
+      path: /mnt/local/kimi-k3/models
+      type: DirectoryOrCreate
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
+  value: *model_volume
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/volumes/0/emptyDir/sizeLimit
+  value: 16Gi
+- op: replace
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/volumes/0/emptyDir/sizeLimit
+  value: 16Gi
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/readinessProbe/initialDelaySeconds
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/readinessProbe/timeoutSeconds
+  value: 5

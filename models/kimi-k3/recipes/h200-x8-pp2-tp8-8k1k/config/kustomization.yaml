@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../manifests/vllm-v0.29.0/leaderworkerset.yaml
+  - service.yaml
+patches:
+  - path: lws-patch.yaml
+    target:
+      group: leaderworkerset.x-k8s.io
+      version: v1
+      kind: LeaderWorkerSet
+      name: kimi-k3-vllm-h200-pp2-tp8
