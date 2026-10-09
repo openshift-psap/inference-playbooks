@@ -190,10 +190,10 @@ def build_template_context(
     }
 
 
-def render_template(template_path: str, context: dict) -> str:
+def render_template(template_path: str, context: dict, template_dir: Path = TEMPLATE_DIR) -> str:
     """Render a Jinja2 template with the given context."""
     env = Environment(
-        loader=FileSystemLoader(str(TEMPLATE_DIR)),
+        loader=FileSystemLoader(str(template_dir)),
         undefined=StrictUndefined,
         keep_trailing_newline=True,
         trim_blocks=True,
@@ -265,6 +265,13 @@ def merge_overrides(serving: dict, overrides: dict) -> dict:
     merged = dict(serving)
     if "image" in overrides:
         merged["image"] = overrides["image"]
+        if overrides["image"] != serving.get("image"):
+            merged.pop("engine", None)
+            merged.pop("image_usage", None)
+    if "engine" in overrides:
+        merged["engine"] = overrides["engine"]
+    if "image_usage" in overrides:
+        merged["image_usage"] = overrides["image_usage"]
     if "served_model_name" in overrides:
         merged["served_model_name"] = overrides["served_model_name"]
     if "resources" in overrides:
@@ -390,7 +397,7 @@ def render_recipe(
             continue
 
         context = build_template_context(effective_recipe, model, constraints, platform_entry)
-        rendered = render_template(template_path, context)
+        rendered = render_template(template_path, context, repo / "templates")
 
         if effective_serving.get("config_overrides") is True:
             config_dir = recipe_path.parent / "config"

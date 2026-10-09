@@ -157,3 +157,12 @@
 - Benchmark runs record the hardware-profile revision known when they ran.
 - Benchmark runs must reference their normalized result; result run IDs
   resolve to exactly one run record.
+## Engine metadata foundation
+
+- Added optional image-bound `serving.engine` and platform override `engine`.
+- Added `image_usage` classification: custom images require an explanatory note.
+- Added one provenance-tracked CUDA/ROCm/CPU release index for contributor-identified
+  default RHOAI runtimes, covering patch and EA releases. Image references are optional;
+  a recipe image digest is not required for engine resolution.
+- New recipes require image identification and resolved metadata during Git-diff validation;
+  existing recipes remain compatible with unknown engine versions.

@@ -38,7 +38,8 @@ Include the following in your PR description or in
   (e.g., `guidellm-8k1k`, `aiperf-agentx-128k`)
 - **Deployment pattern**: parallelism mode (TP, PP, TP+PP, DP) and node
   scope (single-node or multi-node)
-- **Container image**: fully qualified image reference
+- **Container image**: fully qualified image reference; explicitly identify custom
+  images and include a note explaining their use
 - **Known prerequisites**: secrets, PVCs, operators, or cluster
   configuration needed to deploy
 
@@ -167,6 +168,18 @@ Each platform entry references an override file under `platforms/`.
 Create `platforms/vllm-v0.24.0.yaml` (empty `{}` if no overrides needed).
 Override merge: image/resources/router replace, env appends, args merge
 by flag.
+
+New recipe/platform images must declare `serving.image_usage` (or platform
+override `image_usage`) as `default` or `custom`. A custom image requires a
+non-empty `note` and an image-bound `engine` version declaration. A default
+RHOAI runtime declares its variant (`cuda`, `rocm`, or `cpu`) and uses the exact
+release mapping from `engine-versions/index.yaml`. Other default variants and
+standalone vLLM stacks need an explicit engine declaration. Recipe image tags
+are accepted; a digest is not required for this resolution. Replacing an image
+in an override requires fresh identification and, for a custom image, a fresh
+note and engine declaration. See [engine-version metadata](docs/engine-versions.md)
+for examples and provenance requirements. Benchmark digest requirements are
+unchanged.
 
 No `config/` directory needed. Templates handle Kubernetes boilerplate
 (security context, probes, labels, GPU resources, shared memory).

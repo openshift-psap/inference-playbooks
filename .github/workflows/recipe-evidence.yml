@@ -11,17 +11,26 @@ on:
 jobs:
   hardware-profiles:
     runs-on: ubuntu-latest
+    outputs:
+      base: ${{ steps.comparison.outputs.base }}
+      head: ${{ steps.comparison.outputs.head }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+      - id: comparison
+        name: Resolve comparison against the tested merge parent
+        run: python3 tools/ci_baseline.py
       - name: Validate profiles, recipes, and raw-manifest conversion
+        env:
+          BASE: ${{ steps.comparison.outputs.base }}
+          HEAD: ${{ steps.comparison.outputs.head }}
         run: >-
           python3 -m pip install --disable-pip-version-check -r tools/requirements.txt &&
           python3 tools/validate.py
           --require-converted-raw
-          --base "${{ github.event.pull_request.base.sha || github.event.before }}"
-          --head "${{ github.sha }}"
+          --base "$BASE"
+          --head "$HEAD"
 
   affected-recipes:
     needs: hardware-profiles
@@ -34,14 +43,17 @@ jobs:
           fetch-depth: 0
       - id: affected
         name: Find recipes affected by this change
+        env:
+          BASE: ${{ needs.hardware-profiles.outputs.base }}
+          HEAD: ${{ needs.hardware-profiles.outputs.head }}
         run: |
           python3 -m pip install --disable-pip-version-check -r tools/requirements.txt
           matrix=$(python3 tools/recipe_evidence.py \
-            --base "${{ github.event.pull_request.base.sha || github.event.before }}" \
-            --head "${{ github.sha }}" affected-recipes)
+            --base "$BASE" \
+            --head "$HEAD" affected-recipes)
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
-  render-readmes:
+  manifest-drift:
     needs: affected-recipes
     if: ${{ fromJSON(needs.affected-recipes.outputs.matrix).recipes[0] != null }}
     runs-on: ubuntu-latest
@@ -51,8 +63,15 @@ jobs:
         recipe: ${{ fromJSON(needs.affected-recipes.outputs.matrix).recipes }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Render and check the recipe README
+      - name: Install rendering dependencies
+        run: python3 -m pip install --disable-pip-version-check -r tools/requirements.txt
+      - name: Install Kustomize
+        run: |
+          curl --fail --location --silent --show-error https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/kustomize.tar.gz"
+          echo "54e4031ddc4e7fc59e408da29e7c646e8e57b8088c51b84b3df0864f47b5148f  $RUNNER_TEMP/kustomize.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/kustomize.tar.gz" -C "$RUNNER_TEMP" kustomize
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Render and check manifest drift
         env:
           RECIPE: ${{ matrix.recipe }}
-        run: >-
-          echo "README rendering will be enabled when the renderer lands for $RECIPE"
+        run: python3 tools/check_manifests.py "$RECIPE"

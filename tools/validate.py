@@ -15,6 +15,8 @@ from referencing import Registry, Resource
 
 from constraints import load_constraints, validate_recipe_against_constraints
 from recipe_evidence import check_hardware_profiles, load_unique_yaml, load_unique_yaml_all
+from engine_versions import baseline_images, engine_errors, load_engine_index, resolve_engine
+from jsonschema.exceptions import ValidationError
 
 
 SCHEMAS = {
@@ -573,6 +575,11 @@ def main() -> int:
     errors = []
     schemas = {name: load_schema(repo, name) for name in SCHEMAS}
     registry = load_schema_registry(repo)
+    try:
+        engine_index = load_engine_index(repo)
+    except (OSError, ValueError, yaml.YAMLError, ValidationError) as error:
+        errors.append(f"engine-versions/index.yaml: {error}")
+        engine_index = {"releases": [], "variants": []}
     errors.extend(validate_raw_manifest_intake(repo, schemas["recipe"], arguments.require_converted_raw))
 
     if not arguments.current:
@@ -659,6 +666,27 @@ def main() -> int:
         errors.extend(validate_v4_recipe(repo, path, recipe, registry))
         errors.extend(validate_recipe_layout(repo, path, recipe, runs_by_path))
         errors.extend(validate_recipe_notes(repo, path, recipe, schemas["recipe-notes"], registry))
+        previous_images = None if arguments.current else baseline_images(repo, path, arguments.base or "HEAD")
+        for platform in recipe["platforms"]:
+            if platform.get("blocked"):
+                continue
+            override_path = contained_path(path.parent, platform["overrides"])
+            if not override_path or not override_path.is_file():
+                continue  # The platform validator reports missing/escaping paths.
+            try:
+                overrides = load_yaml(override_path)
+                override_errors = validate_document(override_path, overrides, schemas["platform-overrides"], registry)
+                if override_errors:
+                    continue
+                resolution = resolve_engine(recipe["serving"], overrides, platform, engine_index)
+                require_metadata = previous_images is not None and previous_images.get((platform["stack"], platform["version"])) != resolution["image"]
+                engine_violations = engine_errors(recipe["serving"], overrides, platform, engine_index, require_metadata)
+                errors.extend(f"{path}: [{platform['stack']}-{platform['version']}] {violation}" for violation in engine_violations)
+                if resolution["state"] == "unknown" and not engine_violations:
+                    message = f"{path}: [{platform['stack']}-{platform['version']}] {resolution['reason']}"
+                    print(f"Warning: {message}; legacy engine remains unknown", file=sys.stderr)
+            except (OSError, ValueError, yaml.YAMLError) as error:
+                errors.append(f"{path}: cannot resolve engine: {error}")
         if flag_constraints is not None:
             model_data = models_by_id.get(recipe.get("model_id", ""), {})
             platforms = recipe.get("platforms", [])

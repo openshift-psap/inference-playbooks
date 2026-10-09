@@ -6,6 +6,8 @@
   "type": "object",
   "properties": {
     "image": {"type": "string", "minLength": 1},
+    "engine": {"$ref": "engine-version.schema.json"},
+    "image_usage": {"$ref": "recipe.schema.json#/$defs/image_usage"},
     "served_model_name": {"type": "string", "minLength": 1},
     "env": {
       "type": "array",

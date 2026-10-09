@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gemma-4-mtp-single-gpu
+  labels:
+    app.kubernetes.io/name: gemma-4-mtp-single-gpu
+    app.kubernetes.io/managed-by: inference-playbooks
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gemma-4-mtp-single-gpu
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gemma-4-mtp-single-gpu
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.24.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              vllm serve "$@"
+            - --
+          args:
+            - "RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic"
+            - "--served-model-name=RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic"
+            - "--enable-prefix-caching"
+            - "--speculative-config={\"method\":\"mtp\",\"model\":\"google/gemma-4-26B-A4B-it-assistant\",\"num_speculative_tokens\":3}"
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "8"
+              memory: 32Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /home/nobody/.cache
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

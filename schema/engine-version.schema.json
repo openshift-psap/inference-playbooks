@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/openshift-psap/inference-playbooks/schema/engine-version.schema.json",
+  "title": "Auditable vLLM engine declaration",
+  "type": "object",
+  "required": ["name", "version", "image", "source"],
+  "properties": {
+    "name": {"const": "vllm"},
+    "version": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]*$"},
+    "image": {"type": "string", "pattern": "^[^/]+[.:][^/]*/.+"},
+    "source": {"type": "string", "pattern": "^https://.+"}
+  },
+  "additionalProperties": false
+}

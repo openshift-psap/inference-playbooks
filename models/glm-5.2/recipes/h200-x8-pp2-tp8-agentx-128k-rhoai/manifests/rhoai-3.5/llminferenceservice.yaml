@@ -1,0 +1,108 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: glm-5-2-rhoai-pp2-tp8
+spec:
+  model:
+    uri: pvc://glm-5-2-rhoai-pp2-tp8-weights
+    name: zai-org/GLM-5.2-FP8
+  storageInitializer:
+    enabled: false
+  replicas: 1
+  parallelism:
+    pipeline: 2
+    tensor: 8
+  template:
+    containers:
+      - name: main
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: HF_TOKEN
+          - name: VLLM_ADDITIONAL_ARGS
+            value: >-
+              --kv-cache-dtype fp8
+              --tool-call-parser glm47
+              --reasoning-parser glm45
+              --enable-auto-tool-choice
+              --skip-mm-profiling
+              --trust-remote-code
+              --distributed-timeout-seconds 3600
+              --distributed-executor-backend mp
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: "3600"
+          - name: KSERVE_INFER_ROCE
+            value: "true"
+        resources:
+          requests:
+            cpu: "32"
+            memory: 256Gi
+            nvidia.com/gpu: "8"
+          limits:
+            memory: 1024Gi
+            nvidia.com/gpu: "8"
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          failureThreshold: 720
+          periodSeconds: 10
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: models
+            mountPath: /mnt/models
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+      - name: models
+        persistentVolumeClaim:
+          claimName: glm-5-2-rhoai-pp2-tp8-weights
+  worker:
+    containers:
+      - name: main
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: HF_TOKEN
+          - name: VLLM_ADDITIONAL_ARGS
+            value: >-
+              --kv-cache-dtype fp8
+              --tool-call-parser glm47
+              --reasoning-parser glm45
+              --enable-auto-tool-choice
+              --skip-mm-profiling
+              --trust-remote-code
+              --distributed-timeout-seconds 3600
+              --distributed-executor-backend mp
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: "3600"
+          - name: KSERVE_INFER_ROCE
+            value: "true"
+        resources:
+          requests:
+            cpu: "32"
+            memory: 256Gi
+            nvidia.com/gpu: "8"
+          limits:
+            memory: 1024Gi
+            nvidia.com/gpu: "8"
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: models
+            mountPath: /mnt/models
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+      - name: models
+        persistentVolumeClaim:
+          claimName: glm-5-2-rhoai-pp2-tp8-weights

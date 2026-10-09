@@ -43,6 +43,7 @@ correction_log:
 
     def make_repo(self):
         directory = Path(tempfile.mkdtemp())
+        shutil.copytree(REPO / "engine-versions", directory / "engine-versions")
         git(directory, "init", "-q")
         git(directory, "config", "user.email", "test@example.com")
         git(directory, "config", "user.name", "Test User")
@@ -186,6 +187,94 @@ correction_log:
             {"all": False, "recipes": ["models/glm/recipes/h200-tp8-aggregated"]},
         )
 
+    def test_new_profile_does_not_fan_out(self):
+        directory, _, recipe = self.make_repo()
+        # Even a pre-existing forward reference must not turn an addition into
+        # a correction fan-out.
+        recipe.write_text("hardware_profile: hardware-profiles/new.yaml\n")
+        git(directory, "add", ".")
+        git(directory, "commit", "-qm", "forward reference")
+        (directory / "hardware-profiles/new.yaml").write_text("profile_id: new\n")
+        git(directory, "add", ".")
+        result = self.run_tool(directory, "--cached", "affected-recipes")
+        self.assertEqual(json.loads(result.stdout)["recipes"], [])
+
+    def test_model_and_template_changes_select_recipes(self):
+        for changed in ("models/glm/model.yaml", "templates/vllm/test.yaml.j2"):
+            with self.subTest(changed=changed):
+                directory, _, _ = self.make_repo()
+                path = directory / changed
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("changed: true\n")
+                git(directory, "add", ".")
+                result = self.run_tool(directory, "--cached", "affected-recipes")
+                self.assertEqual(json.loads(result.stdout)["recipes"], ["models/glm/recipes/h200-tp8-aggregated"])
+
+    def test_raw_only_does_not_render_until_converted(self):
+        directory, _, _ = self.make_repo()
+        raw = directory / "models/glm/recipes/raw/raw-manifest/input.yaml"
+        raw.parent.mkdir(parents=True)
+        raw.write_text("kind: Deployment\n")
+        git(directory, "add", ".")
+        result = self.run_tool(directory, "--cached", "affected-recipes")
+        self.assertEqual(json.loads(result.stdout)["recipes"], [])
+        (raw.parent.parent / "recipe.yaml").write_text("hardware_profile: hardware-profiles/h200-r1.yaml\n")
+        git(directory, "add", ".")
+        result = self.run_tool(directory, "--cached", "affected-recipes")
+        self.assertEqual(json.loads(result.stdout)["recipes"], ["models/glm/recipes/raw"])
+
+    def test_new_recipe_engine_metadata_is_required_in_diff_validation(self):
+        directory, profile, recipe = self.make_repo()
+        shutil.copytree(REPO / "schema", directory / "schema")
+        profile.write_text(self.profile_text.format(revision=1, correction=""))
+        recipe.write_text(yaml.safe_dump(self.sample_recipe()))
+        git(directory, "add", ".")
+        git(directory, "commit", "-qm", "existing recipe")
+        new = recipe.parent.parent / "new-recipe"
+        shutil.copytree(recipe.parent, new)
+        document = self.sample_recipe()
+        document["recipe_id"] = "new-recipe"
+        document["serving"]["image"] = "docker.io/vllm/vllm-openai:v0.24.0"
+        (new / "recipe.yaml").write_text(yaml.safe_dump(document))
+        git(directory, "add", ".")
+        result = self.run_validator(directory, "--base", "HEAD", "--cached")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("image_usage must identify", result.stderr)
+        document["serving"]["image_usage"] = dict(kind="custom", note="Model-specific serving build")
+        document["serving"]["engine"] = dict(name="vllm", image=document["serving"]["image"],
+                                               version="0.24.0", source="https://example.org/build")
+        (new / "recipe.yaml").write_text(yaml.safe_dump(document))
+        git(directory, "add", ".")
+        result = self.run_validator(directory, "--base", "HEAD", "--cached")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        # The explicitly identified default runtime needs neither an engine
+        # declaration nor an image digest.
+        document["serving"].pop("engine")
+        document["serving"]["image_usage"] = dict(kind="default", variant="cuda")
+        document["platforms"][0]["version"] = "3.5.0"
+        (new / "recipe.yaml").write_text(yaml.safe_dump(document))
+        git(directory, "add", ".")
+        result = self.run_validator(directory, "--base", "HEAD", "--cached")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        # Replacing the default image must not inherit its classification.
+        override = new / "platforms/rhoai-3.5.yaml"
+        override.write_text("image: quay.io/example/custom:tag\n")
+        git(directory, "add", ".")
+        result = self.run_validator(directory, "--base", "HEAD", "--cached")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("image_usage must identify", result.stderr)
+
+        override.write_text(yaml.safe_dump(dict(
+            image="quay.io/example/custom:tag",
+            image_usage=dict(kind="custom", note="Model-specific engine build"),
+            engine=dict(name="vllm", image="quay.io/example/custom:tag", version="0.26.0", source="https://example.org/build"),
+        )))
+        git(directory, "add", ".")
+        result = self.run_validator(directory, "--base", "HEAD", "--cached")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_staged_profile_correction_ignores_unstaged_recipe_edits(self):
         directory, profile, recipe = self.make_repo()
         profile.write_text(self.profile_text.format(
@@ -230,6 +319,16 @@ correction_log:
 
         custom_intent = {**recipe, "optimization_intent": "lowest cost at 128K context"}
         self.assertFalse(list(validator.iter_errors(custom_intent)))
+
+    def test_custom_image_identification_requires_nonempty_note(self):
+        recipe = self.sample_recipe()
+        validator = self.recipe_validator()
+        for usage in ({"kind": "custom"}, {"kind": "custom", "note": "   "}, {"kind": "default"}):
+            recipe["serving"]["image_usage"] = usage
+            self.assertTrue(list(validator.iter_errors(recipe)))
+        for usage in ({"kind": "custom", "note": "Model-specific build"}, {"kind": "default", "variant": "cuda"}):
+            recipe["serving"]["image_usage"] = usage
+            self.assertFalse(list(validator.iter_errors(recipe)))
 
     def test_reader_notes_example_matches_schema(self):
         schemas = [json.loads(path.read_text()) for path in (REPO / "schema").glob("*.schema.json")]
