@@ -113,13 +113,10 @@ files. This exception ends after the initial release.
   from `(platform.stack, parallelism.mode, deployment.scope)`; unsupported tuples
   fail instead of silently falling back to Deployment.
 - `config/` contains optional Kustomize overlay patches when
-  `serving.config_overrides` is true (legacy shared selection). Optional
-  `platforms[].config` explicitly selects a platform-owned config directory;
-  null disables overlays. Prepared vLLM companions never inherit source overlays.
-  Prefer canonical alias/probes/resources, `serving.shared_memory.size`, and
-  explicit read-only PVC mount/model paths over runtime patches. Local-weight
-  rendering is supported by TP RHOAI and vLLM Deployment; no PVC/downloader is
-  provisioned. Unknown runtime/security overlay mapping remains blocked.
+  `serving.config_overrides` is true (legacy shared selection), or a platform's
+  `config` selects its own directory; null disables overlays. Prefer declarative
+  runtime inputs. Companions never inherit overlays or provision PVCs/downloaders;
+  unknown runtime/security mapping is blocked. See `docs/single-node-companions.md`.
 - `raw-manifest/` preserves the initial submitted inputs for maintainer
   conversion. It may contain multi-document YAML or JSON and an optional
   README. After conversion, `config/` and `recipe.yaml` are authoritative.
@@ -202,6 +199,11 @@ and immutable checksum plus a durable external location.
   `manifests/<stack>-<version>/`. Supports pinned manifests (verbatim copy),
   Kustomize overlays (`config_overrides: true`), and shell-safe quoting for
   LWS `sh -c` args via `shellquote` filter.
+  Normal local render auto-materializes eligible single-node companions as explicit
+  inputs/outputs, independently day-zero/needs-verification with no inherited evidence.
+  Dry-run/validate/check/drift/CI stay read-only. Preserve authored targets/verification;
+  source drift requires review, never automatic reset/promotion. Full workflow and
+  optional preparation/newer selection: `docs/single-node-companions.md`.
 - `tools/constraints.py` — stackable flag constraint engine. Constraints in
   `schema/flag-constraints.yaml` scope by `model_type`, `platform`, and
   `parallelism` to remove or force specific vLLM flags. Evaluated
@@ -242,14 +244,10 @@ Templates live in `templates/<stack>/`. Current template map:
 | rhoai | tp | single-node / multi-node (selection unchanged) | `rhoai/llmisvc.yaml.j2` | LLMInferenceService |
 | rhoai | pp, tp+pp | single-node / multi-node (selection unchanged) | `rhoai/llmisvc-pp.yaml.j2` | LLMInferenceService |
 
-Multi-node vLLM `tp+dp` means TP within one node-sized pod and one local DP rank
-per node. LWS size is global DP; each pod requests TP GPUs (not TP*DP). vLLM owns
-GPU/process ranks. Internal LB uses one API leader and headless secondary nodes;
-it does not reuse PP `nnodes`/`node-rank` startup. The bounded contract currently
-requires a source-resolved image-bound vLLM 0.24.0 engine and LWS v0.7.0-or-later
-controller behavior. See `docs/distributed-dp.md` for upstream sources, prerequisites,
-role/probe/storage ownership, and unsupported cases. Multi-node recipes never
-receive automatic single-node companions.
+Multi-node vLLM TP+DP uses TP GPUs per pod and DP pods per LWS group; vLLM owns
+ranks. Only source-resolved 0.24.0 internal-LB/headless startup is audited.
+See `docs/distributed-dp.md` for controller/storage/probe prerequisites and sources.
+Multi-node recipes never receive companions; unsupported tuples fail explicitly.
 
 Templates use `shellquote` (not `tojson`) for args in LWS templates where
 `command: ["sh", "-c"]` requires shell-safe quoting. PP/TP+PP templates

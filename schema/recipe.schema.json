@@ -318,7 +318,11 @@
                 },
                 "additionalProperties": false
               },
-              "version_policy": {"enum": ["same", "newer"]}
+              "version_policy": {"enum": ["same", "newer"]},
+              "source_config_sha256": {
+                "type": "string", "pattern": "^[a-f0-9]{64}$",
+                "description": "Derived checksum of canonical source inputs at materialization, not verification evidence. Existing records may omit it."
+              }
             },
             "additionalProperties": false
           },

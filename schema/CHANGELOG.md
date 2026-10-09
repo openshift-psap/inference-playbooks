@@ -1,45 +1,33 @@
 # Schema changelog
 
+## Automatic local-render companion materialization
+
+- Local render auto-materializes eligible explicit inputs/outputs after preflight;
+  dry-run/validate/drift/CI stay read-only. Fresh targets remain independently unverified.
+- Optional `companion.source_config_sha256` detects source-input drift, not evidence;
+  verification is never auto-reset/promoted. Legacy records and evidence rules remain compatible.
+
 ## Scope-aware multi-node vLLM TP+DP interpretation (no new schema fields)
 
-- Template selection includes `deployment.scope`; unsupported tuples fail rather
-  than defaulting to Deployment. Existing PP/TP+PP and RHOAI choices are retained.
-- In multi-node vLLM `tp+dp`, existing `tp` means GPUs per node-sized pod and
-  existing `dp` means nodes/DP ranks. Single-node keeps TP*DP GPUs per pod.
-- The separate distributed-DP LWS/internal-LB template is enabled only for the
-  source-audited image-bound vLLM 0.24.0 contract. No arbitrary rank-mode fields,
-  newer-version inference, or source image-tag guesses are introduced.
+- Selection uses scope; unsupported tuples fail. PP/RHOAI choices remain unchanged.
+- Multi-node TP+DP: TP GPUs/pod, DP nodes, audited vLLM 0.24.0 LWS/internal LB only.
+  Single-node retains TP*DP GPUs/pod; no new fields/version inference.
 
 ## Declarative local weights, shared memory, and platform overlays
 
-- PVC `mount_path`, optional child `model_path`, and explicit `read_only` extend
-  existing storage metadata. Mounted local weights require a claim name and a
-  complete contract; neither renderer provisions/downloads weights.
-- `serving.shared_memory.size` (also in platform overrides) selects memory-backed
-  shm size without changing the legacy 4Gi/TP>1 default.
-- Optional `platforms[].config` selects a platform-owned Kustomize directory;
-  null disables overlays, omission preserves legacy shared config selection.
-- TP RHOAI/Deployment now honor the existing served alias and probe fields,
-  declared image/local weights, resources and shm. Canonical JSON args are
-  shell-safe; automatic companions never inherit a RHOAI overlay.
-- Automatic overlay mapping is conservative: unchanged canonical runtime/object
-  identity plus informational description only. Unknown runtime/security and
-  admission effects remain blocked, not translated.
+- PVC adds `mount_path`, optional child `model_path`, and `read_only`; no provisioning/downloader.
+- Serving/overrides add `shared_memory.size`; legacy 4Gi/TP>1 defaults remain.
+- `platforms[].config` selects a directory; null disables, omission keeps legacy selection.
+- TP RHOAI/Deployment honor alias/probes/image/local weights/resources/shm and raw JSON.
+  Companion overlays must preserve runtime/object identity except informational description.
 
 ## Independent platform verification and single-node companions
 
-- Optional `platforms[].verification` records its own `maturity`,
-  `deployment_status`, and `benchmark_runs` (which may be empty). It never
-  inherits recipe-wide assessments. Platform `validated`/`production` requires
-  a verified deployment and non-empty platform-owned benchmark evidence.
-- Optional `platforms[].companion` records the non-vLLM source platform and
-  explicit `same`/`newer` version policy; it requires independent verification.
-- Optional benchmark `run.platform` records exact stack/version. Platform-local
-  evidence requires this provenance and matching recipe, scope, and hardware.
-  Legacy recipe-wide fields and runs remain compatible; no metadata migration.
-- Preparation materializes explicit source-backed vLLM platform inputs for
-  single-node recipes. Validation/render/drift reject missing or stale inputs
-  without mutating them. Existing explicit vLLM targets are preserved.
+- Optional platform `verification` owns maturity/status/benchmarks, never inherited.
+  `validated`/`production` needs verified deployment and platform-owned evidence.
+- `companion` records source and same/newer policy; independent verification is required.
+- Optional `run.platform` supplies exact stack/version; evidence must also match recipe/scope/hardware.
+  Legacy recipe-wide metadata stays compatible. See [companion policy](../docs/single-node-companions.md).
 
 ## Add `contributed` maturity level
 

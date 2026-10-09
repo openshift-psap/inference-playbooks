@@ -20,25 +20,23 @@ import yaml
 from jinja2 import TemplateError
 
 from recipe_evidence import affected_recipes, git_lines
-from render import COMPONENT_KIND, component_kind, load_yaml_file, render_recipe
+from render import COMPONENT_KIND, load_yaml_file, platform_output_path, render_recipe
 
 
 def check_recipe(repo: Path, recipe_dir: Path) -> list[str]:
     """Render in isolation and byte-compare each publishable platform output."""
     recipe = load_yaml_file(recipe_dir / "recipe.yaml")
+    from companions import companion_errors
+    policy_errors = companion_errors(repo, recipe_dir / "recipe.yaml", recipe)
+    if policy_errors:
+        return policy_errors  # Never auto-prepare missing inputs, even in scratch CI.
     outputs = []
     pinned_sources = {Path(platform["pinned_manifest"]) for platform in recipe["platforms"] if platform.get("pinned_manifest")}
     hand_authored = {Path(item["path"]) for item in recipe.get("deployment", {}).get("manifests", []) if item.get("generated") is False}
     for platform in recipe["platforms"]:
         if platform.get("blocked"):
             continue
-        directory = f"{platform['stack']}-{platform['version']}"
-        if platform.get("pinned_manifest"):
-            filename = Path(platform["pinned_manifest"]).name
-        else:
-            kind = component_kind(platform["stack"], recipe["serving"]["parallelism"]["mode"], recipe["deployment"]["scope"])
-            filename = f"{kind.lower()}.yaml"
-        outputs.append(Path("manifests") / directory / filename)
+        outputs.append(platform_output_path(recipe, platform))
     with tempfile.TemporaryDirectory(prefix="playbook-render-") as temporary:
         scratch = Path(temporary)
         relative = recipe_dir.relative_to(repo)

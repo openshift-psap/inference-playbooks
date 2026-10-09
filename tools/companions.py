@@ -7,6 +7,8 @@ seams are imported at call time below to avoid a module-initialization cycle.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -262,7 +264,7 @@ def plan_companion(repo: Path, path: Path, recipe: dict, version: str | None = N
         _require_mapping(repo, path, recipe, target_platform, effective_target)
 
     updated = copy.deepcopy(recipe)
-    updated["platforms"].append(_unverified_companion(source, target_platform, is_newer))
+    updated["platforms"].append(_unverified_companion(recipe, source, effective_source, target_platform, is_newer))
     return updated, target_platform["overrides"], output
 
 
@@ -402,13 +404,27 @@ def _apply_target_overrides(directory, base_serving, source_overrides, effective
     return output, effective_target
 
 
-def _unverified_companion(source, target_platform, is_newer):
+def _source_config_digest(recipe, source, effective_source):
+    """Record shared source-input identity without equating it to validation."""
+    inputs = {
+        "source": _platform_identity(source),
+        "serving": effective_source,
+        "scope": recipe["deployment"]["scope"],
+        "storage": recipe["deployment"].get("storage"),
+        "hardware_profile": recipe["hardware_profile"],
+        "config": platform_config(recipe, source),
+    }
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _unverified_companion(recipe, source, effective_source, target_platform, is_newer):
     """Never inherit source maturity, deployment status, or benchmark evidence."""
     return {
         **target_platform,
         "companion": {
             "source": _platform_identity(source),
             "version_policy": "newer" if is_newer else "same",
+            "source_config_sha256": _source_config_digest(recipe, source, effective_source),
         },
         "verification": {
             "maturity": "day-zero",
@@ -438,7 +454,7 @@ def companion_errors(repo: Path, path: Path, recipe: dict) -> list[str]:
         errors.append("duplicate platform stack/version (including v-prefixed aliases)")
     try:
         if plan_companion(repo, path, recipe):
-            errors.append("missing explicit single-node vLLM companion; run python3 tools/prepare_companions.py " + str(path))
+            errors.append("missing explicit single-node vLLM companion inputs; run python3 tools/render.py " + str(path) + " locally (read-only checks never materialize inputs)")
         for platform in recipe["platforms"]:
             _check_declared_companion(repo, path, recipe, platform, errors)
     except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as error:
@@ -491,6 +507,9 @@ def _check_declared_companion(repo, path, recipe, platform, errors):
 
     effective_source = merge_overrides(recipe["serving"], source_overrides)
     effective_target = merge_overrides(recipe["serving"], target_overrides)
+    source_digest = metadata.get("source_config_sha256")
+    if source_digest and source_digest != _source_config_digest(recipe, source, effective_source):
+        errors.append("companion source inputs changed since materialization; review configuration and independent verification before updating source_config_sha256")
     errors.extend(mapping_errors(repo, recipe, source, effective_source, path))
     errors.extend(mapping_errors(repo, recipe, platform, effective_target, path))
     if metadata["version_policy"] == "same":

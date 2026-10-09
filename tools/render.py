@@ -14,7 +14,9 @@ Pipeline:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
+import io
 import json
 import re
 import shlex
@@ -25,7 +27,7 @@ import tempfile
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = REPO_ROOT / "templates"
@@ -318,7 +320,91 @@ def merge_overrides(serving: dict, overrides: dict) -> dict:
     return merged
 
 
-def render_recipe(
+def platform_output_path(recipe: dict, platform: dict) -> Path:
+    """The single declared artifact path for a platform (possibly multi-document)."""
+    directory = f"{platform['stack']}-{platform['version']}"
+    if platform.get("pinned_manifest"):
+        filename = Path(platform['pinned_manifest']).name
+    else:
+        kind = component_kind(platform['stack'], recipe['serving']['parallelism']['mode'], recipe['deployment']['scope'])
+        filename = f"{kind.lower()}.yaml"
+    return Path("manifests") / directory / filename
+
+
+def render_recipe(repo: Path, recipe_path: Path, dry_run: bool = False) -> tuple[str, list[str]]:
+    """Normal local rendering materializes eligible inputs after isolated preflight.
+
+    Read-only callers use dry_run or guard explicit inputs before rendering a
+    scratch snapshot. Existing targets/assessments are never regenerated.
+    """
+    if dry_run:
+        return _render_explicit_recipe(repo, recipe_path, dry_run=True)
+    from companion_inputs import materialize, preparation_plan
+    from companions import plan_companion
+
+    recipe = load_yaml_file(recipe_path)
+    try:
+        if not plan_companion(repo, recipe_path, recipe):
+            return _render_explicit_recipe(repo, recipe_path)
+        plan, errors = preparation_plan(repo, recipe_path)
+        if errors:
+            return "", errors
+        if recipe_path.is_symlink():
+            return "", [f"{recipe_path}: automatic companion materialization cannot overwrite a symlinked recipe input"]
+        original_inputs = recipe_path.read_bytes()
+        output_paths = [
+            platform_output_path(plan[0], platform)
+            for platform in plan[0]["platforms"] if not platform.get("blocked")
+        ]
+        for output in output_paths:
+            if not (recipe_path.parent / output).resolve().is_relative_to(recipe_path.parent.resolve()):
+                return "", [f"{recipe_path}: manifest destination escapes the recipe directory: {output}"]
+        relative_recipe = recipe_path.relative_to(repo)
+        with tempfile.TemporaryDirectory(prefix="playbook-companion-") as temporary:
+            scratch = Path(temporary)
+            staged_path = scratch / relative_recipe
+            shutil.copytree(recipe_path.parent, staged_path.parent, symlinks=True)
+            for directory in ("schema", "templates", "engine-versions", "hardware-profiles"):
+                shutil.copytree(repo / directory, scratch / directory, symlinks=True)
+            model = repo / "models" / recipe["model_id"] / "model.yaml"
+            if model.is_file():
+                staged_model = scratch / model.relative_to(repo)
+                staged_model.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(model, staged_model)
+            for reference in [recipe_path.name, plan[1], *output_paths]:
+                if not (staged_path.parent / reference).resolve().is_relative_to(staged_path.parent.resolve()):
+                    return "", [f"{recipe_path}: staged input/output symlink escapes the recipe directory: {reference}"]
+            materialize(staged_path, plan)
+            with contextlib.redirect_stdout(io.StringIO()):
+                rendered, errors = _render_explicit_recipe(scratch, staged_path)
+            if errors:
+                return "", [error.replace(str(scratch), str(repo)) for error in errors]
+            outputs = {}
+            for output in output_paths:
+                outputs[output] = (staged_path.parent / output).read_bytes()
+            # Recheck source/collisions after potentially slow overlay preflight;
+            # never overwrite a concurrently supplied entry or verified assessment.
+            current_plan, errors = preparation_plan(repo, recipe_path)
+            if errors:
+                return "", errors
+            if recipe_path.read_bytes() != original_inputs or current_plan != plan:
+                return "", [f"{recipe_path}: companion inputs changed during render; review and retry"]
+            for output in output_paths:
+                if not (recipe_path.parent / output).resolve().is_relative_to(recipe_path.parent.resolve()):
+                    return "", [f"{recipe_path}: manifest destination changed to escape the recipe directory; review and retry"]
+            materialize(recipe_path, plan)
+            for relative_output, content in outputs.items():
+                output = recipe_path.parent / relative_output
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(content)
+                print(f"  wrote {output.relative_to(repo)}")
+            print(f"  materialized vllm-{plan[0]['platforms'][-1]['version']} companion (unverified)")
+            return rendered, []
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError, TemplateError) as error:
+        return "", [f"{recipe_path}: {error}"]
+
+
+def _render_explicit_recipe(
     repo: Path,
     recipe_path: Path,
     dry_run: bool = False,
@@ -365,6 +451,7 @@ def render_recipe(
         return "", [f"{recipe_path}: no platforms defined"]
 
     all_rendered: list[str] = []
+    pending_outputs: list[tuple[Path, bytes, bool]] = []
     for platform_entry in platforms:
         if platform_entry.get("blocked"):
             continue
@@ -385,10 +472,8 @@ def render_recipe(
             if not dry_run:
                 stack_dir = f"{stack}-{version}" if version else stack
                 manifest_dir = recipe_path.parent / "manifests" / stack_dir
-                manifest_dir.mkdir(parents=True, exist_ok=True)
                 output_path = manifest_dir / pinned_path.name
-                output_path.write_bytes(pinned_bytes)
-                print(f"  wrote {output_path.relative_to(repo)} (pinned)")
+                pending_outputs.append((output_path, pinned_bytes, True))
             all_rendered.append(rendered)
             continue
 
@@ -447,15 +532,22 @@ def render_recipe(
         if not dry_run:
             stack_dir = f"{stack}-{version}" if version else stack
             manifest_dir = recipe_path.parent / "manifests" / stack_dir
-            manifest_dir.mkdir(parents=True, exist_ok=True)
             kind = context["kind"]
             filename = f"{kind.lower()}.yaml"
             output_path = manifest_dir / filename
-            output_path.write_text(rendered)
-            print(f"  wrote {output_path.relative_to(repo)}")
+            pending_outputs.append((output_path, rendered.encode("utf-8"), False))
 
         all_rendered.append(rendered)
 
+    if not errors:
+        for output_path, _, _ in pending_outputs:
+            if not output_path.resolve().is_relative_to(recipe_path.parent.resolve()):
+                errors.append(f"{recipe_path}: manifest destination escapes the recipe directory: {output_path}")
+    if not errors:
+        for output_path, content, pinned in pending_outputs:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(content)
+            print(f"  wrote {output_path.relative_to(repo)}" + (" (pinned)" if pinned else ""))
     return "\n---\n".join(all_rendered), errors
 
 

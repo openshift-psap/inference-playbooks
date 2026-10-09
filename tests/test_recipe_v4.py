@@ -122,6 +122,19 @@ class RecipeV4SchemaTests(unittest.TestCase):
         platform["stack"] = "rhoai"
         self.assertTrue(self.errors_for(self.v4_recipe))
 
+    def test_optional_source_digest_is_derived_metadata_not_verification(self):
+        platform = self.v4_recipe["platforms"][0]
+        platform["companion"] = {"source": {"stack": "rhoai", "version": "9.0.0"}, "version_policy": "same",
+                                 "source_config_sha256": "a" * 64}
+        platform["verification"] = {"maturity": "day-zero", "deployment_status": {
+            "state": "needs-verification", "note": "Generated only."}, "benchmark_runs": []}
+        self.assertFalse(self.errors_for(self.v4_recipe))
+        platform["verification"]["maturity"] = "validated"
+        self.assertTrue(self.errors_for(self.v4_recipe))  # Matching digest cannot substitute for evidence.
+        platform["verification"]["maturity"] = "day-zero"
+        platform["companion"]["source_config_sha256"] = "not-a-sha256"
+        self.assertTrue(self.errors_for(self.v4_recipe))
+
     def test_recipe_wide_validation_does_not_promote_platform(self):
         self.v4_recipe.update(maturity="validated", benchmark_runs=["results/source/run.yaml"], image={
             "recommended": {"ref": self.v4_serving["image"], "status": {

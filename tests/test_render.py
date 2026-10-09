@@ -843,10 +843,251 @@ class SingleNodeCompanionTests(unittest.TestCase):
         from render import render_recipe
         before = self.path.read_bytes()
         self.assertTrue(self.prepare(check=True))
-        _, errors = render_recipe(self.repo, self.path)
+        _, errors = render_recipe(self.repo, self.path, dry_run=True)
         self.assertIn("missing explicit", "\n".join(errors))
         self.assertEqual(self.path.read_bytes(), before)
         self.assertFalse((self.path.parent / "manifests").exists())
+
+    def fixture_benchmark(self, name, platform):
+        import json
+        reference = f"results/{name}/run.yaml"
+        directory = self.path.parent / "results" / name
+        self.write(directory / "run.yaml", {
+            "schema_version": 1, "run_id": name, "recipe_id": self.recipe["recipe_id"],
+            "deployment_scope": "single-node", "platform": platform,
+            "hardware_profile": self.recipe["hardware_profile"], "hardware_profile_revision": 1,
+            "harness": "synthetic-schema-fixture", "result": "result.json",
+            "artifacts": [{"type": "raw-output", "path": "raw.json"}],
+        })
+        (directory / "raw.json").write_text("{}\n")
+        (directory / "result.json").write_text(json.dumps({
+            "schema_version": 1, "run_id": name, "deployment_scope": "single-node",
+            "accelerator_key": "nvidia-fixture-x8", "metrics": {},
+        }))
+        return reference
+
+    def test_normal_cli_render_automatically_materializes_unverified_companion(self):
+        import subprocess
+        from check_manifests import check_recipe
+        self.configure_local_weights()
+        source_run = self.fixture_benchmark("source-fixture", {"stack": "rhoai", "version": "9.0.0"})
+        self.recipe.update(maturity="validated", benchmark_runs=[source_run], image={"recommended": {
+            "ref": self.recipe["serving"]["image"], "status": {"state": "verified", "date": "2026-10-09", "method": "Synthetic source fixture."}}})
+        self.write(self.path, self.recipe)
+        source_before = self.source.read_bytes()
+        serving_before = self.load()["serving"]
+        command = [sys.executable, str(REPO / "tools/render.py"), "--repo", str(self.repo), str(self.path)]
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prepared = self.load()
+        self.assertEqual(len(prepared["platforms"]), 2)
+        target = prepared["platforms"][-1]
+        self.assertEqual(target["verification"]["maturity"], "day-zero")
+        self.assertEqual(target["verification"]["deployment_status"]["state"], "needs-verification")
+        self.assertEqual(target["verification"]["benchmark_runs"], [])
+        self.assertEqual(prepared["maturity"], "validated")
+        self.assertEqual(prepared["benchmark_runs"], [source_run])
+        self.assertEqual(prepared["serving"], serving_before)
+        self.assertEqual(self.source.read_bytes(), source_before)
+        self.assertIsNone(target["config"])
+        self.assertTrue((self.path.parent / "manifests/vllm-v1.2.3/deployment.yaml").exists())
+        self.assertFalse(check_recipe(self.repo, self.path.parent))
+        result = subprocess.run([sys.executable, str(REPO / "tools/validate.py"), "--repo", str(self.repo), "--current"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
+
+    def test_missing_auto_inputs_fail_read_only_cli_checks_without_writes(self):
+        import subprocess
+        before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
+        for tool, arguments in (("render.py", [str(self.path), "--dry-run"]),
+                                ("validate.py", ["--current"]),
+                                ("check_manifests.py", ["--all"]),
+                                ("prepare_companions.py", ["--check"])):
+            result = subprocess.run([sys.executable, str(REPO / "tools" / tool), "--repo", str(self.repo), *arguments], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, tool)
+            self.assertIn("tools/render.py", result.stdout + result.stderr)
+            self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}, tool)
+
+    def test_cached_ci_rejects_unstaged_auto_inputs_until_inputs_and_outputs_staged(self):
+        import os
+        import subprocess
+        from render import render_recipe
+        # This Git repository is the isolated synthetic fixture, never REPO.
+        self.assertNotEqual(self.repo.resolve(), REPO.resolve())
+        git_environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        git_environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+        def git(*arguments):
+            return subprocess.run(["git", "-C", str(self.repo), *arguments], env=git_environment, check=True, capture_output=True)
+        git("init", "-q")
+        git("config", "user.name", "Synthetic Fixture")
+        git("config", "user.email", "fixture@example.invalid")
+        git("add", ".")
+        git("commit", "-qm", "synthetic initial source inputs")
+        self.recipe["optimization_intent"] = "throughput"
+        self.write(self.path, self.recipe)
+        git("add", str(self.path.relative_to(self.repo)))
+        self.assertFalse(render_recipe(self.repo, self.path)[1])
+        before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
+        command = [sys.executable, str(REPO / "tools/check_manifests.py"), "--repo", str(self.repo), "--base", "HEAD", "--cached"]
+        result = subprocess.run(command, env=git_environment, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing explicit", result.stderr)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
+        git("add", ".")
+        result = subprocess.run(command, env=git_environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
+
+    def test_failed_complete_render_preflight_leaves_inputs_and_outputs_unchanged(self):
+        from render import render_recipe
+        self.write(self.repo / "schema/flag-constraints.yaml", {"schema_version": 1, "layers": [{
+            "scope": {"platform": {"stack": "vllm", "version": "v1.2.3"}},
+            "remove": [{"flag": "--speculative-config", "reason": "Synthetic incompatible target flag."}],
+        }]})
+        before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
+        _, errors = render_recipe(self.repo, self.path)
+        self.assertIn("--speculative-config", "\n".join(errors))
+        self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
+        self.assertFalse((self.path.parent / "manifests").exists())
+
+    def test_explicit_verified_companion_and_evidence_survive_automatic_render(self):
+        import subprocess
+        from render import render_recipe
+        self.assertFalse(render_recipe(self.repo, self.path)[1])
+        recipe = self.load()
+        reference = self.fixture_benchmark("target-fixture", {"stack": "vllm", "version": "v1.2.3"})
+        recipe["platforms"][-1]["verification"] = {
+            "maturity": "validated", "deployment_status": {"state": "verified", "date": "2026-10-09", "method": "Synthetic independent target fixture."},
+            "benchmark_runs": [reference],
+        }
+        self.write(self.path, recipe)
+        result = subprocess.run([sys.executable, str(REPO / "tools/validate.py"), "--repo", str(self.repo), "--current"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
+        self.assertFalse(render_recipe(self.repo, self.path)[1])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
+        self.write(self.source, {"env": [{"name": "CHANGED", "value": "changed"}]})
+        before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
+        _, errors = render_recipe(self.repo, self.path)
+        self.assertIn("stale/different env", "\n".join(errors))
+        self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
+        self.assertEqual(self.load()["platforms"][-1]["verification"]["maturity"], "validated")
+
+    def test_normal_render_existing_authored_platform_inputs_are_byte_preserved(self):
+        from render import render_recipe
+        self.recipe["platforms"].append({"stack": "vllm", "version": "v1.2.3", "overrides": "platforms/authored.yaml", "config": None})
+        self.write(self.path, self.recipe)
+        authored = self.path.parent / "platforms/authored.yaml"
+        self.write(authored, {"env": [{"name": "AUTHOR", "value": "owned"}]})
+        before = self.path.read_bytes(), authored.read_bytes()
+        self.assertFalse(render_recipe(self.repo, self.path)[1])
+        self.assertEqual(before, (self.path.read_bytes(), authored.read_bytes()))
+        self.assertNotIn("companion", self.load()["platforms"][-1])
+
+    def test_normal_render_unmapped_and_collision_inputs_do_not_mutate(self):
+        from render import render_recipe
+        self.recipe["serving"]["config_overrides"] = True
+        self.write(self.path, self.recipe)
+        before = self.path.read_bytes()
+        _, errors = render_recipe(self.repo, self.path)
+        self.assertIn("not platform-targeted", "\n".join(errors))
+        self.assertEqual(before, self.path.read_bytes())
+        self.recipe["serving"].pop("config_overrides")
+        self.write(self.path, self.recipe)
+        self.write(self.path.parent / "platforms/vllm-v1.2.3.yaml", {"env": [{"name": "USER", "value": "work"}]})
+        before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
+        _, errors = render_recipe(self.repo, self.path)
+        self.assertIn("refusing to overwrite", "\n".join(errors))
+        self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
+
+    def test_newer_optional_preparation_then_normal_render_keeps_explicit_selection(self):
+        from render import render_recipe
+        self.write(self.path.parent / "platforms/newer.yaml", {
+            "image": "registry.example.org/runtime:newer", "image_usage": {"kind": "custom", "note": "Explicit newer fixture."},
+            "engine": {"name": "vllm", "image": "registry.example.org/runtime:newer", "version": "1.3.0", "source": "https://example.org/newer"},
+        })
+        self.assertFalse(self.prepare(version="1.3.0", overrides="platforms/newer.yaml"))
+        before = self.path.read_bytes()
+        self.assertFalse(render_recipe(self.repo, self.path)[1])
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.load()["platforms"][-1]["companion"]["version_policy"], "newer")
+
+    def test_auto_render_rechecks_concurrent_assessment_before_input_writes(self):
+        from unittest.mock import patch
+        import render
+        original_render = render._render_explicit_recipe
+        def concurrent_change(repo, path, *args, **kwargs):
+            result = original_render(repo, path, *args, **kwargs)
+            source = self.load()
+            source["maturity"] = "day-zero"  # Simulate separately supplied author metadata.
+            self.write(self.path, source)
+            return result
+        with patch("render._render_explicit_recipe", side_effect=concurrent_change):
+            _, errors = render.render_recipe(self.repo, self.path)
+        self.assertIn("inputs changed during render", "\n".join(errors))
+        self.assertEqual(self.load()["maturity"], "day-zero")
+        self.assertEqual(len(self.load()["platforms"]), 1)
+        self.assertFalse((self.path.parent / "manifests").exists())
+
+    def test_generated_source_digest_detects_shared_checkpoint_drift_without_reset(self):
+        from render import render_recipe
+        self.assertFalse(render_recipe(self.repo, self.path)[1])
+        recipe = self.load()
+        target = recipe["platforms"][-1]
+        self.assertEqual(len(target["companion"]["source_config_sha256"]), 64)
+        target["verification"]["deployment_status"] = {
+            "state": "verified", "date": "2026-10-09", "method": "Synthetic independent assessment."}
+        recipe["serving"]["model"] = "example/different-checkpoint"
+        self.write(self.path, recipe)
+        before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
+        _, errors = render_recipe(self.repo, self.path)
+        self.assertIn("source inputs changed since materialization", "\n".join(errors))
+        self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
+        self.assertEqual(self.load()["platforms"][-1]["verification"]["deployment_status"]["state"], "verified")
+
+    def test_legacy_companion_without_digest_is_not_rewritten(self):
+        from render import render_recipe
+        self.assertFalse(render_recipe(self.repo, self.path)[1])
+        recipe = self.load()
+        recipe["platforms"][-1]["companion"].pop("source_config_sha256")
+        self.write(self.path, recipe)
+        before = self.path.read_bytes()
+        self.assertFalse(render_recipe(self.repo, self.path)[1])
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_auto_render_manifest_symlink_cannot_write_outside_recipe(self):
+        import tempfile
+        from render import render_recipe
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory) / "user.yaml"
+            external.write_text("user: work\n")
+            target = self.path.parent / "manifests/vllm-v1.2.3/deployment.yaml"
+            target.parent.mkdir(parents=True)
+            target.symlink_to(external)
+            before = self.path.read_bytes()
+            _, errors = render_recipe(self.repo, self.path)
+            self.assertIn("manifest destination escapes", "\n".join(errors))
+            self.assertEqual(self.path.read_bytes(), before)
+            self.assertEqual(external.read_text(), "user: work\n")
+
+    def test_existing_targets_fail_before_any_partial_manifest_update(self):
+        from render import render_recipe
+        self.assertFalse(render_recipe(self.repo, self.path)[1])
+        source_output = self.path.parent / "manifests/rhoai-9.0.0/llminferenceservice.yaml"
+        target_output = self.path.parent / "manifests/vllm-v1.2.3/deployment.yaml"
+        source_output.write_text("source sentinel\n")
+        target_output.write_text("target sentinel\n")
+        self.write(self.repo / "schema/flag-constraints.yaml", {"schema_version": 1, "layers": [{
+            "scope": {"platform": {"stack": "vllm", "version": "v1.2.3"}},
+            "remove": [{"flag": "--speculative-config", "reason": "Synthetic late target validation failure."}],
+        }]})
+        _, errors = render_recipe(self.repo, self.path)
+        self.assertTrue(errors)
+        self.assertEqual(source_output.read_text(), "source sentinel\n")
+        self.assertEqual(target_output.read_text(), "target sentinel\n")
 
     def test_idempotent_no_duplicate_and_no_inherited_benchmarks(self):
         self.recipe["benchmark_runs"] = ["results/source/run.yaml"]
