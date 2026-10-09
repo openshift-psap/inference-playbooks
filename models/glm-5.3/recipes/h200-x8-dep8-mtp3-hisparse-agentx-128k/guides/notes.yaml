@@ -1,0 +1,16 @@
+schema_version: 1
+profile:
+  label: GLM-5.3 DP8/EP8 + HiSparse
+  headline: Recommended single-node GLM-5.3 deployment on 8x H200 with vLLM v0.31.0.
+  specs:
+    - {label: Node scope, source: "recipe.yaml#/deployment/scope"}
+    - {label: Data parallel, source: "recipe.yaml#/serving/parallelism/dp"}
+decisions:
+  - subjects: ["--data-parallel-size", "--enable-expert-parallel"]
+    why: Each DP rank has its own KV pool, so concurrency does not queue on KV capacity; beat TP8/EP8 from 32 concurrent sessions up.
+quickstart:
+  - {step: Deploy, detail: "Create the hf-token Secret and apply manifests/vllm-v0.31.0/deployment.yaml on a node with 1.5 TiB of allocatable memory."}
+known_issues:
+  - issue: vLLM's internal DP load balancer has no prefix-cache affinity.
+    impact: Multi-turn traffic gets fewer prefix-cache hits than behind a prefix-aware router.
+    mitigation: Put one port per DP rank behind a prefix-aware router such as llm-d.

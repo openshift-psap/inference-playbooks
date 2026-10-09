@@ -1,0 +1,22 @@
+# /dev/shm holds each rank's 16 GiB CPU offload region (128 GiB for 8 ranks) plus
+# NCCL buffers; the template mounts it only for TP>1. Startup probe: 60 minutes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm-5-3-dep8-mtp3-hisparse
+spec:
+  template:
+    spec:
+      containers:
+        - name: vllm
+          startupProbe:
+            periodSeconds: 30
+            failureThreshold: 120
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 192Gi
