@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# tools/render.py substitutes its freshly rendered base for this reference.
+resources:
+  - ../manifests/rhoai-3.5/llminferenceservice.yaml
+patches:
+  - path: rhoai-3.5.yaml
+    target:
+      kind: LLMInferenceService
+      name: b200-x8-tp8-ep-mtp3-guidellm-8k1k
+  - target:
+      kind: LLMInferenceService
+      name: b200-x8-tp8-ep-mtp3-guidellm-8k1k
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: glm-5-2-aggregated-b200

@@ -9,6 +9,12 @@ behind the scenes.
 Validated on janus (OCP 4.22, RHOAI 3.5.0 GA, 2×8×H200) with real
 FP8 weights from NFS PVC, composite DRA GPU+NIC pairs, RDMA/RoCE.
 
+> **Aggregated single-node B200?** For an aggregated (single 8×B200 node,
+> TP=8 + expert parallel) `LLMInferenceService` serving
+> `RedHatAI/GLM-5.2-NVFP4-FP8`, see
+> the [consolidated v4 recipe](../../recipes/b200-x8-tp8-ep-mtp3-guidellm-8k1k/guides/README.md)
+> (rendered 3.5 and pinned 3.4; contributed, not benchmark-validated).
+
 ## Manifest Variants
 
 | Manifest | GPU resource | Use when |

@@ -1,0 +1,3 @@
+# Version-specific Kubernetes settings are in config/rhoai-3.5.yaml.
+# The current override schema cannot represent baseRefs, command or volumes.
+{}

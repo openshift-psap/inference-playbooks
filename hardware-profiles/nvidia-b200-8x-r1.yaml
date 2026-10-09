@@ -1,0 +1,15 @@
+schema_version: 1
+profile_id: nvidia-b200-8x-r1
+profile_revision: 1
+kind: hardware-profile
+description: Contributor-reported node with eight NVIDIA B200 GPUs.
+accelerator_key: nvidia-b200-x8
+accelerators:
+  vendor: nvidia
+  model: B200
+  count_per_node: 8
+# GPU memory, form factor, host capacity and interconnect were not supplied.
+# Recipe resource requests are not independently measured hardware facts.
+correction_log:
+  - revision: 1
+    summary: Record only the contributor-confirmed accelerator type and count.

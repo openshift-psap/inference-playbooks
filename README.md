@@ -43,6 +43,7 @@ the workload is specific to that model, framework, or deployment shape.
 | Gemma-4-26B-A4B-FP8 | [h200-x8-mtp-single-gpu-8k1k](models/gemma-4/recipes/h200-x8-mtp-single-gpu-8k1k/recipe.yaml) | vLLM v0.24.0 | TP (single-GPU) |
 | GLM-5.2-FP8 | [h200-x8-pp2-tp8-agentx-128k-vllm](models/glm-5.2/recipes/h200-x8-pp2-tp8-agentx-128k-vllm/recipe.yaml) | vLLM v0.23.0 | PP2+TP8 (LWS) |
 | GLM-5.2-FP8 | [h200-x8-pp2-tp8-agentx-128k-rhoai](models/glm-5.2/recipes/h200-x8-pp2-tp8-agentx-128k-rhoai/recipe.yaml) | RHOAI 3.5 | PP2+TP8 (LLMI) |
+| GLM-5.2-NVFP4-FP8 | [b200-x8-tp8-ep-mtp3-guidellm-8k1k](models/glm-5.2/recipes/b200-x8-tp8-ep-mtp3-guidellm-8k1k/guides/README.md) | RHOAI 3.5 (rendered), 3.4 (pinned) | Single-node TP8+EP+MTP3; contributed |
 | Qwen3-235B-A22B | [h200-x8-pp2-tp8-agentx-128k](models/qwen3-235b-a22b/recipes/h200-x8-pp2-tp8-agentx-128k/recipe.yaml) | RHOAI 3.5 | PP2+TP8 (LLMI) |
 | GLM-5 / GLM-5-FP8 | — | — | [Model Ops](models/glm-5/model-ops/) only |
 

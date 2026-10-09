@@ -1,0 +1,35 @@
+schema_version: 1
+profile:
+  label: GLM-5.2 NVFP4-FP8 aggregated B200
+  sub: Rendered RHOAI 3.5 with a separately preserved RHOAI 3.4 pin
+  specs:
+    - label: Checkpoint
+      source: recipe.yaml#/serving/model
+    - label: Tensor parallelism
+      source: recipe.yaml#/serving/parallelism/tp
+    - label: Hardware
+      source: recipe.yaml#/hardware_profile
+decisions:
+  - subjects: [platforms, serving.config_overrides]
+    why: Convert PR 4 to a generated 3.5 configuration using the existing Kustomize path; preserve PR 3's 3.4 manifest without applying the 3.5 overlay. Original contributor inputs and source commits are recorded in raw-manifest/README.md.
+  - subjects: [workload_profile, maturity, deployment.status]
+    why: GuideLLM 8K/1K is a planned benchmark target. Contributor-reported direct 3.4 smoke (2026-08-31) and gateway 3.5 smoke (2026-09-10) are not committed performance or accuracy evidence; the migration has not been deployed.
+    status:
+      state: needs-verification
+      note: Independently deploy and benchmark each platform before claiming validated maturity.
+known_issues:
+  - issue: InstantTensor is installed from PyPI on every new pod.
+    impact: Startup requires external package access; this is neither a disconnected deployment nor a product-native RHOAI runtime.
+    mitigation: Validate an approved image with the loader included before recommending this to customers.
+  - issue: The pinned 3.4 command serves HTTP regardless of controller TLS configuration.
+    impact: TLS-enabled inherited probes or gateway upstream settings may be incompatible. The original direct smoke does not establish gateway compatibility.
+    mitigation: Inspect the installed 3.4 configs and resolved pod; review any pin changes separately.
+  - issue: The 3.4 pin inherits its startup-probe budget from installed configs.
+    impact: Cold model download or JIT can exceed the reviewed base template's approximately ten-minute allowance.
+    mitigation: Confirm cold-start duration and the resolved probe budget before deploying the pin.
+  - issue: The 3.5 launch adapter splits generated argument values on whitespace.
+    impact: Values containing spaces are not supported by this recipe's adapter; compact speculative JSON is preserved.
+    mitigation: Keep values whitespace-free or revise and reverify the adapter before adding such flags.
+  - issue: Current templates cannot express every Kubernetes setting in the serving block.
+    impact: Images, TLS/probes, cache volumes and initialization are explicit overlay inputs; image references must remain aligned with recipe metadata.
+    mitigation: Run renderer, drift and configuration-parity checks after changing either input.

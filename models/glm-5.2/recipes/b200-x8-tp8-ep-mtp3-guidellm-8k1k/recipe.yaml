@@ -1,0 +1,120 @@
+schema_version: 4
+recipe_id: b200-x8-tp8-ep-mtp3-guidellm-8k1k
+model_id: glm-5.2
+quantization: NVFP4-FP8
+platforms:
+  - stack: rhoai
+    version: "3.5"
+    overrides: platforms/rhoai-3.5.yaml
+  - stack: rhoai
+    version: "3.4"
+    overrides: platforms/rhoai-3.4.yaml
+    pinned_manifest: manifests/rhoai-3.4/glm-5-2-aggregated-b200-llmisvc.yaml
+    pinned_reason: Preserve PR 3's original configuration while 3.5 is converted; the pin does not inherit rendered overrides or verification.
+hardware_profile: hardware-profiles/nvidia-b200-8x-r1.yaml
+# Planned benchmark target, not evidence of a completed 8K/1K run.
+workload_profile: guidellm-8k1k
+deployment_mode: aggregated-tp8-ep-mtp3
+optimization_intent: single-node aggregated serving
+maturity: contributed
+serving:
+  image: docker.io/vllm/vllm-openai:v0.27.0
+  image_usage:
+    kind: custom
+    note: Upstream vLLM replaces the bundled RHOAI runtime; InstantTensor 0.1.9 is installed at startup to reproduce the contributed loader path. Not a product-native recommendation.
+  engine:
+    name: vllm
+    version: 0.27.0
+    image: docker.io/vllm/vllm-openai:v0.27.0
+    source: https://github.com/vllm-project/vllm/releases/tag/v0.27.0
+  model: RedHatAI/GLM-5.2-NVFP4-FP8
+  parallelism:
+    mode: tp
+    tp: 8
+  port: 8000
+  config_overrides: true
+  resources:
+    requests:
+      cpu: "64"
+      memory: 512Gi
+      ephemeral-storage: 1Ti
+    limits:
+      memory: 512Gi
+      ephemeral-storage: 1Ti
+  args:
+    - flag: --disable-access-log-for-endpoints
+      value: /health,/metrics,/v1/models
+      required: false
+      why: Preserve the submitted access-log exclusions.
+    - flag: --max-num-seqs
+      value: "64"
+      required: true
+      why: Preserve the submitted sequence limit.
+    - flag: --max-num-batched-tokens
+      value: "8192"
+      required: true
+      why: Preserve the submitted batch token limit.
+    - flag: --max-cudagraph-capture-size
+      value: "256"
+      required: true
+      why: Resolve the source's 64 sequences times (3 speculative tokens plus 1).
+    - flag: --long-prefill-token-threshold
+      value: "4096"
+      required: true
+      why: Preserve the submitted long-prefill threshold.
+    - flag: --enable-expert-parallel
+      required: true
+      why: Preserve expert parallelism from the contributed MoE configuration.
+    - flag: --moe-backend
+      value: auto
+      required: true
+      why: Preserve the submitted automatic backend choice.
+    - flag: --speculative-config
+      value: '{"method":"mtp","num_speculative_tokens":3}'
+      required: true
+      why: Preserve MTP with three speculative tokens; this custom runtime is not the bundled RHOAI image.
+    - flag: --kv-cache-dtype
+      value: fp8
+      required: true
+      why: Preserve the contributed FP8 KV-cache configuration.
+    - flag: --load-format
+      value: instanttensor
+      required: true
+      why: Use the InstantTensor dependency installed by the preserved init container.
+  env:
+    - name: PYTHONPATH
+      value: /opt/pydeps
+    - name: HF_HUB_OFFLINE
+      value: "0"
+    - name: TRANSFORMERS_OFFLINE
+      value: "0"
+    - name: VLLM_USE_V2_MODEL_RUNNER
+      value: "1"
+    - name: TORCH_CPP_LOG_LEVEL
+      value: ERROR
+    - name: HF_HUB_CACHE
+      value: /var/cache/huggingface
+    - name: VLLM_CACHE_ROOT
+      value: /var/cache/vllm/vllm
+    - name: FLASHINFER_WORKSPACE_BASE
+      value: /var/cache/vllm/flashinfer
+    - name: CUDA_CACHE_PATH
+      value: /var/cache/vllm/cuda
+deployment:
+  scope: single-node
+  status:
+    state: needs-verification
+    note: Contributor reported separate direct 3.4 and gateway 3.5 smoke tests. The converted 3.5 configuration has not been deployed; neither platform has committed benchmark evidence.
+  storage:
+    type: pvc
+    pvc:
+      name: glm-5-2-hf-cache
+    why: Preserve the writable Hugging Face cache; vLLM loads the HF checkpoint directly rather than a local weights directory.
+  manifests:
+    - path: manifests/rhoai-3.5/llminferenceservice.yaml
+      kind: LLMInferenceService
+      generated: true
+    - path: manifests/rhoai-3.4/glm-5-2-aggregated-b200-llmisvc.yaml
+      kind: LLMInferenceService
+      generated: false
+notes: guides/notes.yaml
