@@ -110,9 +110,13 @@ files. This exception ends after the initial release.
 - `platforms/` contains per-platform override files referenced by
   `platforms[].overrides`. Override merge: image/resources/router replace,
   env appends, args merge by flag. Templates derive the K8s component kind
-  from `(platform.stack, parallelism.mode)`.
+  from `(platform.stack, parallelism.mode, deployment.scope)`; unsupported tuples
+  fail instead of silently falling back to Deployment.
 - `config/` contains optional Kustomize overlay patches when
-  `serving.config_overrides` is true.
+  `serving.config_overrides` is true (legacy shared selection), or a platform's
+  `config` selects its own directory; null disables overlays. Prefer declarative
+  runtime inputs. Companions never inherit overlays or provision PVCs/downloaders;
+  unknown runtime/security mapping is blocked; explicitly review unsupported counterparts.
 - `raw-manifest/` preserves the initial submitted inputs for maintainer
   conversion. It may contain multi-document YAML or JSON and an optional
   README. After conversion, `config/` and `recipe.yaml` are authoritative.
@@ -191,10 +195,15 @@ and immutable checksum plus a durable external location.
   provenance. Run `python3 tools/validate.py --current` locally.
 - `tools/render.py` — renders Kubernetes manifests from v4 recipes. Iterates
   each platform entry, merges overrides, evaluates flag constraints, selects
-  a Jinja2 template from `(platform.stack, parallelism.mode)`, and writes to
+  a Jinja2 template from `(platform.stack, parallelism.mode, deployment.scope)`, and writes to
   `manifests/<stack>-<version>/`. Supports pinned manifests (verbatim copy),
   Kustomize overlays (`config_overrides: true`), and shell-safe quoting for
   LWS `sh -c` args via `shellquote` filter.
+  Normal local render auto-materializes eligible single-node companions as explicit
+  inputs/outputs, independently day-zero/needs-verification with no inherited evidence.
+  Dry-run/validate/check/drift/CI stay read-only. Preserve authored targets/verification;
+  source drift requires review, never automatic reset/promotion. See `CONTRIBUTING.md`
+  for workflow/provenance and optional newer selection; schemas own verification fields.
 - `tools/constraints.py` — stackable flag constraint engine. Constraints in
   `schema/flag-constraints.yaml` scope by `model_type`, `platform`, and
   `parallelism` to remove or force specific vLLM flags. Evaluated
@@ -227,12 +236,19 @@ schema/
 
 Templates live in `templates/<stack>/`. Current template map:
 
-| Stack | Mode | Template | K8s Kind |
-|-------|------|----------|----------|
-| vllm | tp, dp, tp+dp | `vllm/deployment.yaml.j2` | Deployment |
-| vllm | pp, tp+pp | `vllm/lws.yaml.j2` | LeaderWorkerSet |
-| rhoai | tp | `rhoai/llmisvc.yaml.j2` | LLMInferenceService |
-| rhoai | pp, tp+pp | `rhoai/llmisvc-pp.yaml.j2` | LLMInferenceService |
+| Stack | Mode | Scope | Template | K8s Kind |
+|-------|------|-------|----------|----------|
+| vllm | tp, dp, tp+dp | single-node | `vllm/deployment.yaml.j2` | Deployment |
+| vllm | tp+dp | multi-node | `vllm/dp-lws.yaml.j2` | LeaderWorkerSet + leader API Service |
+| vllm | pp, tp+pp | single-node / multi-node (legacy unchanged) | `vllm/lws.yaml.j2` | LeaderWorkerSet |
+| rhoai | tp | single-node / multi-node (selection unchanged) | `rhoai/llmisvc.yaml.j2` | LLMInferenceService |
+| rhoai | pp, tp+pp | single-node / multi-node (selection unchanged) | `rhoai/llmisvc-pp.yaml.j2` | LLMInferenceService |
+
+Multi-node vLLM TP+DP uses TP GPUs per pod and DP pods per LWS group; vLLM owns
+ranks. Only source-resolved 0.24.0 internal-LB/headless startup is audited.
+Audit references/role contract are beside the gate in `tools/distributed_dp.py`;
+controller/storage/probe prerequisites are in `CONTRIBUTING.md`.
+Multi-node recipes never receive companions; unsupported tuples fail explicitly.
 
 Templates use `shellquote` (not `tojson`) for args in LWS templates where
 `command: ["sh", "-c"]` requires shell-safe quoting. PP/TP+PP templates
@@ -240,6 +256,8 @@ support separate `leader_args` and `worker_args` via role blocks.
 
 Pinned manifests (`pinned_manifest` in platform entry) bypass rendering and
 copy a hand-authored manifest verbatim. Use when a converter is WIP.
+The new distributed-DP path rejects pins/overlays rather than bypassing its audited
+startup/routing contract; existing PP/RHOAI pin behavior remains unchanged.
 
 ## Recipe versions
 

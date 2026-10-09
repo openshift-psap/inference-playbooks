@@ -67,6 +67,84 @@ class RecipeV4SchemaTests(unittest.TestCase):
 
     # --- v4 basic validation ---
 
+    def test_platform_verification_is_optional_and_independent(self):
+        self.assertFalse(self.errors_for(self.v4_recipe))
+        self.v4_recipe["platforms"][0]["verification"] = {
+            "maturity": "day-zero",
+            "deployment_status": {"state": "needs-verification", "note": "Not deployed."},
+            "benchmark_runs": [],
+        }
+        self.assertFalse(self.errors_for(self.v4_recipe))
+
+    def test_declarative_pvc_shm_and_scoped_config_schema(self):
+        self.v4_recipe["serving"]["shared_memory"] = {"size": "16Gi"}
+        self.v4_recipe["deployment"]["storage"] = {"type": "pvc", "pvc": {
+            "name": "fixture-weights", "mount_path": "/mnt/models", "read_only": True}}
+        for config in (None, "config", "config/rhoai"):
+            self.v4_recipe["platforms"][0]["config"] = config
+            self.assertFalse(self.errors_for(self.v4_recipe))
+        for config in ("../config", "config/../escape", "config/dir/kustomization.yaml"):
+            self.v4_recipe["platforms"][0]["config"] = config
+            self.assertTrue(self.errors_for(self.v4_recipe))
+        self.v4_recipe["platforms"][0]["config"] = None
+        self.v4_recipe["serving"]["shared_memory"]["size"] = "0Gi"
+        self.assertTrue(self.errors_for(self.v4_recipe))
+        self.v4_recipe["serving"]["shared_memory"]["size"] = "16Gi"
+        self.v4_recipe["deployment"]["storage"]["pvc"].pop("read_only")
+        self.assertTrue(self.errors_for(self.v4_recipe))
+
+    def test_platform_verified_maturity_requires_verified_deployment_and_evidence(self):
+        platform = self.v4_recipe["platforms"][0]
+        platform["verification"] = {
+            "maturity": "validated",
+            "deployment_status": {"state": "needs-verification", "note": "Not deployed."},
+            "benchmark_runs": [],
+        }
+        self.assertTrue(self.errors_for(self.v4_recipe))
+        platform["verification"]["deployment_status"] = {
+            "state": "verified", "date": "2026-10-07", "method": "Synthetic schema fixture."}
+        self.assertTrue(self.errors_for(self.v4_recipe))
+        platform["verification"]["benchmark_runs"] = ["results/fixture/run.yaml"]
+        self.assertFalse(self.errors_for(self.v4_recipe))
+
+    def test_platform_verification_is_not_an_inheritance_marker(self):
+        for verification in ({}, {"maturity": "day-zero"}, {"inherit": True}):
+            self.v4_recipe["platforms"][0]["verification"] = verification
+            self.assertTrue(self.errors_for(self.v4_recipe))
+
+    def test_companion_requires_own_verification_and_vllm_stack(self):
+        platform = self.v4_recipe["platforms"][0]
+        platform["companion"] = {"source": {"stack": "rhoai", "version": "9.0.0"}, "version_policy": "same"}
+        self.assertTrue(self.errors_for(self.v4_recipe))
+        platform["verification"] = {"maturity": "day-zero", "deployment_status": {
+            "state": "needs-verification", "note": "Not deployed."}, "benchmark_runs": []}
+        self.assertFalse(self.errors_for(self.v4_recipe))
+        platform["stack"] = "rhoai"
+        self.assertTrue(self.errors_for(self.v4_recipe))
+
+    def test_optional_source_digest_is_derived_metadata_not_verification(self):
+        platform = self.v4_recipe["platforms"][0]
+        platform["companion"] = {"source": {"stack": "rhoai", "version": "9.0.0"}, "version_policy": "same",
+                                 "source_config_sha256": "a" * 64}
+        platform["verification"] = {"maturity": "day-zero", "deployment_status": {
+            "state": "needs-verification", "note": "Generated only."}, "benchmark_runs": []}
+        self.assertFalse(self.errors_for(self.v4_recipe))
+        platform["verification"]["maturity"] = "validated"
+        self.assertTrue(self.errors_for(self.v4_recipe))  # Matching digest cannot substitute for evidence.
+        platform["verification"]["maturity"] = "day-zero"
+        platform["companion"]["source_config_sha256"] = "not-a-sha256"
+        self.assertTrue(self.errors_for(self.v4_recipe))
+
+    def test_recipe_wide_validation_does_not_promote_platform(self):
+        self.v4_recipe.update(maturity="validated", benchmark_runs=["results/source/run.yaml"], image={
+            "recommended": {"ref": self.v4_serving["image"], "status": {
+                "state": "verified", "date": "2026-10-07", "method": "Source image fixture."}}})
+        platform = self.v4_recipe["platforms"][0]
+        platform["verification"] = {"maturity": "day-zero", "deployment_status": {
+            "state": "needs-verification", "note": "No counterpart evidence."}, "benchmark_runs": []}
+        self.assertFalse(self.errors_for(self.v4_recipe))
+        self.assertEqual(platform["verification"]["maturity"], "day-zero")
+
     def test_v4_recipe_with_serving_validates(self):
         errors = self.errors_for(self.v4_recipe)
         self.assertFalse(errors, [e.message for e in errors])

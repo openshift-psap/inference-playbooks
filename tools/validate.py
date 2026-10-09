@@ -267,7 +267,7 @@ def validate_v4_recipe(repo: Path, recipe_path: Path, recipe: dict, registry: Re
                 errors.append(f"{recipe_path}: duplicate flag in serving.args: {flag}")
             seen_flags.add(flag)
 
-    if serving.get("config_overrides") is True:
+    if serving.get("config_overrides") is True and any("config" not in p for p in recipe.get("platforms", [])):
         kustomization = recipe_path.parent / "config" / "kustomization.yaml"
         if not kustomization.is_file():
             errors.append(
@@ -388,6 +388,13 @@ def _validate_platform_overrides(repo: Path, recipe_path: Path, recipe: dict, re
     for entry in platforms:
         if not isinstance(entry, dict):
             continue
+        from render_inputs import config_path, declarative_errors, platform_config
+        reference = platform_config(recipe, entry)
+        if reference:
+            try:
+                config_path(recipe_path.parent, reference)
+            except ValueError as error:
+                errors.append(f"{recipe_path}: {error}")
         if entry.get("blocked"):
             stack = entry.get("stack", "?")
             version = entry.get("version", "?")
@@ -417,6 +424,19 @@ def _validate_platform_overrides(repo: Path, recipe_path: Path, recipe: dict, re
             continue
         try:
             overrides = load_yaml(overrides_path)
+            from render import merge_overrides
+            from distributed_dp import distributed_dp_errors
+            effective_serving = merge_overrides(recipe['serving'], overrides)
+            errors.extend(f"{recipe_path}: [{entry['stack']}-{entry['version']}] {error}" for error in
+                          distributed_dp_errors(repo, recipe, effective_serving, entry))
+            if not entry.get('blocked') and not entry.get('pinned_manifest'):
+                from render import select_template
+                try:
+                    select_template(entry['stack'], effective_serving['parallelism']['mode'], recipe['deployment']['scope'])
+                except ValueError as error:
+                    errors.append(f"{recipe_path}: {error}")
+            errors.extend(f"{recipe_path}: [{entry['stack']}-{entry['version']}] {error}" for error in
+                          declarative_errors(recipe, effective_serving, entry))
         except (OSError, ValueError, yaml.YAMLError) as error:
             errors.append(f"{recipe_path}: cannot load platform override {overrides_ref}: {error}")
             continue
@@ -429,6 +449,38 @@ def _validate_platform_overrides(repo: Path, recipe_path: Path, recipe: dict, re
                 errors.extend(override_errors)
             except (OSError, json.JSONDecodeError) as error:
                 errors.append(f"{recipe_path}: cannot load platform override schema: {error}")
+    return errors
+
+
+def platform_verification_errors(repo: Path, recipe_path: Path, recipe: dict, runs_by_path: dict) -> list[str]:
+    """Platform evidence never inherits legacy recipe-wide evidence or status."""
+    from engine_versions import normalize_version
+
+    errors = []
+    for platform in recipe.get("platforms", []):
+        verification = platform.get("verification")
+        if not isinstance(verification, dict):
+            continue
+        for reference in verification.get("benchmark_runs", []):
+            path = contained_path(recipe_path.parent, reference)
+            run = runs_by_path.get(path) if path else None
+            label = f"{recipe_path}: [{platform['stack']}-{platform['version']}]"
+            if not path or not run:
+                errors.append(f"{label}: platform benchmark run missing, escaping, or not indexed: {reference}")
+                continue
+            identity = run.get("platform", {})
+            version = identity.get("version", "")
+            expected = platform["version"]
+            if platform["stack"] == "vllm":
+                version, expected = normalize_version(version), normalize_version(expected)
+            if identity.get("stack") != platform["stack"] or version != expected:
+                errors.append(f"{label}: platform benchmark requires matching explicit run.platform provenance")
+            if run.get("recipe_id") != recipe["recipe_id"]:
+                errors.append(f"{label}: platform benchmark recipe_id mismatch")
+            if run.get("deployment_scope") != recipe["deployment"]["scope"]:
+                errors.append(f"{label}: platform benchmark deployment_scope mismatch")
+            if run.get("hardware_profile") != recipe["hardware_profile"]:
+                errors.append(f"{label}: platform benchmark hardware_profile mismatch")
     return errors
 
 
@@ -488,6 +540,9 @@ def validate_recipe_layout(repo: Path, recipe_path: Path, recipe: dict, runs_by_
             load_yaml(profile_path)
         except (OSError, ValueError, yaml.YAMLError) as error:
             errors.append(f"{recipe_path}: cannot load hardware_profile: {error}")
+    errors.extend(platform_verification_errors(repo, recipe_path, recipe, runs_by_path))
+    from companions import companion_errors
+    errors.extend(f"{recipe_path}: {error}" for error in companion_errors(repo, recipe_path, recipe))
     run_references = recipe.get("benchmark_runs", [])
     if not isinstance(run_references, list):
         run_references = []

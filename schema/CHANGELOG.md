@@ -1,5 +1,34 @@
 # Schema changelog
 
+## Automatic local-render companion materialization
+
+- Local render auto-materializes eligible explicit inputs/outputs after preflight;
+  dry-run/validate/drift/CI stay read-only. Fresh targets remain independently unverified.
+- Optional `companion.source_config_sha256` detects source-input drift, not evidence;
+  verification is never auto-reset/promoted. Legacy records and evidence rules remain compatible.
+
+## Scope-aware multi-node vLLM TP+DP interpretation (no new schema fields)
+
+- Selection uses scope; unsupported tuples fail. PP/RHOAI choices remain unchanged.
+- Multi-node TP+DP: TP GPUs/pod, DP nodes, audited vLLM 0.24.0 LWS/internal LB only.
+  Single-node retains TP*DP GPUs/pod; no new fields/version inference.
+
+## Declarative local weights, shared memory, and platform overlays
+
+- PVC adds `mount_path`, optional child `model_path`, and `read_only`; no provisioning/downloader.
+- Serving/overrides add `shared_memory.size`; legacy 4Gi/TP>1 defaults remain.
+- `platforms[].config` selects a directory; null disables, omission keeps legacy selection.
+- TP RHOAI/Deployment honor alias/probes/image/local weights/resources/shm and raw JSON.
+  Companion overlays must preserve runtime/object identity except informational description.
+
+## Independent platform verification and single-node companions
+
+- Optional platform `verification` owns maturity/status/benchmarks, never inherited.
+  `validated`/`production` needs verified deployment and platform-owned evidence.
+- `companion` records source and same/newer policy; independent verification is required.
+- Optional `run.platform` supplies exact stack/version; evidence must also match recipe/scope/hardware.
+  Legacy recipe-wide metadata stays compatible.
+
 ## Add `contributed` maturity level
 
 - `maturity` enum now accepts four values:
