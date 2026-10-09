@@ -1,20 +1,5 @@
-# Wrap the generated command so recipe.yaml remains authoritative for flags.
-# The original bootstrap edits site-packages and therefore requires root.
-- op: replace
-  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/command
-  value: &bootstrap
-    - /bin/bash
-    - -c
-    - |
-      set -euo pipefail
-      humming=/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py
-      grep -q 'MoEActivation.SITU' "$humming" || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' "$humming"
-      grep -q 'MoEActivation.SITU' "$humming"
-      exec /bin/sh -c "$1"
-    - --
-- op: replace
-  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/command
-  value: *bootstrap
+# Retain the submitted security context; non-root hostPath/cache access needs
+# target-cluster verification. The upstream image needs no site-packages patch.
 - op: replace
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsNonRoot
   value: false

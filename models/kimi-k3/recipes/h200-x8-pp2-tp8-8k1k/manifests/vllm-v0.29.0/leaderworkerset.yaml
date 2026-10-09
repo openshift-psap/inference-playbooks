@@ -50,15 +50,8 @@ spec:
               --tool-call-parser=kimi_k3 \
               --reasoning-parser=kimi_k3 \
           command:
-          - /bin/bash
+          - sh
           - -c
-          - |
-            set -euo pipefail
-            humming=/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py
-            grep -q 'MoEActivation.SITU' "$humming" || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' "$humming"
-            grep -q 'MoEActivation.SITU' "$humming"
-            exec /bin/sh -c "$1"
-          - --
           env:
           - name: NCCL_IB_HCA
             value: mlx5_5
@@ -72,7 +65,7 @@ spec:
             value: "1"
           - name: HF_HOME
             value: /models/hf
-          image: docker.io/vllm/vllm-openai:kimi-k3
+          image: docker.io/vllm/vllm-openai:v0.29.0
           imagePullPolicy: IfNotPresent
           name: vllm-leader
           ports:
@@ -160,15 +153,8 @@ spec:
               --reasoning-parser=kimi_k3 \
               --port=8000 \
           command:
-          - /bin/bash
+          - sh
           - -c
-          - |
-            set -euo pipefail
-            humming=/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py
-            grep -q 'MoEActivation.SITU' "$humming" || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' "$humming"
-            grep -q 'MoEActivation.SITU' "$humming"
-            exec /bin/sh -c "$1"
-          - --
           env:
           - name: NCCL_IB_HCA
             value: mlx5_5
@@ -182,7 +168,7 @@ spec:
             value: "1"
           - name: HF_HOME
             value: /models/hf
-          image: docker.io/vllm/vllm-openai:kimi-k3
+          image: docker.io/vllm/vllm-openai:v0.29.0
           imagePullPolicy: IfNotPresent
           name: vllm-worker
           resources:

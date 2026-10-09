@@ -1,7 +1,7 @@
 schema_version: 1
 profile:
   label: Kimi K3 throughput on two H200 nodes
-  headline: Contributed TP8×PP2 configuration with the Humming MoE backend; not independently validated on our infrastructure.
+  headline: TP8×PP2 configuration with the Humming MoE backend on two H200 nodes.
   specs:
     - {label: Checkpoint, source: "model.yaml#/huggingface_id"}
     - {label: Hardware, source: "hardware_profile#/accelerators"}
@@ -10,35 +10,50 @@ profile:
     - {label: Context and backend, source: "recipe.yaml#/serving/args"}
 decisions:
   - subjects: [tensor parallelism, pipeline parallelism, moe backend]
-    why: Preserve the submitted TP8×PP2 Humming configuration without asserting performance superiority.
+    why: Preserve the submitted TP8×PP2 Humming configuration.
   - subjects: [NCCL_IB_HCA, NCCL_IB_GID_INDEX]
-    why: Preserve submitted RoCE settings; HCA and GID values require target-cluster verification.
+    why: Select the submitted HCA and RoCE GID for inter-node communication.
+  - subjects: [image, Humming SITU]
+    why: >-
+      Replace the submitted development image with the upstream vLLM release
+      following Michey's recommendation:
+      https://github.com/openshift-psap/inference-playbooks/pull/19#issuecomment-6004104985.
+      Release source includes Kimi K3 pipeline parallelism and Humming SITU;
+      remove the legacy site-packages patch rather than modifying the new image.
+      See https://github.com/vllm-project/vllm/releases/tag/v0.29.0 and
+      https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py.
+  - subjects: [platform scope]
+    why: This contribution targets standalone vLLM only. RHOAI deployment is explicitly out of scope and must be introduced through a separate recipe and review.
 known_issues:
-  - issue: The RHOAI 3.5 LLMInferenceService is hand-authored and pinned, not independently deployment-tested.
-    impact: Pinning bypasses serving-flag and override merging; controller compatibility and runtime behavior require target-cluster checks.
-    mitigation: Follow guides/rhoai.md and keep the pin synchronized with recipe.yaml. Verify server-side dry-run and reconciled leader/worker pods before benchmarking.
-  - issue: Upstream vLLM main supports Kimi K3 and Humming SITU, but the legacy bootstrap is not compatible with its refactored Humming implementation.
-    impact: Source support does not establish compatibility of a specific container or this TP8×PP2 configuration. The retained bootstrap is specific to the submitted custom image.
+  - issue: The selected CUDA 13.0 image requires an r580+ NVIDIA driver on both nodes.
+    impact: An incompatible host driver can prevent GPU initialization.
     mitigation: >-
-      Before switching images, verify a main-derived image digest and remove or
-      adapt the legacy bootstrap. Source inspection used upstream commit
-      f9c9e8ac248cd19c1e1826693761e69b0eec1822 (2026-10-05):
-      https://github.com/vllm-project/vllm/blob/f9c9e8ac248cd19c1e1826693761e69b0eec1822/vllm/model_executor/layers/quantization/utils/humming/activation.py
-  - issue: The custom kimi-k3 image tag has no verified registry digest or upstream release mapping.
-    impact: Image availability and compatibility remain unverified; this is not a standard versioned vLLM release claim.
-    mitigation: Confirm the tag and record an immutable digest before deployment; do not substitute a newer image without testing Kimi and Humming support.
-  - issue: Humming requires the Kimi-specific MoEActivation.SITU allowlist patch.
-    impact: The bootstrap modifies site-packages as root, which may be denied by restricted cluster security policies.
-    mitigation: Prefer a verified image containing the fix; otherwise obtain explicit approval for the required security policy. The overlay checks that the insertion succeeded.
+      Check the driver on both nodes against the image's CUDA requirements
+      before deployment.
+  - issue: FLASHMLA and Humming startup compatibility with the selected image and H200 TP8×PP2 layout needs confirmation.
+    impact: Model or backend initialization failures can prevent the two-node serving group from becoming ready.
+    mitigation: Verify model loading and distributed startup on both roles, then exercise tool and reasoning parsing through the leader endpoint.
+  - issue: The submitted HCA and GID settings may not match the target cluster's RoCE configuration.
+    impact: Incorrect device or GID selection can prevent inter-node communication.
+    mitigation: Verify HCA and GID values on both nodes and confirm RDMA connectivity before starting the serving group.
+  - issue: The serving image uses a versioned tag rather than an immutable digest.
+    impact: Tag changes or different node caches can select different executable images across roles or restarts.
+    mitigation: Resolve and pin the image digest before deployment and record it with benchmark evidence.
+  - issue: Root execution and writable hostPath storage are retained from the submitted configuration.
+    impact: These settings may be denied by restricted cluster security policies even though the bootstrap has been removed.
+    mitigation: Obtain explicit approval for the required security policy; evaluate non-root execution with appropriate model and cache permissions on the target cluster.
   - issue: The submitted model storage estimate is approximately 1.56 TB per node on local NVMe.
-    impact: Each node needs a complete local copy; storage capacity and placement require verification.
-    mitigation: Stage and verify /mnt/local/kimi-k3/models/Kimi-K3 on both selected nodes before deployment.
-  - issue: The reported source sweep used 1000 input and 1000 output tokens; its artifacts are not committed here.
-    impact: No published throughput metric or validation claim can be made for the target GuideLLM 8K/1K workload.
-    mitigation: Commit sanitized benchmark provenance and results before promoting maturity. Verify the context limit accommodates the complete target request.
+    impact: The current hostPath manifests need a complete local copy on each node; insufficient capacity or placement on an unpopulated node prevents model loading.
+    mitigation: Stage and verify /mnt/local/kimi-k3/models/Kimi-K3 on both selected nodes, or adapt both roles to a pre-populated RWX PVC exposing /models/Kimi-K3. Verify concurrent read throughput and permissions; see guides/storage.md for storage alternatives.
+  - issue: The 8192-token total context limit is smaller than an 8K-input plus 1K-output request.
+    impact: The server can reject requests from the selected guidellm-8k1k workload.
+    mitigation: Confirm the workload's exact token counts and increase the context budget to accommodate the complete request; rerender and benchmark the matching configuration.
+  - issue: The reported source sweep used 1000 input and 1000 output tokens rather than the target GuideLLM 8K/1K workload.
+    impact: The source sweep's input distribution does not represent the selected workload.
+    mitigation: Run the target workload and commit its exact harness configuration, prompt provenance, raw output, and normalized results.
 quickstart:
   - {step: Prepare, detail: Install the LeaderWorkerSet controller and RDMA device plugin; stage the model on both nodes and verify image availability and security permissions.}
   - {step: Network, detail: Verify target-cluster HCA and GID settings symmetrically; see recipe.yaml and the referenced hardware profile.}
   - {step: Render, detail: Run tools/render.py for this recipe; config/ is an overlay and must not be applied directly.}
-  - {step: Deploy, detail: "Apply manifests/vllm-kimi-k3/leaderworkerset.yaml, which contains both the LeaderWorkerSet and leader-only Service."}
-  - {step: Verify, detail: "Wait for leader health, query /v1/models through the Service, then benchmark and record sanitized artifacts."}
+  - {step: Deploy, detail: "Apply manifests/vllm-v0.29.0/leaderworkerset.yaml, which contains both the LeaderWorkerSet and leader-only Service."}
+  - {step: Verify, detail: "Wait for leader health, query /v1/models through the Service, then benchmark and record sanitized artifacts. Use guides/validation.md for the promotion reviewer checklist."}
