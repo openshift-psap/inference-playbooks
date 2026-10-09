@@ -617,6 +617,11 @@ class SingleNodeCompanionTests(unittest.TestCase):
         self.assertEqual(prepared["deployment"]["status"]["state"], "verified")
         self.assertEqual(companion["verification"]["maturity"], "day-zero")
         self.assertEqual(companion["verification"]["deployment_status"]["state"], "needs-verification")
+        self.assertEqual(
+            companion["verification"]["deployment_status"]["note"],
+            "Generated from a RHOAI configuration. "
+            "Upstream model/feature support at this version is unconfirmed.",
+        )
         self.assertEqual(companion["verification"]["benchmark_runs"], [])
         before = self.path.read_bytes()
         rendered, errors = render_recipe(self.repo, self.path)

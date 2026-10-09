@@ -419,6 +419,12 @@ def _source_config_digest(recipe, source, effective_source):
 
 def _unverified_companion(recipe, source, effective_source, target_platform, is_newer):
     """Never inherit source maturity, deployment status, or benchmark evidence."""
+    note = "Prepared configuration only; no deployment or benchmark verification."
+    if source["stack"] == "rhoai":
+        note = (
+            "Generated from a RHOAI configuration. "
+            "Upstream model/feature support at this version is unconfirmed."
+        )
     return {
         **target_platform,
         "companion": {
@@ -430,7 +436,7 @@ def _unverified_companion(recipe, source, effective_source, target_platform, is_
             "maturity": "day-zero",
             "deployment_status": {
                 "state": "needs-verification",
-                "note": "Prepared configuration only; no deployment or benchmark verification.",
+                "note": note,
             },
             "benchmark_runs": [],
         },
