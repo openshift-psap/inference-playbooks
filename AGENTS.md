@@ -116,7 +116,7 @@ files. This exception ends after the initial release.
   `serving.config_overrides` is true (legacy shared selection), or a platform's
   `config` selects its own directory; null disables overlays. Prefer declarative
   runtime inputs. Companions never inherit overlays or provision PVCs/downloaders;
-  unknown runtime/security mapping is blocked. See `docs/single-node-companions.md`.
+  unknown runtime/security mapping is blocked; explicitly review unsupported counterparts.
 - `raw-manifest/` preserves the initial submitted inputs for maintainer
   conversion. It may contain multi-document YAML or JSON and an optional
   README. After conversion, `config/` and `recipe.yaml` are authoritative.
@@ -202,8 +202,8 @@ and immutable checksum plus a durable external location.
   Normal local render auto-materializes eligible single-node companions as explicit
   inputs/outputs, independently day-zero/needs-verification with no inherited evidence.
   Dry-run/validate/check/drift/CI stay read-only. Preserve authored targets/verification;
-  source drift requires review, never automatic reset/promotion. Full workflow and
-  optional preparation/newer selection: `docs/single-node-companions.md`.
+  source drift requires review, never automatic reset/promotion. See `CONTRIBUTING.md`
+  for workflow/provenance and optional newer selection; schemas own verification fields.
 - `tools/constraints.py` — stackable flag constraint engine. Constraints in
   `schema/flag-constraints.yaml` scope by `model_type`, `platform`, and
   `parallelism` to remove or force specific vLLM flags. Evaluated
@@ -246,7 +246,8 @@ Templates live in `templates/<stack>/`. Current template map:
 
 Multi-node vLLM TP+DP uses TP GPUs per pod and DP pods per LWS group; vLLM owns
 ranks. Only source-resolved 0.24.0 internal-LB/headless startup is audited.
-See `docs/distributed-dp.md` for controller/storage/probe prerequisites and sources.
+Audit references/role contract are beside the gate in `tools/distributed_dp.py`;
+controller/storage/probe prerequisites are in `CONTRIBUTING.md`.
 Multi-node recipes never receive companions; unsupported tuples fail explicitly.
 
 Templates use `shellquote` (not `tojson`) for args in LWS templates where

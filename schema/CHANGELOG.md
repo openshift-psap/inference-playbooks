@@ -27,7 +27,7 @@
   `validated`/`production` needs verified deployment and platform-owned evidence.
 - `companion` records source and same/newer policy; independent verification is required.
 - Optional `run.platform` supplies exact stack/version; evidence must also match recipe/scope/hardware.
-  Legacy recipe-wide metadata stays compatible. See [companion policy](../docs/single-node-companions.md).
+  Legacy recipe-wide metadata stays compatible.
 
 ## Add `contributed` maturity level
 

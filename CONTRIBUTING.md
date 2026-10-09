@@ -188,7 +188,10 @@ For multi-node or P/D disaggregated deployments, add role blocks:
 
 Multi-node vLLM `tp+dp` uses TP GPUs per pod and DP nodes (LWS + leader API),
 gated to source-resolved vLLM 0.24.0. Single-node keeps TP*DP GPUs per pod.
-See [distributed DP](docs/distributed-dp.md); its template owns rank/LB flags.
+Its template owns rank/LB flags; audited sources and role contract are beside the
+gate in [distributed_dp.py](tools/distributed_dp.py). Require eligible GPU nodes,
+LWS v0.7.0 controller behavior, `hf-token`, DNS/Pod TCP connectivity; HTTP probes
+are leader-only and a shared read-only weights PVC needs multi-node access.
 
 ```yaml
 serving:
@@ -216,8 +219,10 @@ Kustomize patches over the generated base. Set `config_overrides: true`.
 
 Prefer declarative alias/probes/resources/shm and read-only PVC paths over patches.
 Select each platform's own `config` directory or `null`; omission keeps legacy
-shared selection. See [companion inputs/blockers](docs/single-node-companions.md)
-before migrating patches; RHOAI overlays are never copied to Deployment.
+shared selection. Move reviewed runtime settings into declarations and remove
+superseded patches; RHOAI overlays are never copied to Deployment. Automatic
+mapping blocks unknown runtime/security patches, pins, unsupported topology/
+resources and unresolved engines; explicitly author/review a counterpart instead.
 
 ### 5. Validate and render
 
@@ -232,12 +237,16 @@ The validator checks schema, flag constraints, role block consistency, and
 layout. The renderer generates manifests from the serving block.
 
 - Normal local render automatically materializes eligible single-node companions
-  in the same recipe, independently unverified with no inherited benchmarks.
+  in the same recipe: day-zero/needs-verification, empty benchmarks. Eligible
+  mappings need a resolved source engine and supported NVIDIA/CUDA node-local
+  configuration; multi-node and existing authored vLLM entries are unchanged.
 - Dry-run/check/validate/drift/CI are read-only; missing materialization requires
   local render. Submit reviewed inputs and manifests together; CI never commits.
 - Retries preserve authored targets/verification; drift requires review, not reset.
-  [Companion guidance](docs/single-node-companions.md) covers provenance, optional
-  newer selection and unsupported mappings. Multi-node receives no companion.
+- Same source-resolved image/engine by default; no tag guessing/latest selection.
+  Optional newer selection: `python3 tools/prepare_companions.py RECIPE
+  --version VERSION --overrides platforms/FILE.yaml`, with image-bound engine/HTTPS provenance.
+  Generation/checksums never establish verification; legacy digest-less edits need review.
 
 ### 6. Add benchmark evidence when available
 
@@ -248,6 +257,9 @@ Use `maturity: day-zero` for initial configs with minimal confidence, or
 engineers that have not been independently tested on our infrastructure.
 `validated` and `production` require `benchmark_runs` and a top-level
 `image` lifecycle block.
+
+Platform verification is independent: validated/production needs verified status
+(date/method) and indexed runs matching `run.platform`, recipe, scope and hardware.
 
 Benchmark artifacts can be stored locally (`path`) or externally
 (`uri` with `sha256:` checksum). Supported external protocols: `s3://`,

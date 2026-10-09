@@ -14,6 +14,21 @@ from render_inputs import canonical_arg_errors, platform_config
 AUDITED_ENGINE_VERSIONS = {"0.24.0"}
 SOURCE = "https://github.com/vllm-project/vllm/blob/v0.24.0/docs/serving/data_parallel_deployment.md"
 
+# TP-local/DP-node: one LWS group, size=DP, TP GPUs/pod; vLLM owns GPU ranks.
+# Leader: DP start rank 0/default, one API process/internal LB; workers: headless,
+# local DP=1, start rank=LWS_WORKER_INDEX (not --data-parallel-rank/external LB).
+# Pod IP + controller leader DNS; LeaderCreated avoids readiness startup deadlock.
+# HTTP probes are leader-only; shared weights require explicit read-only multi-node
+# PVC access. Pins/overlays/alternate rank modes are outside this audited contract.
+# Versioned flag/headless/controller evidence (source audit, not runtime validation):
+# https://github.com/vllm-project/vllm/blob/v0.24.0/vllm/engine/arg_utils.py
+# https://github.com/vllm-project/vllm/blob/v0.24.0/vllm/entrypoints/cli/serve.py
+# https://github.com/vllm-project/vllm/blob/v0.24.0/vllm/entrypoints/openai/cli_args.py
+# https://github.com/kubernetes-sigs/lws/blob/v0.7.0/api/leaderworkerset/v1/leaderworkerset_types.go
+# https://github.com/kubernetes-sigs/lws/blob/v0.7.0/pkg/utils/pod/pod_utils.go
+# https://github.com/kubernetes-sigs/lws/blob/v0.7.0/pkg/controllers/pod_controller.go
+# https://github.com/kubernetes-sigs/lws/blob/v0.7.0/pkg/utils/controller/controller_utils.go
+
 
 def is_distributed_dp(recipe: dict, platform: dict) -> bool:
     return (platform.get("stack") == "vllm" and recipe.get("deployment", {}).get("scope") == "multi-node"
