@@ -19,6 +19,7 @@
     },
     "router": {"$ref": "recipe.schema.json#/$defs/serving/properties/router"},
     "probes": {"$ref": "recipe.schema.json#/$defs/serving/properties/probes"},
+    "shared_memory": {"$ref": "recipe.schema.json#/$defs/serving/properties/shared_memory"},
     "resources": {"$ref": "recipe.schema.json#/$defs/serving/properties/resources"},
     "image_lifecycle": {"$ref": "recipe.schema.json#/$defs/image_lifecycle"}
   },
