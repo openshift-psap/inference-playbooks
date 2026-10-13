@@ -183,11 +183,31 @@ code {
   background: #151515;
   color: #fff;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   padding: 0 24px;
   height: 56px;
   gap: 32px;
   flex-shrink: 0;
+}
+
+.nav__links {
+  display: flex;
+  gap: 24px;
+  align-items: stretch;
+}
+
+.nav__link {
+  display: flex;
+  align-items: center;
+  color: #fff;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+}
+
+.nav__link--active {
+  border-bottom-color: #EE0000;
 }
 
 /* Breadcrumb */
@@ -820,13 +840,13 @@ code {
     padding: 0 16px;
   }
 
-  .nav > nav,
+  .nav__links,
   .nav > div:last-child {
     flex-shrink: 0;
   }
 
-  .nav > nav {
-    gap: 12px !important;
+  .nav__links {
+    gap: 12px;
   }
 
   .nav > div:first-of-type {
