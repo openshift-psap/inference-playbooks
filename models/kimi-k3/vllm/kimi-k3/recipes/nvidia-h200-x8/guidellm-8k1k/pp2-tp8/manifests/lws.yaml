@@ -1,0 +1,192 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: kimi-k3-vllm-h200-pp2-tp8
+  labels:
+    app.kubernetes.io/name: kimi-k3-vllm-h200-pp2-tp8
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: 2
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: kimi-k3-vllm-h200-pp2-tp8
+          role: leader
+      spec:
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+          - name: vllm
+            image: docker.io/vllm/vllm-openai:kimi-k3
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                set -euo pipefail
+                humming=/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py
+                grep -q 'MoEActivation.SITU' "$humming" || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' "$humming"
+                grep -q 'MoEActivation.SITU' "$humming"
+                exec /bin/sh -c "$1"
+              - --
+              - |
+                exec vllm serve /models/Kimi-K3 \
+                  --served-model-name=/models/Kimi-K3 \
+                  --tensor-parallel-size 8 \
+                  --pipeline-parallel-size 2 \
+                  --nnodes 2 \
+                  --node-rank 0 \
+                  --master-addr 0.0.0.0 \
+                  --port 8000 \
+                  --trust-remote-code \
+                  --attention-backend=FLASHMLA \
+                  --moe-backend=humming \
+                  --gpu-memory-utilization=0.90 \
+                  --max-num-seqs=256 \
+                  --max-model-len=8192 \
+                  --max-num-batched-tokens=4096 \
+                  --disable-custom-all-reduce \
+                  --no-enable-flashinfer-autotune \
+                  --enable-auto-tool-choice \
+                  --tool-call-parser=kimi_k3 \
+                  --reasoning-parser=kimi_k3
+            env:
+              - {name: NCCL_IB_HCA, value: mlx5_5}
+              - {name: NCCL_IB_GID_INDEX, value: "3"}
+              - {name: NCCL_DMABUF_ENABLE, value: "0"}
+              - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
+              - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
+              - {name: HF_HOME, value: /models/hf}
+              - {name: HOME, value: /tmp}
+              - {name: TRITON_CACHE_DIR, value: /tmp/triton-cache}
+              - {name: FLASHINFER_WORKSPACE_BASE, value: /tmp}
+            ports:
+              - {name: http, containerPort: 8000, protocol: TCP}
+            volumeMounts:
+              - {name: dshm, mountPath: /dev/shm}
+              - {name: hf-cache, mountPath: /home/nobody/.cache}
+              - {name: tmp, mountPath: /tmp}
+              - {name: model, mountPath: /models}
+            resources:
+              requests:
+                cpu: "32"
+                memory: 512Gi
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+              limits:
+                memory: 512Gi
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+            startupProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 10
+              failureThreshold: 720
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 30
+              timeoutSeconds: 10
+              failureThreshold: 5
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 10
+              timeoutSeconds: 5
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 16Gi
+          - {name: hf-cache, emptyDir: {}}
+          - {name: tmp, emptyDir: {}}
+          - name: model
+            persistentVolumeClaim:
+              claimName: model
+    workerTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: kimi-k3-vllm-h200-pp2-tp8
+      spec:
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+          - name: vllm
+            image: docker.io/vllm/vllm-openai:kimi-k3
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/bash", "-c"]
+            args:
+              - |
+                set -euo pipefail
+                humming=/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py
+                grep -q 'MoEActivation.SITU' "$humming" || sed -i '/MoEActivation\.SWIGLUOAI/a\            MoEActivation.SITU,' "$humming"
+                grep -q 'MoEActivation.SITU' "$humming"
+                exec /bin/sh -c "$1"
+              - --
+              - |
+                exec vllm serve /models/Kimi-K3 \
+                  --served-model-name=/models/Kimi-K3 \
+                  --tensor-parallel-size 8 \
+                  --pipeline-parallel-size 2 \
+                  --nnodes 2 \
+                  --node-rank $(LWS_WORKER_INDEX) \
+                  --master-addr $(LWS_LEADER_ADDRESS) \
+                  --headless \
+                  --port 8000 \
+                  --trust-remote-code \
+                  --attention-backend=FLASHMLA \
+                  --moe-backend=humming \
+                  --gpu-memory-utilization=0.90 \
+                  --max-num-seqs=256 \
+                  --max-model-len=8192 \
+                  --max-num-batched-tokens=4096 \
+                  --disable-custom-all-reduce \
+                  --no-enable-flashinfer-autotune \
+                  --enable-auto-tool-choice \
+                  --tool-call-parser=kimi_k3 \
+                  --reasoning-parser=kimi_k3
+            env:
+              - {name: NCCL_IB_HCA, value: mlx5_5}
+              - {name: NCCL_IB_GID_INDEX, value: "3"}
+              - {name: NCCL_DMABUF_ENABLE, value: "0"}
+              - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
+              - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
+              - {name: HF_HOME, value: /models/hf}
+              - {name: HOME, value: /tmp}
+              - {name: TRITON_CACHE_DIR, value: /tmp/triton-cache}
+              - {name: FLASHINFER_WORKSPACE_BASE, value: /tmp}
+            volumeMounts:
+              - {name: dshm, mountPath: /dev/shm}
+              - {name: hf-cache, mountPath: /home/nobody/.cache}
+              - {name: tmp, mountPath: /tmp}
+              - {name: model, mountPath: /models}
+            resources:
+              requests:
+                cpu: "32"
+                memory: 512Gi
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+              limits:
+                memory: 512Gi
+                nvidia.com/gpu: "8"
+                rdma/ib: "1"
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 16Gi
+          - {name: hf-cache, emptyDir: {}}
+          - {name: tmp, emptyDir: {}}
+          - name: model
+            persistentVolumeClaim:
+              claimName: model
