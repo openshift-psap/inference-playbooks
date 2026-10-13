@@ -375,39 +375,89 @@ function renderSweepCharts(sweep, harness) {
   return fragment;
 }
 
+const HARNESS_META = {
+  'guidellm': { name: 'GuideLLM', description: '8K input / 1K output synthetic · 300s per concurrency level' },
+  'aiperf': { name: 'AIPerf AgentX', description: '393 multi-turn coding traces · 1,800s benchmark duration' },
+};
+
+function harnessKey(item) {
+  const raw = item.run.harness || item.result.harness || '';
+  if (/guidellm/i.test(raw)) return 'guidellm';
+  if (/aiperf/i.test(raw)) return 'aiperf';
+  return raw || 'unknown';
+}
+
+function harnessHeader(key, raw) {
+  const meta = HARNESS_META[key];
+  const section = node('div', null, 'harness-section');
+  const header = node('div', null, 'harness-header');
+  const title = node('h2', meta ? meta.name : raw || 'Benchmark');
+  header.append(title);
+  if (meta) header.append(node('span', meta.description, 'harness-description'));
+  else if (raw) {
+    const code = node('code', raw);
+    const label = node('span', null, 'harness-description');
+    label.append(code);
+    header.append(label);
+  }
+  section.append(header);
+  return section;
+}
+
+function renderEvidenceDetail(item, entry) {
+  const detail = document.createDocumentFragment();
+  const environment = item.run.environment || {};
+  const details = node('details', null, 'evidence-detail');
+  details.append(node('summary', `Run: ${item.run.run_id}`));
+  details.append(sourceLink(item.source, 'Run source'), node('span', ' '), sourceLink(item.result_source, 'Result source'));
+  details.append(table(['Original run attribution', 'Value'], [
+    ['Platform', environment.platform ? `${environment.platform.stack} ${environment.platform.version}` : null],
+    ['Engine', environment.vllm_version], ['Image', environment.image],
+    ['Hardware profile', item.run.hardware_profile], ['Profile revision when tested', item.run.hardware_profile_revision],
+    ['Scope', item.run.deployment_scope]
+  ]));
+  if (entry.validation.run_id !== item.run.run_id) details.append(node('p', 'Historical evidence for this recipe; equivalence to the selected serving configuration has not been established.'));
+  details.append(table(['Metric', 'Value / explicit units and statistics'], Object.entries(item.result.metrics)));
+  if (item.run.command) details.append(drawer('benchmark-command.sh', item.run.command));
+  details.append(drawer('run.yaml', item.run_body), drawer('result.json', item.result_body));
+  detail.append(details);
+  return detail;
+}
+
 function renderBenchmark(entry) {
   destroyCharts();
   const panel = node('div');
   if (!entry.evidence.length) { panel.append(node('div', 'No committed benchmark evidence for this recipe', 'banner')); return panel; }
+
+  // Group evidence by harness
+  const groups = new Map();
   for (const item of entry.evidence) {
-    panel.append(node('h2', `Original run: ${item.run.run_id}`), sourceLink(item.source, 'Run source'), sourceLink(item.result_source, 'Result source'));
+    const key = harnessKey(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
 
-    // Harness label
-    const harness = item.run.harness || item.result.harness;
-    if (harness) {
-      const label = node('p', null, 'benchmark-harness');
-      label.innerHTML = `Harness: <code>${harness.replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}</code>`;
-      panel.append(label);
+  for (const [key, items] of groups) {
+    const raw = items[0].run.harness || items[0].result.harness || '';
+    const section = harnessHeader(key, raw);
+
+    // Merge sweep data from all runs in this harness group
+    const allSweep = [];
+    for (const item of items) {
+      const sweep = item.result.sweep;
+      if (Array.isArray(sweep) && sweep.length > 0) allSweep.push(...sweep);
+    }
+    if (allSweep.length > 0) {
+      const sorted = [...allSweep].sort((a, b) => a.concurrency - b.concurrency);
+      section.append(renderSweepCharts(sorted));
     }
 
-    // Sweep charts if available
-    const sweep = item.result.sweep;
-    if (Array.isArray(sweep) && sweep.length > 0) {
-      const sorted = [...sweep].sort((a, b) => a.concurrency - b.concurrency);
-      panel.append(renderSweepCharts(sorted, harness));
+    // Collapsible run details for each evidence item
+    for (const item of items) {
+      section.append(renderEvidenceDetail(item, entry));
     }
 
-    const environment = item.run.environment || {};
-    panel.append(table(['Original run attribution', 'Value'], [
-      ['Platform', environment.platform ? `${environment.platform.stack} ${environment.platform.version}` : null],
-      ['Engine', environment.vllm_version], ['Image', environment.image],
-      ['Hardware profile', item.run.hardware_profile], ['Profile revision when tested', item.run.hardware_profile_revision],
-      ['Scope', item.run.deployment_scope]
-    ]));
-    if (entry.validation.run_id !== item.run.run_id) panel.append(node('p', 'Historical evidence for this recipe; equivalence to the selected serving configuration has not been established.'));
-    panel.append(table(['Metric', 'Value / explicit units and statistics'], Object.entries(item.result.metrics)));
-    if (item.run.command) panel.append(drawer('benchmark-command.sh', item.run.command));
-    panel.append(drawer('run.yaml', item.run_body), drawer('result.json', item.result_body));
+    panel.append(section);
   }
   return panel;
 }
