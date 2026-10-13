@@ -1,3 +1,11 @@
+# Forge equivalent:
+#   /var inference_playbooks.workload: aiperf-agentx-128k
+#
+# When using Forge, the Job is generated dynamically with the endpoint,
+# model, tokenizer, and namespace filled in from the recipe deployment.
+# Pod hardening (security context, resource requests) is not yet applied
+# by Forge — use this manifest directly for hardened standalone runs.
+
 apiVersion: batch/v1
 kind: Job
 metadata:
