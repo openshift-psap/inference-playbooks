@@ -29,5 +29,5 @@ environment:
 artifacts:
   - type: raw-output
     path: result.json
-    checksum: "sha256:0d775ffa73a7d42e6d75859973cf07179799b734081c85efaf8ddfd675f7964c"
+    checksum: "sha256:787d1d11752e12b02295e9cd4acc2c54943a025df1e9b00330c8642ea886ee16"
     description: GuideLLM sweep results (normalized from per-concurrency outputs)

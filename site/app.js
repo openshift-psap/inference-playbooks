@@ -256,7 +256,14 @@ function destroyCharts() {
   while (CHART_INSTANCES.length) CHART_INSTANCES.pop().destroy();
 }
 
-function sweepChart(container, label, xValues, datasets) {
+const PERCENTILE_COLORS = {
+  p50: '#3987e5', p90: '#8b5cf6', p95: '#d95926', p99: '#dc2626',
+};
+const PERCENTILE_DASHES = {
+  p50: [], p90: [6, 3], p95: [4, 4], p99: [2, 3],
+};
+
+function sweepChart(container, yLabel, xValues, datasets) {
   const canvas = document.createElement('canvas');
   container.append(canvas);
   const chart = new Chart(canvas, {
@@ -266,13 +273,15 @@ function sweepChart(container, label, xValues, datasets) {
       datasets: datasets.map((ds, i) => ({
         label: ds.label,
         data: ds.data,
-        borderColor: [CHART_COLORS.primary, CHART_COLORS.secondary, CHART_COLORS.tertiary][i % 3],
-        backgroundColor: [CHART_COLORS.primary, CHART_COLORS.secondary, CHART_COLORS.tertiary][i % 3] + '18',
+        borderColor: ds.color || [CHART_COLORS.primary, CHART_COLORS.secondary, CHART_COLORS.tertiary][i % 3],
+        backgroundColor: (ds.color || [CHART_COLORS.primary, CHART_COLORS.secondary, CHART_COLORS.tertiary][i % 3]) + '18',
+        borderDash: ds.dash || [],
         borderWidth: 2,
         pointRadius: 4,
         pointHoverRadius: 6,
         tension: 0.25,
-        fill: datasets.length === 1,
+        fill: datasets.length === 1 && !ds.hidden,
+        hidden: ds.hidden || false,
       })),
     },
     options: {
@@ -280,22 +289,40 @@ function sweepChart(container, label, xValues, datasets) {
       maintainAspectRatio: false,
       plugins: {
         legend: { display: datasets.length > 1, position: 'bottom', labels: { boxWidth: 12, padding: 10, usePointStyle: true, pointStyle: 'circle', font: { size: 11 } } },
-        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.raw}${ds_unit(label)}` } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.raw}${unitSuffix(yLabel)}` } },
       },
       scales: {
         x: { title: { display: true, text: 'Concurrency', font: { size: 11 } }, grid: { display: false } },
-        y: { title: { display: true, text: label, font: { size: 11 } }, beginAtZero: true, grid: { color: 'rgba(0,0,0,0.06)' } },
+        y: { title: { display: true, text: yLabel, font: { size: 11 } }, beginAtZero: true, grid: { color: 'rgba(0,0,0,0.06)' } },
       },
     },
   });
   CHART_INSTANCES.push(chart);
 }
 
-function ds_unit(label) {
+function unitSuffix(label) {
   if (label.includes('ms')) return ' ms';
   if (label.includes('tok/s')) return ' tok/s';
   if (label.includes('%')) return '%';
   return '';
+}
+
+function latencyDatasets(sweep, prefix, defaultOn) {
+  const pctls = [
+    { key: `${prefix}_p50`, label: 'p50', pctl: 'p50' },
+    { key: `${prefix}_p90`, label: 'p90', pctl: 'p90' },
+    { key: `${prefix}_p95`, label: 'p95', pctl: 'p95' },
+    { key: `${prefix}_p99`, label: 'p99', pctl: 'p99' },
+  ];
+  return pctls
+    .filter(p => sweep.some(pt => pt[p.key] != null))
+    .map(p => ({
+      label: p.label,
+      data: sweep.map(pt => pt[p.key] ?? null),
+      color: PERCENTILE_COLORS[p.pctl],
+      dash: PERCENTILE_DASHES[p.pctl],
+      hidden: !defaultOn.includes(p.pctl),
+    }));
 }
 
 function statCard(value, label, sub) {
@@ -314,47 +341,43 @@ function renderSweepCharts(sweep, harness) {
   const statsRow = node('div', null, 'stat-row');
   if (peak.output_tok_s != null) statsRow.append(statCard(`${Math.round(peak.output_tok_s)}`, 'Output tok/s', `at C=${peak.concurrency}`));
   if (peak.ttft_ms_p50 != null) statsRow.append(statCard(`${Math.round(peak.ttft_ms_p50)}ms`, 'TTFT p50', `at C=${peak.concurrency}`));
-  if (peak.itl_ms != null) statsRow.append(statCard(`${Math.round(peak.itl_ms * 10) / 10}ms`, 'ITL', `at C=${peak.concurrency}`));
-  if (peak.total_tok_s != null) statsRow.append(statCard(`${Math.round(peak.total_tok_s)}`, 'Total tok/s', `at C=${peak.concurrency}`));
+  if (peak.ttft_ms_p95 != null) statsRow.append(statCard(`${Math.round(peak.ttft_ms_p95)}ms`, 'TTFT p95', `at C=${peak.concurrency}`));
+  if (peak.itl_ms_p50 != null) statsRow.append(statCard(`${Math.round(peak.itl_ms_p50 * 10) / 10}ms`, 'ITL p50', `at C=${peak.concurrency}`));
+  if (peak.itl_ms_p95 != null) statsRow.append(statCard(`${Math.round(peak.itl_ms_p95 * 10) / 10}ms`, 'ITL p95', `at C=${peak.concurrency}`));
   if (peak.context_overflow_rate != null) statsRow.append(statCard(`${(peak.context_overflow_rate * 100).toFixed(1)}%`, 'Context overflow', `at C=${peak.concurrency}`));
   if (statsRow.children.length) fragment.append(statsRow);
 
   // Charts grid
   const grid = node('div', null, 'chart-grid');
+  const defaultOn = ['p50', 'p95'];
 
-  // TTFT chart
-  const ttftData = sweep.filter(p => p.ttft_ms_p50 != null || p.ttft_ms_p95 != null);
-  if (ttftData.length > 1) {
+  // TTFT chart — percentile series, p50 and p95 on by default
+  const ttftSets = latencyDatasets(sweep, 'ttft_ms', defaultOn);
+  if (ttftSets.length && sweep.filter(p => p.ttft_ms_p50 != null).length > 1) {
     const card = node('div', null, 'chart-card');
     card.append(node('h3', 'Time to First Token (TTFT)'));
     const container = node('div', null, 'chart-container');
-    const datasets = [];
-    if (ttftData.some(p => p.ttft_ms_p50 != null)) datasets.push({ label: 'p50 (ms)', data: ttftData.map(p => p.ttft_ms_p50) });
-    if (ttftData.some(p => p.ttft_ms_p95 != null)) datasets.push({ label: 'p95 (ms)', data: ttftData.map(p => p.ttft_ms_p95) });
-    sweepChart(container, 'TTFT (ms)', ttftData.map(p => p.concurrency), datasets);
+    sweepChart(container, 'TTFT (ms)', sweep.map(p => p.concurrency), ttftSets);
     card.append(container); grid.append(card);
   }
 
-  // ITL chart
-  const itlData = sweep.filter(p => p.itl_ms != null || p.itl_ms_p95 != null);
-  if (itlData.length > 1) {
+  // ITL chart — percentile series, p50 and p95 on by default
+  const itlSets = latencyDatasets(sweep, 'itl_ms', defaultOn);
+  if (itlSets.length && sweep.filter(p => p.itl_ms_p50 != null).length > 1) {
     const card = node('div', null, 'chart-card');
     card.append(node('h3', 'Inter-Token Latency (ITL)'));
     const container = node('div', null, 'chart-container');
-    const datasets = [];
-    if (itlData.some(p => p.itl_ms != null)) datasets.push({ label: 'avg (ms)', data: itlData.map(p => p.itl_ms) });
-    if (itlData.some(p => p.itl_ms_p95 != null)) datasets.push({ label: 'p95 (ms)', data: itlData.map(p => p.itl_ms_p95) });
-    sweepChart(container, 'ITL (ms)', itlData.map(p => p.concurrency), datasets);
+    sweepChart(container, 'ITL (ms)', sweep.map(p => p.concurrency), itlSets);
     card.append(container); grid.append(card);
   }
 
-  // Throughput chart
+  // Throughput chart — average, single series
   const tputData = sweep.filter(p => p.output_tok_s != null);
   if (tputData.length > 1) {
     const card = node('div', null, 'chart-card');
     card.append(node('h3', 'Output Throughput'));
     const container = node('div', null, 'chart-container');
-    sweepChart(container, 'Output tok/s', tputData.map(p => p.concurrency), [{ label: 'Output tok/s', data: tputData.map(p => p.output_tok_s) }]);
+    sweepChart(container, 'Output tok/s', tputData.map(p => p.concurrency), [{ label: 'avg tok/s', data: tputData.map(p => p.output_tok_s) }]);
     card.append(container); grid.append(card);
   }
 
