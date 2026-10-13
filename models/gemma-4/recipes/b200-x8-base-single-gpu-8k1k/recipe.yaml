@@ -1,0 +1,37 @@
+schema_version: 4
+recipe_id: gemma-4-b200-x8-base-single-gpu-8k1k
+model_id: gemma-4
+platforms:
+- stack: vllm
+  version: v0.31.0
+  overrides: platforms/vllm-v0.31.0.yaml
+hardware_profile: hardware-profiles/nvidia-b200-8x-r1.yaml
+workload_profile: guidellm-8k1k
+deployment_mode: base-single-gpu
+optimization_intent: single-GPU text-only serving
+maturity: day-zero
+serving:
+  image: docker.io/vllm/vllm-openai:v0.31.0
+  model: google/gemma-4-26B-A4B-it
+  parallelism:
+    mode: tp
+    tp: 1
+  resources:
+    requests:
+      cpu: '8'
+      memory: 32Gi
+    limits:
+      cpu: '8'
+      memory: 64Gi
+  port: 8000
+  args:
+  - flag: --language-model-only
+    required: true
+    why: Restricts this recipe to language-model-only serving as requested.
+deployment:
+  scope: single-node
+  manifests:
+  - path: manifests/vllm-v0.31.0/deployment.yaml
+    kind: Deployment
+    generated: true
+notes: guides/notes.yaml
