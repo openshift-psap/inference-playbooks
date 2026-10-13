@@ -183,7 +183,7 @@ code {
   background: #151515;
   color: #fff;
   display: flex;
-  align-items: stretch;
+  align-items: center;
   padding: 0 24px;
   height: 56px;
   gap: 32px;
@@ -193,7 +193,7 @@ code {
 .nav__links {
   display: flex;
   gap: 24px;
-  align-items: stretch;
+  align-self: stretch;
 }
 
 .nav__link {
