@@ -5,7 +5,7 @@ Pipeline:
   recipe.yaml + model.yaml + hardware-profile + flag-constraints
     -> resolve constraints
     -> resolve role args
-    -> select template (platform.stack, parallelism.mode)
+    -> select template (platform.stack, parallelism.mode, deployment.scope)
     -> render Jinja2
     -> optional kustomize overlay
     -> manifests/
@@ -14,6 +14,9 @@ Pipeline:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import copy
+import io
 import json
 import re
 import shlex
@@ -24,7 +27,7 @@ import tempfile
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = REPO_ROOT / "templates"
@@ -37,30 +40,33 @@ from constraints import (
     validate_recipe_against_constraints,
 )
 from recipe_evidence import load_unique_yaml
+from render_inputs import config_path, declarative_errors, platform_config, probe_context
+from distributed_dp import distributed_dp_errors, is_distributed_dp
 from validate import resolve_role_args
 
 
-TEMPLATE_MAP: dict[tuple[str, str], str] = {
-    ("vllm", "tp"): "vllm/deployment.yaml.j2",
-    ("vllm", "dp"): "vllm/deployment.yaml.j2",
-    ("vllm", "tp+dp"): "vllm/deployment.yaml.j2",
-    ("vllm", "pp"): "vllm/lws.yaml.j2",
-    ("vllm", "tp+pp"): "vllm/lws.yaml.j2",
-    ("rhoai", "tp"): "rhoai/llmisvc.yaml.j2",
-    ("rhoai", "pp"): "rhoai/llmisvc-pp.yaml.j2",
-    ("rhoai", "tp+pp"): "rhoai/llmisvc-pp.yaml.j2",
+TEMPLATE_MAP: dict[tuple[str, str, str], str] = {
+    ("vllm", "tp", "single-node"): "vllm/deployment.yaml.j2",
+    ("vllm", "dp", "single-node"): "vllm/deployment.yaml.j2",
+    ("vllm", "tp+dp", "single-node"): "vllm/deployment.yaml.j2",
+    ("vllm", "tp+dp", "multi-node"): "vllm/dp-lws.yaml.j2",
+    **{(stack, mode, scope): template
+       for stack, mode, template in (
+           ("vllm", "pp", "vllm/lws.yaml.j2"),
+           ("vllm", "tp+pp", "vllm/lws.yaml.j2"),
+           ("rhoai", "tp", "rhoai/llmisvc.yaml.j2"),
+           ("rhoai", "pp", "rhoai/llmisvc-pp.yaml.j2"),
+           ("rhoai", "tp+pp", "rhoai/llmisvc-pp.yaml.j2"))
+       for scope in ("single-node", "multi-node")},
 }
 
-COMPONENT_KIND: dict[tuple[str, str], str] = {
-    ("vllm", "tp"): "Deployment",
-    ("vllm", "dp"): "Deployment",
-    ("vllm", "tp+dp"): "Deployment",
-    ("vllm", "pp"): "LeaderWorkerSet",
-    ("vllm", "tp+pp"): "LeaderWorkerSet",
-    ("rhoai", "tp"): "LLMInferenceService",
-    ("rhoai", "pp"): "LLMInferenceService",
-    ("rhoai", "tp+pp"): "LLMInferenceService",
-}
+COMPONENT_KIND = {key: {
+    "vllm/deployment.yaml.j2": "Deployment",
+    "vllm/lws.yaml.j2": "LeaderWorkerSet",
+    "vllm/dp-lws.yaml.j2": "LeaderWorkerSet",
+    "rhoai/llmisvc.yaml.j2": "LLMInferenceService",
+    "rhoai/llmisvc-pp.yaml.j2": "LLMInferenceService",
+}[template] for key, template in TEMPLATE_MAP.items()}
 
 
 def load_yaml_file(path: Path) -> dict:
@@ -76,15 +82,20 @@ def sanitize_name(recipe_id: str) -> str:
     return re.sub(r"[^a-z0-9-]", "-", recipe_id.lower())[:63]
 
 
-def select_template(stack: str, mode: str) -> str:
-    """Select template path from (platform.stack, parallelism.mode)."""
-    key = (stack, mode)
+def select_template(stack: str, mode: str, scope: str) -> str:
+    """Select a supported scope explicitly; never fall back to Deployment."""
+    key = (stack, mode, scope)
     if key not in TEMPLATE_MAP:
         raise ValueError(
-            f"No template for platform={stack}, mode={mode}. "
+            f"No template for platform={stack}, mode={mode}, scope={scope}. "
             f"Supported: {sorted(TEMPLATE_MAP.keys())}"
         )
     return TEMPLATE_MAP[key]
+
+
+def component_kind(stack: str, mode: str, scope: str) -> str:
+    select_template(stack, mode, scope)
+    return COMPONENT_KIND[(stack, mode, scope)]
 
 
 
@@ -127,12 +138,14 @@ def build_template_context(
         platform = recipe.get("platforms", [{}])[0]
     stack = platform.get("stack", "")
     mode = parallelism["mode"]
+    scope = recipe.get("deployment", {}).get("scope")
+    distributed_dp = is_distributed_dp(recipe, platform)
 
     tp = parallelism.get("tp", 1)
     pp = parallelism.get("pp", 1)
     dp = parallelism.get("dp", 1)
 
-    resources = serving.get("resources", {})
+    resources = copy.deepcopy(serving.get("resources", {}))
     if "requests" not in resources:
         resources["requests"] = {}
     if "limits" not in resources:
@@ -145,7 +158,7 @@ def build_template_context(
     pvc_name = pvc.get("name", f"{name}-weights")
 
     role_name = "decode"
-    kind = COMPONENT_KIND.get((stack, mode), "Deployment")
+    kind = component_kind(stack, mode, scope)
 
     if kind == "LeaderWorkerSet" or (stack == "rhoai" and pp > 1):
         leader_args = resolve_role_args(serving, role_name, "leader")
@@ -171,10 +184,20 @@ def build_template_context(
         "pvc_name": pvc_name,
         "image": serving["image"],
         "model": serving["model"],
+        "model_path": pvc.get("model_path", pvc.get("mount_path", serving["model"])),
+        "served_model_name": serving.get("served_model_name", serving["model"]),
+        "weights": pvc if pvc.get("mount_path") else {},
+        "shared_memory": serving.get("shared_memory", {}).get("size", "4Gi"),
+        "use_shared_memory": tp > 1 or bool(serving.get("shared_memory")),
+        "probes": probe_context(serving, stack),
+        "image_usage": serving.get("image_usage", {}),
         "tp": tp,
         "pp": pp,
         "dp": dp,
-        "gpu_count": tp * dp,
+        "gpu_count": tp if distributed_dp else tp * dp,
+        "distributed_dp": distributed_dp,
+        "scope": scope,
+        "api_service_name": name[:59] + "-api",
         "replicas": replicas,
         "args": args,
         "leader_args": leader_args,
@@ -204,14 +227,14 @@ def render_template(template_path: str, context: dict, template_dir: Path = TEMP
     return template.render(**context)
 
 
-def run_kustomize(base_manifest: str, recipe_dir: Path) -> str:
+def run_kustomize(base_manifest: str, recipe_dir: Path, reference: str = "config") -> str:
     """Run kustomize build with config/ as overlay over generated base."""
     with tempfile.TemporaryDirectory() as tmpdir:
         work_dir = Path(tmpdir)
         base_file = work_dir / "base-manifest.yaml"
         base_file.write_text(base_manifest)
 
-        config_dir = recipe_dir / "config"
+        config_dir = config_path(recipe_dir, reference)
         resolved_config = config_dir.resolve()
         for item in config_dir.iterdir():
             if not item.is_file():
@@ -225,7 +248,7 @@ def run_kustomize(base_manifest: str, recipe_dir: Path) -> str:
                         new_resources.append("base-manifest.yaml")
                     else:
                         src = (config_dir / res).resolve()
-                        if not str(src).startswith(str(resolved_config)):
+                        if not src.is_relative_to(resolved_config):
                             raise ValueError(f"resource path escapes config/: {res}")
                         if src.is_file():
                             dest = work_dir / src.name
@@ -282,6 +305,8 @@ def merge_overrides(serving: dict, overrides: dict) -> dict:
         base_probes = dict(merged.get("probes", {}))
         base_probes.update(overrides["probes"])
         merged["probes"] = base_probes
+    if "shared_memory" in overrides:
+        merged["shared_memory"] = overrides["shared_memory"]
     if "env" in overrides:
         base_env = list(merged.get("env", []))
         base_env.extend(overrides["env"])
@@ -295,7 +320,91 @@ def merge_overrides(serving: dict, overrides: dict) -> dict:
     return merged
 
 
-def render_recipe(
+def platform_output_path(recipe: dict, platform: dict) -> Path:
+    """The single declared artifact path for a platform (possibly multi-document)."""
+    directory = f"{platform['stack']}-{platform['version']}"
+    if platform.get("pinned_manifest"):
+        filename = Path(platform['pinned_manifest']).name
+    else:
+        kind = component_kind(platform['stack'], recipe['serving']['parallelism']['mode'], recipe['deployment']['scope'])
+        filename = f"{kind.lower()}.yaml"
+    return Path("manifests") / directory / filename
+
+
+def render_recipe(repo: Path, recipe_path: Path, dry_run: bool = False) -> tuple[str, list[str]]:
+    """Normal local rendering materializes eligible inputs after isolated preflight.
+
+    Read-only callers use dry_run or guard explicit inputs before rendering a
+    scratch snapshot. Existing targets/assessments are never regenerated.
+    """
+    if dry_run:
+        return _render_explicit_recipe(repo, recipe_path, dry_run=True)
+    from companion_inputs import materialize, preparation_plan
+    from companions import plan_companion
+
+    recipe = load_yaml_file(recipe_path)
+    try:
+        if not plan_companion(repo, recipe_path, recipe):
+            return _render_explicit_recipe(repo, recipe_path)
+        plan, errors = preparation_plan(repo, recipe_path)
+        if errors:
+            return "", errors
+        if recipe_path.is_symlink():
+            return "", [f"{recipe_path}: automatic companion materialization cannot overwrite a symlinked recipe input"]
+        original_inputs = recipe_path.read_bytes()
+        output_paths = [
+            platform_output_path(plan[0], platform)
+            for platform in plan[0]["platforms"] if not platform.get("blocked")
+        ]
+        for output in output_paths:
+            if not (recipe_path.parent / output).resolve().is_relative_to(recipe_path.parent.resolve()):
+                return "", [f"{recipe_path}: manifest destination escapes the recipe directory: {output}"]
+        relative_recipe = recipe_path.relative_to(repo)
+        with tempfile.TemporaryDirectory(prefix="playbook-companion-") as temporary:
+            scratch = Path(temporary)
+            staged_path = scratch / relative_recipe
+            shutil.copytree(recipe_path.parent, staged_path.parent, symlinks=True)
+            for directory in ("schema", "templates", "engine-versions", "hardware-profiles"):
+                shutil.copytree(repo / directory, scratch / directory, symlinks=True)
+            model = repo / "models" / recipe["model_id"] / "model.yaml"
+            if model.is_file():
+                staged_model = scratch / model.relative_to(repo)
+                staged_model.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(model, staged_model)
+            for reference in [recipe_path.name, plan[1], *output_paths]:
+                if not (staged_path.parent / reference).resolve().is_relative_to(staged_path.parent.resolve()):
+                    return "", [f"{recipe_path}: staged input/output symlink escapes the recipe directory: {reference}"]
+            materialize(staged_path, plan)
+            with contextlib.redirect_stdout(io.StringIO()):
+                rendered, errors = _render_explicit_recipe(scratch, staged_path)
+            if errors:
+                return "", [error.replace(str(scratch), str(repo)) for error in errors]
+            outputs = {}
+            for output in output_paths:
+                outputs[output] = (staged_path.parent / output).read_bytes()
+            # Recheck source/collisions after potentially slow overlay preflight;
+            # never overwrite a concurrently supplied entry or verified assessment.
+            current_plan, errors = preparation_plan(repo, recipe_path)
+            if errors:
+                return "", errors
+            if recipe_path.read_bytes() != original_inputs or current_plan != plan:
+                return "", [f"{recipe_path}: companion inputs changed during render; review and retry"]
+            for output in output_paths:
+                if not (recipe_path.parent / output).resolve().is_relative_to(recipe_path.parent.resolve()):
+                    return "", [f"{recipe_path}: manifest destination changed to escape the recipe directory; review and retry"]
+            materialize(recipe_path, plan)
+            for relative_output, content in outputs.items():
+                output = recipe_path.parent / relative_output
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(content)
+                print(f"  wrote {output.relative_to(repo)}")
+            print(f"  materialized vllm-{plan[0]['platforms'][-1]['version']} companion (unverified)")
+            return rendered, []
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError, TemplateError) as error:
+        return "", [f"{recipe_path}: {error}"]
+
+
+def _render_explicit_recipe(
     repo: Path,
     recipe_path: Path,
     dry_run: bool = False,
@@ -314,6 +423,11 @@ def render_recipe(
     serving = recipe.get("serving")
     if not isinstance(serving, dict):
         return "", [f"{recipe_path}: missing serving block"]
+
+    from companions import companion_errors
+    policy_errors = companion_errors(repo, recipe_path, recipe)
+    if policy_errors:
+        return "", [f"{recipe_path}: {error}" for error in policy_errors]
 
     if serving.get("prefill"):
         return "", [f"{recipe_path}: prefill/decode disaggregated serving not yet supported by renderer"]
@@ -337,6 +451,7 @@ def render_recipe(
         return "", [f"{recipe_path}: no platforms defined"]
 
     all_rendered: list[str] = []
+    pending_outputs: list[tuple[Path, bytes, bool]] = []
     for platform_entry in platforms:
         if platform_entry.get("blocked"):
             continue
@@ -344,6 +459,9 @@ def render_recipe(
         version = platform_entry.get("version", "")
 
         pinned_ref = platform_entry.get("pinned_manifest")
+        if pinned_ref and is_distributed_dp(recipe, platform_entry):
+            errors.append(f"{recipe_path}: distributed-DP pinned startup is outside the audited template contract")
+            continue
         if pinned_ref:
             pinned_path = recipe_path.parent / pinned_ref
             if not pinned_path.is_file():
@@ -354,10 +472,8 @@ def render_recipe(
             if not dry_run:
                 stack_dir = f"{stack}-{version}" if version else stack
                 manifest_dir = recipe_path.parent / "manifests" / stack_dir
-                manifest_dir.mkdir(parents=True, exist_ok=True)
                 output_path = manifest_dir / pinned_path.name
-                output_path.write_bytes(pinned_bytes)
-                print(f"  wrote {output_path.relative_to(repo)} (pinned)")
+                pending_outputs.append((output_path, pinned_bytes, True))
             all_rendered.append(rendered)
             continue
 
@@ -382,6 +498,12 @@ def render_recipe(
         effective_recipe["serving"] = effective_serving
         effective_recipe["platform"] = {"stack": stack, "version": version}
 
+        input_errors = declarative_errors(recipe, effective_serving, platform_entry)
+        input_errors.extend(distributed_dp_errors(repo, recipe, effective_serving, platform_entry))
+        if input_errors:
+            errors.extend(f"{recipe_path}: [{stack}-{version}] {error}" for error in input_errors)
+            continue
+
         if constraints:
             constraint_errors = validate_recipe_against_constraints(
                 constraints, effective_recipe, model
@@ -391,7 +513,7 @@ def render_recipe(
                 continue
 
         try:
-            template_path = select_template(stack, mode)
+            template_path = select_template(stack, mode, recipe.get("deployment", {}).get("scope"))
         except ValueError as exc:
             errors.append(str(exc))
             continue
@@ -399,33 +521,33 @@ def render_recipe(
         context = build_template_context(effective_recipe, model, constraints, platform_entry)
         rendered = render_template(template_path, context, repo / "templates")
 
-        if effective_serving.get("config_overrides") is True:
-            config_dir = recipe_path.parent / "config"
-            kustomization = config_dir / "kustomization.yaml"
-            if kustomization.is_file():
-                try:
-                    rendered = run_kustomize(rendered, recipe_path.parent)
-                except (RuntimeError, OSError) as exc:
-                    errors.append(f"{recipe_path}: kustomize failed: {exc}")
-                    continue
-            else:
-                errors.append(
-                    f"{recipe_path}: config_overrides is true but config/kustomization.yaml missing"
-                )
+        reference = platform_config(recipe, platform_entry)
+        if reference:
+            try:
+                rendered = run_kustomize(rendered, recipe_path.parent, reference)
+            except (RuntimeError, OSError, ValueError) as exc:
+                errors.append(f"{recipe_path}: kustomize failed: {exc}")
                 continue
 
         if not dry_run:
             stack_dir = f"{stack}-{version}" if version else stack
             manifest_dir = recipe_path.parent / "manifests" / stack_dir
-            manifest_dir.mkdir(parents=True, exist_ok=True)
             kind = context["kind"]
             filename = f"{kind.lower()}.yaml"
             output_path = manifest_dir / filename
-            output_path.write_text(rendered)
-            print(f"  wrote {output_path.relative_to(repo)}")
+            pending_outputs.append((output_path, rendered.encode("utf-8"), False))
 
         all_rendered.append(rendered)
 
+    if not errors:
+        for output_path, _, _ in pending_outputs:
+            if not output_path.resolve().is_relative_to(recipe_path.parent.resolve()):
+                errors.append(f"{recipe_path}: manifest destination escapes the recipe directory: {output_path}")
+    if not errors:
+        for output_path, content, pinned in pending_outputs:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(content)
+            print(f"  wrote {output_path.relative_to(repo)}" + (" (pinned)" if pinned else ""))
     return "\n---\n".join(all_rendered), errors
 
 

@@ -34,6 +34,30 @@
         }
       ]
     },
+    "platform_verification": {
+      "type": "object",
+      "description": "Independent platform assessment. Never inherits recipe-wide maturity, deployment status, or benchmark evidence.",
+      "required": ["maturity", "deployment_status", "benchmark_runs"],
+      "properties": {
+        "maturity": {"enum": ["day-zero", "contributed", "validated", "production"]},
+        "deployment_status": {"$ref": "#/$defs/status"},
+        "benchmark_runs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^results/.+/run\\.yaml$"}
+        }
+      },
+      "allOf": [{
+        "if": {"properties": {"maturity": {"enum": ["validated", "production"]}}},
+        "then": {
+          "properties": {
+            "deployment_status": {"properties": {"state": {"const": "verified"}}},
+            "benchmark_runs": {"minItems": 1}
+          }
+        }
+      }],
+      "additionalProperties": false
+    },
     "image_lifecycle": {
       "type": "object",
       "required": ["recommended"],
@@ -249,6 +273,12 @@
           "type": "boolean",
           "description": "Set true when config/ contains Kustomize overlay patches"
         },
+        "shared_memory": {
+          "type": "object",
+          "required": ["size"],
+          "properties": {"size": {"type": "string", "pattern": "^[1-9][0-9]*[KMGTPE]i$"}},
+          "additionalProperties": false
+        },
         "decode": {"$ref": "#/$defs/role_block"},
         "prefill": {"$ref": "#/$defs/role_block"}
       },
@@ -269,6 +299,33 @@
           "stack": {"enum": ["rhoai", "llm-d", "vllm"]},
           "version": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
           "overrides": {"type": "string", "pattern": "^platforms/[^/]+\\.ya?ml$"},
+          "config": {
+            "type": ["string", "null"],
+            "pattern": "^config(/[A-Za-z0-9][A-Za-z0-9_-]*)*$",
+            "description": "Platform-owned Kustomize directory; null explicitly disables overlays. Omission preserves legacy serving.config_overrides."
+          },
+          "verification": {"$ref": "#/$defs/platform_verification"},
+          "companion": {
+            "type": "object",
+            "required": ["source", "version_policy"],
+            "properties": {
+              "source": {
+                "type": "object",
+                "required": ["stack", "version"],
+                "properties": {
+                  "stack": {"enum": ["rhoai", "llm-d"]},
+                  "version": {"type": "string", "minLength": 1}
+                },
+                "additionalProperties": false
+              },
+              "version_policy": {"enum": ["same", "newer"]},
+              "source_config_sha256": {
+                "type": "string", "pattern": "^[a-f0-9]{64}$",
+                "description": "Derived checksum of canonical source inputs at materialization, not verification evidence. Existing records may omit it."
+              }
+            },
+            "additionalProperties": false
+          },
           "blocked": {"type": "boolean"},
           "reason": {"type": "string", "minLength": 1},
           "pinned_manifest": {
@@ -284,6 +341,10 @@
         },
         "additionalProperties": false,
         "allOf": [
+          {
+            "if": {"required": ["companion"]},
+            "then": {"required": ["verification"], "properties": {"stack": {"const": "vllm"}}}
+          },
           {
             "if": {"properties": {"blocked": {"const": true}}, "required": ["blocked"]},
             "then": {"required": ["stack", "version", "overrides", "reason"]}
@@ -348,6 +409,9 @@
               "type": "object",
               "properties": {
                 "name": {"type": "string", "minLength": 1},
+                "mount_path": {"type": "string", "pattern": "^/[^\\s]+$"},
+                "model_path": {"type": "string", "pattern": "^/[^\\s]+$"},
+                "read_only": {"type": "boolean"},
                 "size": {"type": "string", "pattern": "^[0-9]+[KMGTPE]i$"},
                 "access_modes": {
                   "type": "array",
@@ -356,7 +420,12 @@
                 },
                 "storage_class": {"type": "string"}
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "dependentRequired": {
+                "mount_path": ["name", "read_only"],
+                "model_path": ["mount_path"],
+                "read_only": ["mount_path"]
+              }
             },
             "why": {"type": "string"}
           },

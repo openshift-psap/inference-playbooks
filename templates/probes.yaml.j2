@@ -1,0 +1,9 @@
+{% macro probe(name, values) -%}
+{{ name }}Probe:
+  httpGet:
+    path: {{ values.path if values.path == '/health' else values.path | tojson }}
+    port: {{ values.port }}
+{% for key, value in values.options.items() %}
+  {{ key }}: {{ value }}
+{% endfor %}
+{%- endmacro %}
