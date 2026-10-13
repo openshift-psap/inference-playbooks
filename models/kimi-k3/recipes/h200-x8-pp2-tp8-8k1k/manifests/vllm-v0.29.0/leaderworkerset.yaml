@@ -1,0 +1,216 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kimi-k3-vllm-h200-pp2-tp8
+spec:
+  ports:
+  - name: http
+    port: 8000
+    protocol: TCP
+    targetPort: 8000
+  selector:
+    app.kubernetes.io/name: kimi-k3-vllm-h200-pp2-tp8
+    role: leader
+  type: ClusterIP
+---
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: kimi-k3-vllm-h200-pp2-tp8
+spec:
+  leaderWorkerTemplate:
+    leaderTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/managed-by: inference-playbooks
+          app.kubernetes.io/name: kimi-k3-vllm-h200-pp2-tp8
+          role: leader
+      spec:
+        containers:
+        - args:
+          - |
+            vllm serve /models/Kimi-K3 \
+              --served-model-name=/models/Kimi-K3 \
+              --tensor-parallel-size 8 \
+              --pipeline-parallel-size 2 \
+              --nnodes 2 \
+              --node-rank 0 \
+              --master-addr 0.0.0.0 \
+              --port 8000 \
+              --trust-remote-code \
+              --attention-backend=FLASHMLA \
+              --moe-backend=humming \
+              --gpu-memory-utilization=0.90 \
+              --max-num-seqs=256 \
+              --max-model-len=8192 \
+              --max-num-batched-tokens=4096 \
+              --disable-custom-all-reduce \
+              --no-enable-flashinfer-autotune \
+              --enable-auto-tool-choice \
+              --tool-call-parser=kimi_k3 \
+              --reasoning-parser=kimi_k3 \
+          command:
+          - sh
+          - -c
+          env:
+          - name: NCCL_IB_HCA
+            value: mlx5_5
+          - name: NCCL_IB_GID_INDEX
+            value: "3"
+          - name: NCCL_DMABUF_ENABLE
+            value: "0"
+          - name: VLLM_USE_RUST_FRONTEND
+            value: "0"
+          - name: VLLM_USE_V2_MODEL_RUNNER
+            value: "1"
+          - name: HF_HOME
+            value: /models/hf
+          image: docker.io/vllm/vllm-openai:v0.29.0
+          imagePullPolicy: IfNotPresent
+          name: vllm-leader
+          ports:
+          - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            limits:
+              memory: 512Gi
+              nvidia.com/gpu: "8"
+              rdma/ib: "1"
+            requests:
+              cpu: "32"
+              memory: 512Gi
+              nvidia.com/gpu: "8"
+              rdma/ib: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          startupProbe:
+            failureThreshold: 720
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+          volumeMounts:
+          - mountPath: /dev/shm
+            name: dshm
+          - mountPath: /home/nobody/.cache
+            name: hf-cache
+          - mountPath: /tmp
+            name: tmp
+          - mountPath: /models
+            name: model
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          seccompProfile:
+            type: RuntimeDefault
+        volumes:
+        - emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+          name: dshm
+        - emptyDir: {}
+          name: hf-cache
+        - emptyDir: {}
+          name: tmp
+        - hostPath:
+            path: /mnt/local/kimi-k3/models
+            type: DirectoryOrCreate
+          name: model
+    restartPolicy: RecreateGroupOnPodRestart
+    size: 2
+    workerTemplate:
+      spec:
+        containers:
+        - args:
+          - |
+            vllm serve /models/Kimi-K3 \
+              --served-model-name=/models/Kimi-K3 \
+              --tensor-parallel-size 8 \
+              --pipeline-parallel-size 2 \
+              --nnodes 2 \
+              --node-rank $(LWS_WORKER_INDEX) \
+              --master-addr $(LWS_LEADER_ADDRESS) \
+              --headless \
+              --trust-remote-code \
+              --attention-backend=FLASHMLA \
+              --moe-backend=humming \
+              --gpu-memory-utilization=0.90 \
+              --max-num-seqs=256 \
+              --max-model-len=8192 \
+              --max-num-batched-tokens=4096 \
+              --disable-custom-all-reduce \
+              --no-enable-flashinfer-autotune \
+              --enable-auto-tool-choice \
+              --tool-call-parser=kimi_k3 \
+              --reasoning-parser=kimi_k3 \
+              --port=8000 \
+          command:
+          - sh
+          - -c
+          env:
+          - name: NCCL_IB_HCA
+            value: mlx5_5
+          - name: NCCL_IB_GID_INDEX
+            value: "3"
+          - name: NCCL_DMABUF_ENABLE
+            value: "0"
+          - name: VLLM_USE_RUST_FRONTEND
+            value: "0"
+          - name: VLLM_USE_V2_MODEL_RUNNER
+            value: "1"
+          - name: HF_HOME
+            value: /models/hf
+          image: docker.io/vllm/vllm-openai:v0.29.0
+          imagePullPolicy: IfNotPresent
+          name: vllm-worker
+          resources:
+            limits:
+              memory: 512Gi
+              nvidia.com/gpu: "8"
+              rdma/ib: "1"
+            requests:
+              cpu: "32"
+              memory: 512Gi
+              nvidia.com/gpu: "8"
+              rdma/ib: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          volumeMounts:
+          - mountPath: /dev/shm
+            name: dshm
+          - mountPath: /home/nobody/.cache
+            name: hf-cache
+          - mountPath: /tmp
+            name: tmp
+          - mountPath: /models
+            name: model
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          seccompProfile:
+            type: RuntimeDefault
+        volumes:
+        - emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+          name: dshm
+        - emptyDir: {}
+          name: hf-cache
+        - emptyDir: {}
+          name: tmp
+        - hostPath:
+            path: /mnt/local/kimi-k3/models
+            type: DirectoryOrCreate
+          name: model
+  replicas: 1

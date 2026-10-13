@@ -1,0 +1,79 @@
+schema_version: 4
+recipe_id: kimi-k3-vllm-h200-pp2-tp8
+model_id: kimi-k3
+platforms:
+  - stack: vllm
+    version: v0.29.0
+    overrides: platforms/vllm-v0.29.0.yaml
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-roce-r1.yaml
+workload_profile: guidellm-8k1k
+deployment_mode: pp2-tp8
+optimization_intent: throughput
+maturity: contributed
+quantization: MXFP4
+
+serving:
+  image: docker.io/vllm/vllm-openai:v0.29.0
+  image_usage:
+    kind: default
+    variant: cuda
+    note: >-
+      Use the upstream CUDA release image following Michey's suggestion to try
+      vLLM 0.29 in
+      https://github.com/openshift-psap/inference-playbooks/pull/19#issuecomment-6004104985.
+      Release source includes Kimi K3 and Humming SITU support, so the legacy
+      site-packages bootstrap is removed.
+  engine:
+    name: vllm
+    version: 0.29.0
+    image: docker.io/vllm/vllm-openai:v0.29.0
+    source: https://github.com/vllm-project/vllm/releases/tag/v0.29.0
+  model: /models/Kimi-K3
+  parallelism:
+    mode: tp+pp
+    tp: 8
+    pp: 2
+  resources:
+    requests:
+      cpu: "32"
+      memory: 512Gi
+      nvidia.com/gpu: "8"
+      rdma/ib: "1"
+    limits:
+      memory: 512Gi
+      nvidia.com/gpu: "8"
+      rdma/ib: "1"
+  port: 8000
+  config_overrides: true
+  decode:
+    worker_args:
+      - {flag: --port, value: "8000", required: true, why: Sets the worker command's port.}
+  env:
+    - {name: NCCL_IB_HCA, value: mlx5_5}
+    - {name: NCCL_IB_GID_INDEX, value: "3"}
+    - {name: NCCL_DMABUF_ENABLE, value: "0"}
+    - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
+    - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
+    - {name: HF_HOME, value: /models/hf}
+  args:
+    - {flag: --trust-remote-code, required: true, why: Allows loading model-provided code.}
+    - {flag: --attention-backend, value: FLASHMLA, required: true, why: Selects FlashMLA for MLA attention.}
+    - {flag: --moe-backend, value: humming, required: true, why: Selects Humming for MoE execution.}
+    - {flag: --gpu-memory-utilization, value: "0.90", required: true, why: Sets the GPU memory budget.}
+    - {flag: --max-num-seqs, value: "256", required: true, why: Sets the scheduler sequence budget.}
+    - {flag: --max-model-len, value: "8192", required: true, why: Sets the total prompt-plus-output context budget.}
+    - {flag: --max-num-batched-tokens, value: "4096", required: true, why: Sets the per-iteration token budget.}
+    - {flag: --disable-custom-all-reduce, required: true, why: Disables the custom all-reduce implementation.}
+    - {flag: --no-enable-flashinfer-autotune, required: true, why: Disables FlashInfer autotuning.}
+    - {flag: --enable-auto-tool-choice, required: true, why: Enables automatic tool selection.}
+    - {flag: --tool-call-parser, value: kimi_k3, required: true, why: Selects the Kimi K3 tool-call parser.}
+    - {flag: --reasoning-parser, value: kimi_k3, required: true, why: Selects the Kimi K3 reasoning parser.}
+
+deployment:
+  scope: multi-node
+  storage:
+    type: hostpath
+    why: Each node uses a pre-staged local copy of the model weights.
+  manifests:
+    - {path: manifests/vllm-v0.29.0/leaderworkerset.yaml, kind: LeaderWorkerSet, generated: true}
+notes: guides/notes.yaml
