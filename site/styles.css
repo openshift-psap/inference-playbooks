@@ -597,6 +597,10 @@ code {
   padding: 8px 0;
 }
 
+.recipe-technical > :not(summary) {
+  padding-left: 11px;
+}
+
 .recipe-technical > p {
   font-size: 13px;
   color: #4F5255;
@@ -604,6 +608,7 @@ code {
 }
 
 .recipe-technical > a {
+  display: inline-block;
   font-size: 13px;
 }
 
