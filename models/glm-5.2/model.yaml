@@ -10,3 +10,8 @@ architectures:
 quantizations:
   - name: FP8
     huggingface_id: zai-org/GLM-5.2-FP8
+presentation:
+  icon_bg: "#4B2E83"
+  icon_letter: "G"
+  provider: zai-org
+  tags: ["Text generation", "Agentic", "FP8", "MoE"]

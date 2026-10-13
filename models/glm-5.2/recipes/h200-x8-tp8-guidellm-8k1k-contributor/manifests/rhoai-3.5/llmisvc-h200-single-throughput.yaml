@@ -1,0 +1,43 @@
+# GLM-5.2 on H200 — aggregated, single node, TP=8.
+# Contributor PR #17; original bytes retained in raw-manifest/source-manifest.yaml.
+# Only the operational image reference was qualified during migration.
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: glm52
+spec:
+  model:
+    uri: pvc://glm52-weights
+    name: glm-5.2-fp8
+  replicas: 1
+  parallelism:
+    tensor: 8
+  template:
+    containers:
+      - name: main
+        image: docker.io/vllm/vllm-openai:v0.24.0
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef: { name: llm-d-hf-token, key: HF_TOKEN, optional: true }
+          - name: VLLM_ADDITIONAL_ARGS
+            value: >-
+              --tensor-parallel-size 8
+              --max-model-len 10000
+              --max-num-seqs 48
+              --gpu-memory-utilization 0.80
+              --enable-chunked-prefill
+              --max-num-batched-tokens 8192
+              --max-cudagraph-capture-size 192
+              --speculative-config '{"method":"mtp","num_speculative_tokens":5,"draft_tensor_parallel_size":8}'
+              --served-model-name glm-5.2-fp8
+              --trust-remote-code
+        resources:
+          requests: { cpu: 32, memory: 512Gi, nvidia.com/gpu: "8" }
+          limits: { memory: 512Gi, nvidia.com/gpu: "8" }
+        startupProbe:
+          httpGet: { path: /health, port: 8000 }
+          failureThreshold: 180
+          periodSeconds: 10
+        volumeMounts: [{ name: dshm, mountPath: /dev/shm }]
+    volumes: [{ name: dshm, emptyDir: { medium: Memory, sizeLimit: 16Gi } }]

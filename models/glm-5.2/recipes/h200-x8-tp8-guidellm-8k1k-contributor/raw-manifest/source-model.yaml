@@ -1,0 +1,16 @@
+schema_version: 1
+model_id: glm-5.2
+name: GLM-5.2-FP8
+family: GLM
+parameters: "355B-A32B MoE"
+huggingface_id: zai-org/GLM-5.2-FP8
+license: MIT
+quantizations:
+  - {name: FP8}
+  - {name: NVFP4}
+  - {name: MXFP4}
+presentation:
+  icon_bg: "#4B2E83"
+  icon_letter: "G"
+  provider: zai-org
+  tags: ["Text generation", "Agentic", "FP8", "MoE"]

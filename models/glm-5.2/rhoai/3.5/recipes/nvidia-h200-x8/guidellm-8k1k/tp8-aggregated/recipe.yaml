@@ -1,0 +1,73 @@
+schema_version: 3
+recipe_id: glm-5.2-rhoai-3.5-h200-guidellm-8k1k-tp8
+model_id: glm-5.2
+platform:
+  stack: rhoai
+  version: "3.5"
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+workload_profile: guidellm-8k1k
+deployment_mode: tp8-aggregated
+optimization_intent: throughput
+maturity: validated
+deployment:
+  scope: single-node
+  parallelism:
+    tensor: 8
+  manifests:
+    - path: manifests/llmisvc-h200-single-throughput.yaml
+      kind: LLMInferenceService
+      generated: true
+benchmark_runs:
+  - results/guidellm-8k1k-c16-r1/run.yaml
+
+display:
+  header_specs:
+    - {k: "Checkpoint", v: "zai-org/GLM-5.2-FP8", mono: true}
+    - {k: "Hardware", v: "1 node · 8× H200 141 GB"}
+    - {k: "Parallelism", v: "TP=8, aggregated"}
+    - {k: "Precision", v: "FP8 weights, auto KV dtype"}
+    - {k: "Max model len", v: "10,000"}
+    - {k: "Spec decode", v: "MTP, 5 draft tokens"}
+  flags_lede: "Eight flags plus two common, tuned for density rather than reach. The context ceiling is the price: <code>--max-model-len 10000</code> rejects anything longer, so never point agentic traffic here."
+  arg_note: "Two deliberate omissions against the agentic profile: no <code>--kv-cache-dtype fp8</code> (KV pressure is low at 10K, and auto dtype sidesteps any quantization effect on quality), and no parsers (this profile targets completion-style serving). Add <code>--tool-call-parser glm47 --reasoning-parser glm45 --enable-auto-tool-choice</code> if you need tools."
+  vllm_args:
+    - {flag: "--tensor-parallel-size", value: "8", why: "One node, eight GPUs."}
+    - {flag: "--max-model-len", value: "10000", why: "8K in + 1K out + margin. Small per-sequence KV means more concurrent sequences fit. Any longer request is rejected — that is the trade."}
+    - {flag: "--max-num-seqs", value: "48", why: "Caps the scheduler batch. Keeps ITL flat at C=16 with room for MTP verification."}
+    - {flag: "--gpu-memory-utilization", value: "0.80", why: "Deliberately conservative. Leaves HBM for draft KV and CUDA graph pools; at 10K max-len you do not need 0.90."}
+    - {flag: "--enable-chunked-prefill", value: "", why: "With the batched-token cap below, an 8K prompt prefills in one chunk."}
+    - {flag: "--max-num-batched-tokens", value: "8192", why: "One prompt, one chunk, no queueing behind decodes. This is why TTFT p50 stays near 0.7 s."}
+    - {flag: "--max-cudagraph-capture-size", value: "192", why: "48 sequences × 6 MTP draft slots. Move max-num-seqs and this must move with it."}
+    - {flag: "--speculative-config", value: '{"method":"mtp","num_speculative_tokens":5,"draft_tensor_parallel_size":8}', why: "Draft TP must be 1 or the target TP. At TP=8, 8."}
+    - {flag: "--served-model-name", value: "glm-5.2-fp8", why: "Stable client-facing name, decoupled from the checkpoint path."}
+    - {flag: "--trust-remote-code", value: "", why: "The GlmMoeDsa architecture requires it."}
+  image_table:
+    - ["Recommended today", "vllm/vllm-openai:v0.24.0", "Verified 2026-08-12"]
+  artifact_table:
+    - ["zai-org/GLM-5.2-FP8", "755.7 GB", "ba978f7…", "Upstream FP8 reference."]
+  benchmark:
+    provenance: "Only the C=16 point is published here. It is the single normalized result traced to a committed result run (results/guidellm-8k1k-c16-r1/). The harness command below still runs the full 1 → 4 → 16 sweep, but the C=1 and C=4 stages are not yet backed by a committed result run, so they are not published. Re-run and commit results before quoting any lower-concurrency number, and re-verify before any external claim."
+    harness_lede: "GuideLLM against a fixed 8000/1000 shape, 300 s per stage. The command runs a 1 → 4 → 16 concurrency sweep, but only the C=16 stage has a committed result run and is reported below. This matches the internal performance-team standard, so the point is comparable across models."
+    harness_drawer:
+      id: "bench"
+      name: "guidellm-8k1k-sweep.sh"
+      meta: "Concurrency sweep · 300 s/stage"
+      open: true
+      code: |
+        guidellm benchmark \
+          --target "http://${SERVICE}:8000" \
+          --data "prompt_tokens=8000,output_tokens=1000" \
+          --rate-type "concurrent" \
+          --rate "1,4,16" \
+          --backend-type "openai_http" \
+          --model "zai-org/GLM-5.2-FP8" \
+          --max-seconds "300" \
+          --output-path "output_vllm_glm52_spec.json"
+
+        # Version pin required: guidellm==0.3.0 (CLI form removed in 0.7+)
+    rows:
+      - {load: "C=16 · 189 req in 300 s", ttft: "738 ms (p95 4,708)", itl: "23.0 ms", tput: "649 out / 6,126 total", hit: "—"}
+    notes:
+      - "Prefix caching is the cheapest win available. Shared-prefix traffic showed 63% lower TTFT p50 and 12% higher throughput, with no external infrastructure."
+    issues:
+      - ["MTP incompatible with PP (vllm#44697)", "No spec decode multi-node", "Stay single-node if MTP matters"]

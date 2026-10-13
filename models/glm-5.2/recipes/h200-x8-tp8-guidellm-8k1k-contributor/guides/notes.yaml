@@ -1,0 +1,9 @@
+schema_version: 1
+profile:
+  label: Contributor GuideLLM 8K/1K configuration
+args_lede: Arguments are preserved in the pinned manifest's VLLM_ADDITIONAL_ARGS; no equivalent standalone command has been established.
+known_issues:
+  - issue: The original run/result are retained under raw-manifest/source-evidence, not current results.
+    impact: Missing raw output/checksum provenance and incomplete attribution prevent publishing measurements or validation badges.
+  - issue: Original rationale remains in raw-manifest/source-recipe.yaml.
+    impact: Historical prose and performance claims are not deployment truth or current benchmark evidence.

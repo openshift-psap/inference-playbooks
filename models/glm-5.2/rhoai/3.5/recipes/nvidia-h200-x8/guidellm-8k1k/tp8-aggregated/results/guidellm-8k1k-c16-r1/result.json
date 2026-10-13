@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "run_id": "guidellm-8k1k-c16-r1",
+  "deployment_scope": "single-node",
+  "accelerator_key": "nvidia-h200-x8",
+  "metrics": {
+    "ttft_ms_p50": 738,
+    "ttft_ms_p95": 4708,
+    "itl_ms": 23.0,
+    "output_tok_s": 649,
+    "total_tok_s": 6126,
+    "total_requests": 189,
+    "duration_seconds": 300,
+    "concurrency": 16
+  }
+}

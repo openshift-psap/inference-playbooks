@@ -1,0 +1,78 @@
+schema_version: 3
+recipe_id: glm-5.2-rhoai-3.5-h200-aiperf-agentx-128k-tp8
+model_id: glm-5.2
+platform:
+  stack: rhoai
+  version: "3.5"
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+workload_profile: aiperf-agentx-128k
+deployment_mode: tp8-aggregated
+optimization_intent: latency
+maturity: day-zero
+deployment:
+  scope: single-node
+  parallelism:
+    tensor: 8
+  manifests:
+    - path: manifests/llmisvc-h200-single-agentic.yaml
+      kind: LLMInferenceService
+      generated: true
+
+display:
+  header_specs:
+    - {k: "Checkpoint", v: "zai-org/GLM-5.2-FP8", mono: true}
+    - {k: "Hardware", v: "1 node · 8× H200 141 GB"}
+    - {k: "Parallelism", v: "TP=8, aggregated"}
+    - {k: "Precision", v: "FP8 weights + FP8 KV"}
+    - {k: "Max model len", v: "131,072"}
+    - {k: "Spec decode", v: "MTP, 5 draft tokens"}
+  flags_lede: "Ten flags plus two common. Each is load-bearing for agentic serving at 131K — drop any of the four parser and tool flags and tool calling silently degrades to prose."
+  vllm_args:
+    - {flag: "--tensor-parallel-size", value: "8", why: "One node, eight GPUs, no cross-node transport."}
+    - {flag: "--kv-cache-dtype", value: "fp8", why: "~16% throughput uplift over GLM-5 on the same topology. The main reason this profile holds 131K."}
+    - {flag: "--max-model-len", value: "131072", why: "The model's context window. Real agent sessions still overflow it — 42 of 50 in the trace replay."}
+    - {flag: "--enable-prefix-caching", value: "", why: "63% lower TTFT p50 on shared-prefix traffic. Cheapest win in this file."}
+    - {flag: "--enable-chunked-prefill", value: "", why: "Keeps a long prefill from starving in-flight decodes."}
+    - {flag: "--speculative-config.method", value: "mtp", why: "GLM-5.2 ships an MTP head. Free decode speedup — and it disappears under pipeline parallelism."}
+    - {flag: "--speculative-config.num_speculative_tokens", value: "5", why: "The head predicts five. Raising it costs verification compute for falling acceptance."}
+    - {flag: "--tool-call-parser", value: "glm47", why: "Required for structured tool arguments. Without it you get prose."}
+    - {flag: "--reasoning-parser", value: "glm45", why: "Separates reasoning from content. The chat template also honors enable_thinking and reasoning_effort."}
+    - {flag: "--enable-auto-tool-choice", value: "", why: "Lets the model decide when to call. Omit it and the parser never fires."}
+    - {flag: "--served-model-name", value: "glm-5.2-fp8", why: "Stable client-facing name, decoupled from the checkpoint path."}
+    - {flag: "--trust-remote-code", value: "", why: "The GlmMoeDsa architecture requires it."}
+  image_table:
+    - ["Recommended today", "vllm/vllm-openai:v0.24.0", "Verified 2026-08-12"]
+  artifact_table:
+    - ["zai-org/GLM-5.2-FP8", "755.7 GB", "ba978f7…", "Upstream FP8 reference."]
+  benchmark:
+    provenance: "Pending run — AIPerf AgentX 128K benchmark has not been executed for this recipe yet. The row below is a placeholder for the expected workload shape."
+    harness_lede: "AIPerf (ai-dynamo/aiperf) replays the date-pinned AgentX corpus — 393 multi-turn, long-context coding traces — with the inferencex-agentx-mvp scenario. This is the shared workload in benchmarks/manifests/, so results compare across models. Use the 128K variant only because this recipe serves 131K; the unlimited-context variant would count every overflow as a failure."
+    harness_drawer:
+      id: "bench"
+      name: "aiperf-agentx-128k-job.yaml"
+      meta: "AIPerf 0.12.0 · AgentX trace replay · 1,800 s"
+      open: true
+      code: |
+        # benchmarks/manifests/aiperf-agentx-128k-job.yaml — set ENDPOINT, MODEL, TOKENIZER first
+        # Image: nvcr.io/nvidia/ai-dynamo/aiperf:0.12.0  (public NGC image; requires NGC access)
+        aiperf profile \
+          --scenario inferencex-agentx-mvp \
+          --url "${ENDPOINT}" --endpoint /v1/chat/completions --endpoint-type chat \
+          --model "${MODEL}" --tokenizer "${TOKENIZER}" --tokenizer-trust-remote-code \
+          --max-context-length 128000 \
+          --public-dataset semianalysis_cc_traces_weka_062126 --num-dataset-entries 393 \
+          --concurrency 32 --streaming --use-server-token-count \
+          --trajectory-start-min-ratio 0.25 --trajectory-start-max-ratio 0.75 \
+          --benchmark-duration 1800 --agentic-cache-warmup-duration 600 --warmup-grace-period 1800 \
+          --failed-request-threshold 0.10 --random-seed 42 \
+          --output-artifact-dir /results
+
+        # Run as a Job; results land on the benchmark-results PVC. Allow ~2 h.
+        oc apply -f benchmarks/manifests/aiperf-agentx-128k-job.yaml -n ${NAMESPACE}
+        oc wait --for=condition=complete job/aiperf-agentx-128k -n ${NAMESPACE} --timeout=2h
+    rows:
+      - {load: "AIPerf AgentX 128K · C=32 · 1,800 s", ttft: "pending run", itl: "pending run", tput: "pending run", hit: "—"}
+    notes:
+      - "Real agentic sessions overflow 131K. In the Weka trace replay, 42 of 50 sessions exceeded the context window."
+    issues:
+      - ["MTP incompatible with PP (vllm#44697)", "No spec decode multi-node", "Stay single-node if MTP matters"]
