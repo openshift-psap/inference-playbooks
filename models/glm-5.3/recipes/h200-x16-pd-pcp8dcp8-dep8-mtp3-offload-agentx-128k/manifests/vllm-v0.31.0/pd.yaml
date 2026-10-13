@@ -1,0 +1,233 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm-5-3-pd-prefill
+  labels: &id001
+    app.kubernetes.io/name: glm-5-3-pd-prefill
+    app.kubernetes.io/part-of: glm-5-3-pd
+    llm-d.ai/role: prefill
+    llm-d.ai/inferenceServing: 'true'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: glm-5-3-pd-prefill
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: *id001
+      annotations:
+        llm-d.ai/active-ports: '8000'
+        inference.networking.k8s.io/active-ports: '8000'
+    spec:
+      containers:
+      - name: vllm
+        image: docker.io/vllm/vllm-openai:v0.31.0
+        command:
+        - vllm
+        - serve
+        args:
+        - zai-org/GLM-5.3
+        - --served-model-name=zai-org/GLM-5.3
+        - --revision=30333038ada1f1dacb294a93270305a890b50c14
+        - --trust-remote-code
+        - --enable-expert-parallel
+        - --kv-cache-dtype=fp8_ds_mla
+        - --moe-backend=deep_gemm
+        - --kernel-config={"enable_flashinfer_autotune":false,"linear_backend":"deep_gemm"}
+        - --speculative-config={"method":"mtp","num_speculative_tokens":3,"rejection_sample_method":"block"}
+        - --max-model-len=142000
+        - --enable-auto-tool-choice
+        - --tool-call-parser=glm47
+        - --reasoning-parser=glm45
+        - --prefill-context-parallel-size=8
+        - --decode-context-parallel-size=8
+        - --dcp-comm-backend=ag_rs
+        - --attention-config={"sparse_mla_force_mqa":true}
+        - --all2all-backend=deepep_high_throughput
+        - --compilation-config={"cudagraph_mode":"NONE"}
+        - --gpu-memory-utilization=0.94
+        - --max-num-batched-tokens=16384
+        - --max-num-seqs=256
+        - --kv-transfer-config={"kv_connector":"MultiConnector","kv_role":"kv_both","kv_connector_extra_config":{"connectors":[{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_connector_extra_config":{"enforce_handshake_compat":false,"num_threads":1}},{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec","cpu_bytes_to_use":549755813888}}]}}
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        - name: HOME
+          value: /tmp
+        - name: HF_HOME
+          value: /home/nobody/.cache/huggingface
+        - name: UCX_TLS
+          value: rc,cuda_copy,cuda_ipc,self,sm,tcp
+        - name: NVSHMEM_QP_DEPTH
+          value: '1026'
+        - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        resources:
+          requests:
+            cpu: '48'
+            memory: 1500Gi
+            nvidia.com/gpu: '8'
+            rdma/ib: '8'
+          limits:
+            memory: 1500Gi
+            nvidia.com/gpu: '8'
+            rdma/ib: '8'
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+        - name: hf-cache
+          mountPath: /home/nobody/.cache
+        securityContext:
+          runAsUser: 0
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 10
+          failureThreshold: 360
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 10
+        ports:
+        - containerPort: 8000
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 576Gi
+      - name: hf-cache
+        emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm-5-3-pd-decode
+  labels: &id001
+    app.kubernetes.io/name: glm-5-3-pd-decode
+    app.kubernetes.io/part-of: glm-5-3-pd
+    llm-d.ai/role: decode
+    llm-d.ai/inferenceServing: 'true'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: glm-5-3-pd-decode
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: *id001
+      annotations:
+        llm-d.ai/active-ports: 8000,8001,8002,8003,8004,8005,8006,8007
+        inference.networking.k8s.io/active-ports: 8000,8001,8002,8003,8004,8005,8006,8007
+    spec:
+      containers:
+      - name: vllm
+        image: docker.io/vllm/vllm-openai:v0.31.0
+        command:
+        - vllm
+        - serve
+        args:
+        - zai-org/GLM-5.3
+        - --served-model-name=zai-org/GLM-5.3
+        - --revision=30333038ada1f1dacb294a93270305a890b50c14
+        - --trust-remote-code
+        - --enable-expert-parallel
+        - --kv-cache-dtype=fp8_ds_mla
+        - --moe-backend=deep_gemm
+        - --kernel-config={"enable_flashinfer_autotune":false,"linear_backend":"deep_gemm"}
+        - --speculative-config={"method":"mtp","num_speculative_tokens":3,"rejection_sample_method":"block"}
+        - --max-model-len=142000
+        - --enable-auto-tool-choice
+        - --tool-call-parser=glm47
+        - --reasoning-parser=glm45
+        - --port=8200
+        - --data-parallel-size-local=8
+        - --data-parallel-multi-port-external-lb
+        - --all2all-backend=deepep_low_latency
+        - --gpu-memory-utilization=0.97
+        - --max-num-batched-tokens=512
+        - --max-num-seqs=64
+        - --kv-transfer-config={"kv_connector":"MultiConnector","kv_role":"kv_both","kv_connector_extra_config":{"connectors":[{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"enforce_handshake_compat":false,"num_threads":1}},{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec","cpu_bytes_to_use":68719476736}}]}}
+        - --data-parallel-size=8
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        - name: HOME
+          value: /tmp
+        - name: HF_HOME
+          value: /home/nobody/.cache/huggingface
+        - name: UCX_TLS
+          value: rc,cuda_copy,cuda_ipc,self,sm,tcp
+        - name: NVSHMEM_QP_DEPTH
+          value: '1026'
+        - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        resources:
+          requests:
+            cpu: '48'
+            memory: 1500Gi
+            nvidia.com/gpu: '8'
+            rdma/ib: '8'
+          limits:
+            memory: 1500Gi
+            nvidia.com/gpu: '8'
+            rdma/ib: '8'
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+        - name: hf-cache
+          mountPath: /home/nobody/.cache
+        securityContext:
+          runAsUser: 0
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 9256
+          periodSeconds: 10
+          failureThreshold: 360
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 9256
+          periodSeconds: 10
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 576Gi
+      - name: hf-cache
+        emptyDir: {}
+      initContainers:
+      - name: routing-proxy
+        image: ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.9.0
+        restartPolicy: Always
+        args:
+        - --port=8000
+        - --vllm-port=8200
+        - --data-parallel-size=8
+        - --secure-proxy=false
+        - --connector=nixlv2
+        ports:
+        - containerPort: 8000
+        - containerPort: 8001
+        - containerPort: 8002
+        - containerPort: 8003
+        - containerPort: 8004
+        - containerPort: 8005
+        - containerPort: 8006
+        - containerPort: 8007

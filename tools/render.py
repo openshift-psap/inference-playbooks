@@ -429,10 +429,12 @@ def _render_explicit_recipe(
     if policy_errors:
         return "", [f"{recipe_path}: {error}" for error in policy_errors]
 
+    # P/D and router recipes have no template yet; only pinned platforms render.
+    unsupported = None
     if serving.get("prefill"):
-        return "", [f"{recipe_path}: prefill/decode disaggregated serving not yet supported by renderer"]
-    if serving.get("router", {}).get("strategy"):
-        return "", [f"{recipe_path}: router configuration not yet supported by renderer"]
+        unsupported = "prefill/decode disaggregated serving not yet supported by renderer"
+    elif serving.get("router", {}).get("strategy"):
+        unsupported = "router configuration not yet supported by renderer"
 
     model_path = repo / "models" / recipe.get("model_id", "") / "model.yaml"
     if model_path.is_file():
@@ -475,6 +477,10 @@ def _render_explicit_recipe(
                 output_path = manifest_dir / pinned_path.name
                 pending_outputs.append((output_path, pinned_bytes, True))
             all_rendered.append(rendered)
+            continue
+
+        if unsupported:
+            errors.append(f"{recipe_path}: [{stack}-{version}] {unsupported}; use pinned_manifest")
             continue
 
         mode = serving.get("parallelism", {}).get("mode", "")

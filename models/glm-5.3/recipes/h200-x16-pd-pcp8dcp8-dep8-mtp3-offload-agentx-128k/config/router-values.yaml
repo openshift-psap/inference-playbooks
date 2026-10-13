@@ -1,0 +1,58 @@
+# llm-d router: prefix-cache-aware prefill, least-loaded decode rank.
+#   helm upgrade --install glm-5-3-pd-router oci://ghcr.io/llm-d/charts/llm-d-router-standalone \
+#     --version v0.9.0 --values config/router-values.yaml
+router:
+  epp:
+    flags:
+      ha-enable-leader-election: false
+    pluginsConfigFile: plugins.yaml
+    pluginsCustomConfig:
+      plugins.yaml: |
+        apiVersion: llm-d.ai/v1alpha1
+        kind: EndpointPickerConfig
+        plugins:
+          - type: disagg-headers-handler
+          - type: always-disagg-pd-decider
+          - type: disagg-profile-handler
+            parameters:
+              deciderPluginName: always-disagg-pd-decider
+          - type: prefill-filter
+          - type: decode-filter
+          - type: approx-prefix-cache-producer
+          - type: inflight-load-producer
+          - type: prefix-cache-affinity-filter
+            parameters:
+              peakPrefillThroughput: 20000
+          - type: token-load-scorer
+          - type: active-request-scorer
+          - type: max-score-picker
+        schedulingProfiles:
+          - name: prefill
+            plugins:
+              - pluginRef: prefill-filter
+              - pluginRef: prefix-cache-affinity-filter
+              - pluginRef: token-load-scorer
+              - pluginRef: max-score-picker
+          - name: decode
+            plugins:
+              - pluginRef: decode-filter
+              - pluginRef: active-request-scorer
+              - pluginRef: max-score-picker
+  extraServicePorts:
+    - name: http
+      port: 80
+      protocol: TCP
+      targetPort: 8081
+  modelServers:
+    type: vllm
+    matchLabels:
+      app.kubernetes.io/part-of: glm-5-3-pd
+    targetPorts:  # one endpoint per decode DP rank
+      - number: 8000
+      - number: 8001
+      - number: 8002
+      - number: 8003
+      - number: 8004
+      - number: 8005
+      - number: 8006
+      - number: 8007
