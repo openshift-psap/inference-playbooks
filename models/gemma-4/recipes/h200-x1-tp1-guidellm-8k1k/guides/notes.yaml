@@ -3,11 +3,11 @@ profile:
   label: Gemma 4 26B-A4B FP8 on one H200
   headline: Forge profile1 is a one-GPU smoke; this recipe omits MTP and the 8K/1K workload remains unverified.
   specs:
-    - {label: Checkpoint, value: RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic}
-    - {label: Hardware, value: One H200 GPU on an eight-GPU node}
-    - {label: Parallelism, value: TP=1}
-    - {label: Precision, value: FP8}
-    - {label: Forge workload, value: profile1 (1K/1K)}
+    - {label: Checkpoint, source: "recipe.yaml#/serving/model"}
+    - {label: Hardware, source: "recipe.yaml#/hardware_profile"}
+    - {label: Parallelism, source: "recipe.yaml#/serving/parallelism/mode"}
+    - {label: Precision, source: "model.yaml#/quantizations"}
+    - {label: Forge workload, source: "recipe.yaml#/workload_profile"}
 decisions:
   - subjects: [tensor parallelism]
     why: The existing Gemma guide documents the FP8 checkpoint on one H200; TP=1 keeps this Forge smoke to one GPU.
@@ -24,5 +24,5 @@ known_issues:
 quickstart:
   - {step: Prepare, detail: Forge stages the base checkpoint in a shared 100Gi cache; its configured Hugging Face credential must have access to the gated model.}
   - {step: Deploy, detail: Select recipe gemma-4-vllm-h200-tp1 in a Forge PR comment and request one NVIDIA GPU.}
-  - {step: Verify, detail: Forge waits for the vLLM health endpoint, runs profile1, captures state, and removes the LWS and Service.}
-  - {step: Cleanup, detail: The LWS and Service are removed by Forge; the shared model-cache PVC is retained.}
+  - {step: Verify, detail: Forge waits for the vLLM health endpoint and runs profile1.}
+  - {step: Cleanup, detail: Forge removes the Deployment; the shared model-cache PVC is retained.}
