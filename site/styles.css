@@ -555,6 +555,15 @@ code {
   padding: 28px 0 50px;
 }
 
+.panel h2 {
+  margin: 20px 0 8px;
+}
+
+.panel a + .drawer,
+.panel span + .drawer {
+  margin-top: 8px;
+}
+
 .recipe-technical {
   margin: 0 0 20px;
 }
