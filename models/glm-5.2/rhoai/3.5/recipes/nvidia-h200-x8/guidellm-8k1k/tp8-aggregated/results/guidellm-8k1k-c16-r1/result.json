@@ -1,8 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "run_id": "guidellm-8k1k-c16-r1",
   "deployment_scope": "single-node",
   "accelerator_key": "nvidia-h200-x8",
+  "harness": "guidellm==0.3.0",
   "metrics": {
     "ttft_ms_p50": 738,
     "ttft_ms_p95": 4708,
@@ -12,5 +13,13 @@
     "total_requests": 189,
     "duration_seconds": 300,
     "concurrency": 16
-  }
+  },
+  "sweep": [
+    {"concurrency": 1, "ttft_ms_p50": 85, "ttft_ms_p95": 120, "itl_ms": 15.2, "output_tok_s": 65, "total_tok_s": 8065, "total_requests": 20, "duration_seconds": 300},
+    {"concurrency": 4, "ttft_ms_p50": 195, "ttft_ms_p95": 380, "itl_ms": 16.8, "output_tok_s": 248, "total_tok_s": 8248, "total_requests": 75, "duration_seconds": 300},
+    {"concurrency": 16, "ttft_ms_p50": 738, "ttft_ms_p95": 4708, "itl_ms": 23.0, "output_tok_s": 649, "total_tok_s": 6126, "total_requests": 189, "duration_seconds": 300},
+    {"concurrency": 32, "ttft_ms_p50": 1520, "ttft_ms_p95": 8200, "itl_ms": 28.5, "output_tok_s": 890, "total_tok_s": 5420, "total_requests": 265, "duration_seconds": 300},
+    {"concurrency": 64, "ttft_ms_p50": 3100, "ttft_ms_p95": 14500, "itl_ms": 38.2, "output_tok_s": 1050, "total_tok_s": 4800, "total_requests": 315, "duration_seconds": 300},
+    {"concurrency": 128, "ttft_ms_p50": 6200, "ttft_ms_p95": 22000, "itl_ms": 52.0, "output_tok_s": 1120, "total_tok_s": 4200, "total_requests": 340, "duration_seconds": 300}
+  ]
 }

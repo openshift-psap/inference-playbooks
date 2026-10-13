@@ -247,11 +247,156 @@ function renderConfigure(entry) {
   }
   return panel;
 }
+// ---- Benchmark charts ----
+
+const CHART_COLORS = { primary: '#3987e5', secondary: '#d95926', tertiary: '#199e70' };
+const CHART_INSTANCES = [];
+
+function destroyCharts() {
+  while (CHART_INSTANCES.length) CHART_INSTANCES.pop().destroy();
+}
+
+function sweepChart(container, label, xValues, datasets) {
+  const canvas = document.createElement('canvas');
+  container.append(canvas);
+  const chart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: xValues.map(String),
+      datasets: datasets.map((ds, i) => ({
+        label: ds.label,
+        data: ds.data,
+        borderColor: [CHART_COLORS.primary, CHART_COLORS.secondary, CHART_COLORS.tertiary][i % 3],
+        backgroundColor: [CHART_COLORS.primary, CHART_COLORS.secondary, CHART_COLORS.tertiary][i % 3] + '18',
+        borderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        tension: 0.25,
+        fill: datasets.length === 1,
+      })),
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: datasets.length > 1, position: 'bottom', labels: { boxWidth: 12, padding: 10, usePointStyle: true, pointStyle: 'circle', font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.raw}${ds_unit(label)}` } },
+      },
+      scales: {
+        x: { title: { display: true, text: 'Concurrency', font: { size: 11 } }, grid: { display: false } },
+        y: { title: { display: true, text: label, font: { size: 11 } }, beginAtZero: true, grid: { color: 'rgba(0,0,0,0.06)' } },
+      },
+    },
+  });
+  CHART_INSTANCES.push(chart);
+}
+
+function ds_unit(label) {
+  if (label.includes('ms')) return ' ms';
+  if (label.includes('tok/s')) return ' tok/s';
+  if (label.includes('%')) return '%';
+  return '';
+}
+
+function statCard(value, label, sub) {
+  const card = node('div', null, 'stat-card');
+  card.append(node('div', value, 'stat-card__value'), node('div', label, 'stat-card__label'));
+  if (sub) card.append(node('div', sub, 'stat-card__sub'));
+  return card;
+}
+
+function renderSweepCharts(sweep, harness) {
+  const fragment = document.createDocumentFragment();
+  const concurrencies = sweep.map(p => p.concurrency);
+
+  // Summary stats from highest concurrency
+  const peak = sweep[sweep.length - 1];
+  const statsRow = node('div', null, 'stat-row');
+  if (peak.output_tok_s != null) statsRow.append(statCard(`${Math.round(peak.output_tok_s)}`, 'Output tok/s', `at C=${peak.concurrency}`));
+  if (peak.ttft_ms_p50 != null) statsRow.append(statCard(`${Math.round(peak.ttft_ms_p50)}ms`, 'TTFT p50', `at C=${peak.concurrency}`));
+  if (peak.itl_ms != null) statsRow.append(statCard(`${Math.round(peak.itl_ms * 10) / 10}ms`, 'ITL', `at C=${peak.concurrency}`));
+  if (peak.total_tok_s != null) statsRow.append(statCard(`${Math.round(peak.total_tok_s)}`, 'Total tok/s', `at C=${peak.concurrency}`));
+  if (peak.context_overflow_rate != null) statsRow.append(statCard(`${(peak.context_overflow_rate * 100).toFixed(1)}%`, 'Context overflow', `at C=${peak.concurrency}`));
+  if (statsRow.children.length) fragment.append(statsRow);
+
+  // Charts grid
+  const grid = node('div', null, 'chart-grid');
+
+  // TTFT chart
+  const ttftData = sweep.filter(p => p.ttft_ms_p50 != null || p.ttft_ms_p95 != null);
+  if (ttftData.length > 1) {
+    const card = node('div', null, 'chart-card');
+    card.append(node('h3', 'Time to First Token (TTFT)'));
+    const container = node('div', null, 'chart-container');
+    const datasets = [];
+    if (ttftData.some(p => p.ttft_ms_p50 != null)) datasets.push({ label: 'p50 (ms)', data: ttftData.map(p => p.ttft_ms_p50) });
+    if (ttftData.some(p => p.ttft_ms_p95 != null)) datasets.push({ label: 'p95 (ms)', data: ttftData.map(p => p.ttft_ms_p95) });
+    sweepChart(container, 'TTFT (ms)', ttftData.map(p => p.concurrency), datasets);
+    card.append(container); grid.append(card);
+  }
+
+  // ITL chart
+  const itlData = sweep.filter(p => p.itl_ms != null || p.itl_ms_p95 != null);
+  if (itlData.length > 1) {
+    const card = node('div', null, 'chart-card');
+    card.append(node('h3', 'Inter-Token Latency (ITL)'));
+    const container = node('div', null, 'chart-container');
+    const datasets = [];
+    if (itlData.some(p => p.itl_ms != null)) datasets.push({ label: 'avg (ms)', data: itlData.map(p => p.itl_ms) });
+    if (itlData.some(p => p.itl_ms_p95 != null)) datasets.push({ label: 'p95 (ms)', data: itlData.map(p => p.itl_ms_p95) });
+    sweepChart(container, 'ITL (ms)', itlData.map(p => p.concurrency), datasets);
+    card.append(container); grid.append(card);
+  }
+
+  // Throughput chart
+  const tputData = sweep.filter(p => p.output_tok_s != null);
+  if (tputData.length > 1) {
+    const card = node('div', null, 'chart-card');
+    card.append(node('h3', 'Output Throughput'));
+    const container = node('div', null, 'chart-container');
+    sweepChart(container, 'Output tok/s', tputData.map(p => p.concurrency), [{ label: 'Output tok/s', data: tputData.map(p => p.output_tok_s) }]);
+    card.append(container); grid.append(card);
+  }
+
+  // Context overflow / failed request rate (AIPerf)
+  const rateData = sweep.filter(p => p.context_overflow_rate != null || p.failed_request_rate != null);
+  if (rateData.length > 1) {
+    const card = node('div', null, 'chart-card');
+    card.append(node('h3', 'Error Rates'));
+    const container = node('div', null, 'chart-container');
+    const datasets = [];
+    if (rateData.some(p => p.context_overflow_rate != null)) datasets.push({ label: 'Context overflow (%)', data: rateData.map(p => p.context_overflow_rate != null ? +(p.context_overflow_rate * 100).toFixed(2) : null) });
+    if (rateData.some(p => p.failed_request_rate != null)) datasets.push({ label: 'Failed requests (%)', data: rateData.map(p => p.failed_request_rate != null ? +(p.failed_request_rate * 100).toFixed(2) : null) });
+    sweepChart(container, 'Rate (%)', rateData.map(p => p.concurrency), datasets);
+    card.append(container); grid.append(card);
+  }
+
+  if (grid.children.length) fragment.append(grid);
+  return fragment;
+}
+
 function renderBenchmark(entry) {
+  destroyCharts();
   const panel = node('div');
   if (!entry.evidence.length) { panel.append(node('div', 'No committed benchmark evidence for this recipe', 'banner')); return panel; }
   for (const item of entry.evidence) {
     panel.append(node('h2', `Original run: ${item.run.run_id}`), sourceLink(item.source, 'Run source'), sourceLink(item.result_source, 'Result source'));
+
+    // Harness label
+    const harness = item.run.harness || item.result.harness;
+    if (harness) {
+      const label = node('p', null, 'benchmark-harness');
+      label.innerHTML = `Harness: <code>${harness.replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}</code>`;
+      panel.append(label);
+    }
+
+    // Sweep charts if available
+    const sweep = item.result.sweep;
+    if (Array.isArray(sweep) && sweep.length > 0) {
+      const sorted = [...sweep].sort((a, b) => a.concurrency - b.concurrency);
+      panel.append(renderSweepCharts(sorted, harness));
+    }
+
     const environment = item.run.environment || {};
     panel.append(table(['Original run attribution', 'Value'], [
       ['Platform', environment.platform ? `${environment.platform.stack} ${environment.platform.version}` : null],

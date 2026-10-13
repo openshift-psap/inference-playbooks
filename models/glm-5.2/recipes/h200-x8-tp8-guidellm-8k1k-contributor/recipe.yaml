@@ -28,4 +28,6 @@ serving:
   args: []
 deployment:
   scope: single-node
+benchmark_runs:
+  - results/guidellm-8k1k-sweep-r1/run.yaml
 notes: guides/notes.yaml
