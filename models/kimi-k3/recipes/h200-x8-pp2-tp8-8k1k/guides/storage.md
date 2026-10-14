@@ -15,9 +15,9 @@ elsewhere, create/populate a shared RWX claim, then update both
 and accessible to both nodes; the model weights are mounted read-only.
 
 `HF_HOME` points to the separate writable `/home/nobody/.cache` emptyDir, not
-the read-only model claim. The recipe uses the existing `kimi-k3-hostpath`
-service account for its authorized runtime security context; the PVC itself
-does not require a hostPath mount.
+the read-only model claim. The recipe uses the namespace's `default` service
+account, which must be authorized for `anyuid` because the image runs as root.
+The PVC itself does not require a hostPath mount or hostPath SCC.
 
 Verify the claim is Bound/RWX, confirm checkpoint files and read permissions,
 and measure aggregate NFS read throughput and simultaneous loading on both

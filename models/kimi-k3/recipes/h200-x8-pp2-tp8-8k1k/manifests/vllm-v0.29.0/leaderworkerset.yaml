@@ -107,9 +107,7 @@ spec:
         securityContext:
           runAsNonRoot: false
           runAsUser: 0
-          seccompProfile:
-            type: RuntimeDefault
-        serviceAccountName: kimi-k3-hostpath
+        serviceAccountName: default
         volumes:
         - emptyDir:
             medium: Memory
@@ -195,9 +193,7 @@ spec:
         securityContext:
           runAsNonRoot: false
           runAsUser: 0
-          seccompProfile:
-            type: RuntimeDefault
-        serviceAccountName: kimi-k3-hostpath
+        serviceAccountName: default
         volumes:
         - emptyDir:
             medium: Memory

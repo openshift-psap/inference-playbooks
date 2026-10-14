@@ -52,7 +52,7 @@ known_issues:
     impact: The source sweep's input distribution does not represent the selected workload.
     mitigation: Run the target workload and commit its exact harness configuration, prompt provenance, raw output, and normalized results.
 quickstart:
-  - {step: Prepare, detail: "Install the LeaderWorkerSet controller and composite DRA GPU/NIC-pair driver; verify the pre-populated RWX model claim, image availability, and kimi-k3-hostpath service account."}
+  - {step: Prepare, detail: "Install the LeaderWorkerSet controller and composite DRA GPU/NIC-pair driver; verify the pre-populated RWX model claim, image availability, and anyuid authorization for the default service account."}
   - {step: Network, detail: Verify target-cluster HCA and GID settings symmetrically; see recipe.yaml and the referenced hardware profile.}
   - {step: Render, detail: Run tools/render.py for this recipe; config/ is an overlay and must not be applied directly.}
   - {step: Deploy, detail: "Apply manifests/vllm-v0.29.0/leaderworkerset.yaml, which contains both the LeaderWorkerSet and leader-only Service."}

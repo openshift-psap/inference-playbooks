@@ -1,11 +1,17 @@
-# Retain the submitted root security context; target namespaces must allow
-# anyuid. The upstream image needs no site-packages patch.
+# Root execution needs the namespace's anyuid-authorized service account. The
+# upstream image needs no site-packages patch.
 - op: add
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/serviceAccountName
-  value: kimi-k3-hostpath
+  value: default
 - op: add
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/serviceAccountName
-  value: kimi-k3-hostpath
+  value: default
+# LWS mirrors this pod profile into legacy seccomp annotations, which Janus's
+# anyuid SCC rejects. Leave the profile to the cluster's runtime default.
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/seccompProfile
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/seccompProfile
 - op: replace
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsNonRoot
   value: false
