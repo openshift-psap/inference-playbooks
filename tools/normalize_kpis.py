@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 from pathlib import Path
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 GUIDELLM = {
@@ -102,12 +106,14 @@ def normalize(document, *, run_id, deployment_scope, accelerator_key, expected_c
                     point.setdefault(f'{prefix}_ms_{percentile}', None)
         key = workloads[harness].get('benchmark_key', '')
         completeness = 'smoke' if len(sweep) <= 2 or 'smoke' in key or key == 'ci-quick' else 'partial'
-        if completeness != 'smoke' and expected_concurrencies is not None:
+        if completeness != 'smoke' and expected_concurrencies is not None and harness in expected_concurrencies:
             expected = sorted(concurrency(c) for c in expected_concurrencies[harness])
             if len(set(expected)) != len(expected):
                 raise ValueError('duplicate expected concurrency')
             if expected == [point['concurrency'] for point in sweep]:
                 completeness = 'full-sweep'
+        elif completeness != 'smoke' and expected_concurrencies is not None:
+            LOGGER.warning('%s: expected_concurrencies has no harness entry; completeness remains partial', harness)
         # The artifact alone cannot prove the intended full sweep completed.
         results[harness] = {'schema_version': 2, 'run_id': f'{run_id}-{harness}',
             'deployment_scope': deployment_scope, 'accelerator_key': accelerator_key,

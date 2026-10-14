@@ -58,6 +58,31 @@ def test_aiperf_multi_concurrency_and_explicit_full_sweep(kpis):
     assert normalized({'tests': tests})['aiperf']['completeness'] == 'partial'
 
 
+@pytest.mark.parametrize('expected_harness', ['guidellm', 'aiperf', None])
+def test_missing_harness_expectation_stays_partial(expected_harness, caplog):
+    levels = [1, 4, 16]
+    tests = [{'labels': {'benchmark_tool': 'guidellm'}, 'kpis': [
+        {'kpi_id': 'playbooks_output_tok_per_sec', 'is_curve': True,
+         'values': [[c, c * 10] for c in levels]}]}]
+    tests.extend({'labels': {'benchmark_tool': 'aiperf', 'concurrency': str(c)},
+                  'kpis': [{'kpi_id': 'aiperf_output_token_throughput_avg',
+                            'is_curve': False, 'value': c * 10}]} for c in levels)
+    expected = {expected_harness: levels} if expected_harness else {}
+    results = normalized({'tests': tests}, expected_concurrencies=expected)
+    for harness, result in results.items():
+        assert result['completeness'] == ('full-sweep' if harness == expected_harness else 'partial')
+        assert [point['concurrency'] for point in result['sweep']] == levels
+    warned = [record.message.split(':', 1)[0] for record in caplog.records
+              if record.name == 'normalize_kpis' and record.levelname == 'WARNING']
+    assert set(warned) == set(results) - {expected_harness}
+    assert all('completeness remains partial' in record.message for record in caplog.records)
+    caplog.clear()
+    normalized({'tests': tests})
+    assert not caplog.records
+    normalized({'tests': tests}, expected_concurrencies={h: levels for h in results})
+    assert not caplog.records
+
+
 @pytest.mark.parametrize('value', [-1, float('nan'), float('inf'), True])
 def test_invalid_metrics_rejected(kpis, value):
     kpis['tests'][0]['kpis'][0]['values'][0][1] = value
