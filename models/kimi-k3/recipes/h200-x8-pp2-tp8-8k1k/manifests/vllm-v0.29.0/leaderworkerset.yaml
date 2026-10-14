@@ -64,7 +64,7 @@ spec:
           - name: VLLM_USE_V2_MODEL_RUNNER
             value: "1"
           - name: HF_HOME
-            value: /models/hf
+            value: /home/nobody/.cache
           image: docker.io/vllm/vllm-openai:v0.29.0
           imagePullPolicy: IfNotPresent
           name: vllm-leader
@@ -78,14 +78,12 @@ spec:
             timeoutSeconds: 5
           resources:
             limits:
+              composite.dra.io/gpu-nic-pair: "8"
               memory: 512Gi
-              nvidia.com/gpu: "8"
-              rdma/ib: "1"
             requests:
+              composite.dra.io/gpu-nic-pair: "8"
               cpu: "32"
               memory: 512Gi
-              nvidia.com/gpu: "8"
-              rdma/ib: "1"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -111,6 +109,7 @@ spec:
           runAsUser: 0
           seccompProfile:
             type: RuntimeDefault
+        serviceAccountName: kimi-k3-hostpath
         volumes:
         - emptyDir:
             medium: Memory
@@ -120,10 +119,10 @@ spec:
           name: hf-cache
         - emptyDir: {}
           name: tmp
-        - hostPath:
-            path: /mnt/local/kimi-k3/models
-            type: DirectoryOrCreate
-          name: model
+        - name: model
+          persistentVolumeClaim:
+            claimName: inference-playbooks-model-kimi-k3-9fcb53074b
+            readOnly: true
     restartPolicy: RecreateGroupOnPodRestart
     size: 2
     workerTemplate:
@@ -167,20 +166,18 @@ spec:
           - name: VLLM_USE_V2_MODEL_RUNNER
             value: "1"
           - name: HF_HOME
-            value: /models/hf
+            value: /home/nobody/.cache
           image: docker.io/vllm/vllm-openai:v0.29.0
           imagePullPolicy: IfNotPresent
           name: vllm-worker
           resources:
             limits:
+              composite.dra.io/gpu-nic-pair: "8"
               memory: 512Gi
-              nvidia.com/gpu: "8"
-              rdma/ib: "1"
             requests:
+              composite.dra.io/gpu-nic-pair: "8"
               cpu: "32"
               memory: 512Gi
-              nvidia.com/gpu: "8"
-              rdma/ib: "1"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -200,6 +197,7 @@ spec:
           runAsUser: 0
           seccompProfile:
             type: RuntimeDefault
+        serviceAccountName: kimi-k3-hostpath
         volumes:
         - emptyDir:
             medium: Memory
@@ -209,8 +207,8 @@ spec:
           name: hf-cache
         - emptyDir: {}
           name: tmp
-        - hostPath:
-            path: /mnt/local/kimi-k3/models
-            type: DirectoryOrCreate
-          name: model
+        - name: model
+          persistentVolumeClaim:
+            claimName: inference-playbooks-model-kimi-k3-9fcb53074b
+            readOnly: true
   replicas: 1

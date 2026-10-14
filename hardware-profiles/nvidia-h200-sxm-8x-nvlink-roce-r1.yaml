@@ -1,6 +1,6 @@
 schema_version: 1
 profile_id: nvidia-h200-sxm-8x-nvlink-roce-r1
-profile_revision: 1
+profile_revision: 3
 kind: hardware-profile
 description: Eight H200 SXM GPUs per NVLink-connected node with required inter-node RoCE.
 accelerator_key: nvidia-h200-x8
@@ -19,9 +19,15 @@ network:
   inter_node_transport: roce
   rdma: true
   notes: >-
-    Requires an RDMA device plugin advertising rdma/ib. Submitted NCCL
-    settings use mlx5_5 and GID index 3; verify these for the target cluster.
-    Provider, NIC topology, and link bandwidth are not established.
+    Janus workload pods allocate matched GPUs and RoCE NICs with
+    composite.dra.io/gpu-nic-pair. The base device plugin also advertises
+    nvidia.com/roce, but that is not the paired workload allocation. Submitted
+    NCCL settings use mlx5_5 and GID index 3; verify these for the target
+    cluster. Provider, NIC topology, and link bandwidth are not established.
 correction_log:
   - revision: 1
     summary: Initial RoCE-required capability profile based on the submitted deployment requirements.
+  - revision: 2
+    summary: Record Janus H200 nodes' separately advertised nvidia.com/roce capacity from live node allocatable resources.
+  - revision: 3
+    summary: Specify composite.dra.io/gpu-nic-pair as the Janus workload's paired GPU/RoCE allocation resource.

@@ -37,12 +37,10 @@ serving:
     requests:
       cpu: "32"
       memory: 512Gi
-      nvidia.com/gpu: "8"
-      rdma/ib: "1"
+      composite.dra.io/gpu-nic-pair: "8"
     limits:
       memory: 512Gi
-      nvidia.com/gpu: "8"
-      rdma/ib: "1"
+      composite.dra.io/gpu-nic-pair: "8"
   port: 8000
   config_overrides: true
   decode:
@@ -54,7 +52,7 @@ serving:
     - {name: NCCL_DMABUF_ENABLE, value: "0"}
     - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
     - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
-    - {name: HF_HOME, value: /models/hf}
+    - {name: HF_HOME, value: /home/nobody/.cache}
   args:
     - {flag: --trust-remote-code, required: true, why: Allows loading model-provided code.}
     - {flag: --attention-backend, value: FLASHMLA, required: true, why: Selects FlashMLA for MLA attention.}
@@ -72,8 +70,13 @@ serving:
 deployment:
   scope: multi-node
   storage:
-    type: hostpath
-    why: Each node uses a pre-staged local copy of the model weights.
+    type: pvc
+    pvc:
+      name: inference-playbooks-model-kimi-k3-9fcb53074b
+      size: 2Ti
+      access_modes: [ReadWriteMany]
+      storage_class: nfs
+    why: Use the pre-populated shared NFS model cache; the PVC is provisioned outside this recipe.
   manifests:
     - {path: manifests/vllm-v0.29.0/leaderworkerset.yaml, kind: LeaderWorkerSet, generated: true}
 notes: guides/notes.yaml

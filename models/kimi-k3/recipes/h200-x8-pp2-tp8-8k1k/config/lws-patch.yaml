@@ -1,5 +1,11 @@
-# Retain the submitted security context; non-root hostPath/cache access needs
-# target-cluster verification. The upstream image needs no site-packages patch.
+# Retain the submitted root security context; target namespaces must allow
+# anyuid. The upstream image needs no site-packages patch.
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/serviceAccountName
+  value: kimi-k3-hostpath
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/serviceAccountName
+  value: kimi-k3-hostpath
 - op: replace
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsNonRoot
   value: false
@@ -17,19 +23,28 @@
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/env/0
 - op: remove
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0
-# The template does not emit extended RDMA resources.
+# Janus allocates each GPU and its paired NIC through composite DRA, so suppress
+# the template's ordinary GPU request and request eight paired devices per pod.
 - op: add
-  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/requests/rdma~1ib
-  value: "1"
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/requests/composite.dra.io~1gpu-nic-pair
+  value: "8"
 - op: add
-  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/rdma~1ib
-  value: "1"
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/composite.dra.io~1gpu-nic-pair
+  value: "8"
 - op: add
-  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/requests/rdma~1ib
-  value: "1"
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/requests/composite.dra.io~1gpu-nic-pair
+  value: "8"
 - op: add
-  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/rdma~1ib
-  value: "1"
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/composite.dra.io~1gpu-nic-pair
+  value: "8"
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/requests/nvidia.com~1gpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/nvidia.com~1gpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/requests/nvidia.com~1gpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/nvidia.com~1gpu
 # Preserve the source's CPU request without the template's eight-core cap.
 - op: remove
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/cpu
@@ -51,9 +66,9 @@
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/volumes/-
   value: &model_volume
     name: model
-    hostPath:
-      path: /mnt/local/kimi-k3/models
-      type: DirectoryOrCreate
+    persistentVolumeClaim:
+      claimName: inference-playbooks-model-kimi-k3-9fcb53074b
+      readOnly: true
 - op: add
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
   value: *model_volume

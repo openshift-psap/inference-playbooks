@@ -1,26 +1,26 @@
-# Kimi K3 storage alternatives
+# Kimi K3 model storage
 
 The [recipe](../recipe.yaml) and generated
-[LeaderWorkerSet](../manifests/vllm-v0.29.0/leaderworkerset.yaml) currently use
-hostPath storage: stage a complete checkpoint at
-`/mnt/local/kimi-k3/models/Kimi-K3` on both nodes. Restrict scheduling to
-populated nodes and verify mount permissions and checkpoint integrity.
+[LeaderWorkerSet](../manifests/vllm-v0.29.0/leaderworkerset.yaml) use the
+pre-populated, 2 TiB RWX claim
+`kserve-e2e-perf/inference-playbooks-model-kimi-k3-9fcb53074b` on Janus's
+`nfs` StorageClass. The cluster currently marks this claim as populated from
+`hf://moonshotai/Kimi-K3`. Both LWS roles mount it read-only at `/models`; the
+checkpoint must be available at `/models/Kimi-K3`.
 
-Model weights do not inherently require node-local storage. A pre-populated
-ReadWriteMany (RWX) PVC accessible to both nodes can replace the model hostPath
-volume, provided it presents the complete checkpoint at `/models/Kimi-K3` and
-has sufficient capacity and aggregate read throughput for concurrent loading.
-Concurrent read throughput determines loading behavior; do not assume load
-times equivalent to local NVMe.
+The recipe does not create or populate the PVC or provision NFS. Before deploying
+elsewhere, create/populate a shared RWX claim, then update both
+`deployment.storage.pvc.name` in the recipe and `claimName` in
+[`config/lws-patch.yaml`](../config/lws-patch.yaml). Keep the claim pre-populated
+and accessible to both nodes; the model weights are mounted read-only.
 
-To use RWX, replace the `model` volume's `hostPath` with
-`persistentVolumeClaim: {claimName: <existing-rwx-pvc>}` in both roles via
-[`config/lws-patch.yaml`](../config/lws-patch.yaml), update the recipe's storage
-declaration to match the PVC configuration, and rerender. These manifests do
-not provision a PVC or storage backend.
+`HF_HOME` points to the separate writable `/home/nobody/.cache` emptyDir, not
+the read-only model claim. The recipe uses the existing `kimi-k3-hostpath`
+service account for its authorized runtime security context; the PVC itself
+does not require a hostPath mount.
 
-Verify mount permissions, checkpoint integrity, and simultaneous loading on
-both nodes. Consider read-only weight mounts and separate writable per-pod
-cache storage rather than sharing `/models/hf` between serving processes.
-Record the storage backend and loading behavior when collecting benchmark
+Verify the claim is Bound/RWX, confirm checkpoint files and read permissions,
+and measure aggregate NFS read throughput and simultaneous loading on both
+nodes. NFS availability does not establish performance equivalent to local
+NVMe. Record the storage backend and observed loading behavior with benchmark
 evidence.
