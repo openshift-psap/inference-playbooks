@@ -31,6 +31,13 @@ serving:
       value: fp8
       required: true
       why: FP8 KV cache doubles effective capacity; matches recipes.vllm.ai reference.
+    - flag: --limit-mm-per-prompt
+      value: '{"image":0,"video":0}'
+      required: true
+      why: This is a text-only workload; disable image and video inputs.
+    - flag: --skip-mm-profiling
+      required: true
+      why: This is a text-only workload; skip multimodal profiling.
     - flag: --enable-auto-tool-choice
       required: true
       why: Enables model-driven tool selection in chat completions.

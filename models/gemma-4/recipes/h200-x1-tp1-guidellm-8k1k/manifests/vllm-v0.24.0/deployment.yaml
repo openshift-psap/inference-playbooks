@@ -33,6 +33,8 @@ spec:
             - "RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic"
             - "--served-model-name=RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic"
             - "--kv-cache-dtype=fp8"
+            - "--limit-mm-per-prompt={\"image\":0,\"video\":0}"
+            - "--skip-mm-profiling"
             - "--enable-auto-tool-choice"
             - "--tool-call-parser=gemma4"
             - "--reasoning-parser=gemma4"
