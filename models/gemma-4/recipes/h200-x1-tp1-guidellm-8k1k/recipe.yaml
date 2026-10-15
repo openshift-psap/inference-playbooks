@@ -13,6 +13,14 @@ maturity: day-zero
 
 serving:
   image: docker.io/vllm/vllm-openai:v0.24.0
+  image_usage:
+    kind: default
+    variant: cuda
+  engine:
+    name: vllm
+    image: docker.io/vllm/vllm-openai:v0.24.0
+    version: 0.24.0
+    source: https://github.com/vllm-project/vllm/releases/tag/v0.24.0
   model: RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
   served_model_name: RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic
   parallelism:

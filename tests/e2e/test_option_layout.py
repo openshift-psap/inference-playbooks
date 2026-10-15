@@ -35,12 +35,11 @@ def assert_options_fit(page):
 
 
 @pytest.mark.parametrize('width', [390, 1280])
-def test_single_recipe_gemma_still_shows_all_filter_options(page, served, width):
+def test_single_recipe_model_still_shows_all_filter_options(page, served, width):
     page.set_viewport_size({'width': width, 'height': 900})
     payload = served[1]
     model = next(model for model in payload['models']
-                 if 'gemma' in model['id'].lower()
-                 and sum(entry['model_id'] == model['id'] for entry in payload['entries']) == 1)
+                 if sum(entry['model_id'] == model['id'] for entry in payload['entries']) == 1)
     page.goto(served[0])
     page.get_by_role('radio', name=model['name'], exact=True).check()
     expect(page.locator('.recipe-option')).to_have_count(1)

@@ -70,9 +70,9 @@ def test_platform_versions_and_colliding_filter_dimensions(repo):
     recipe['platforms'].append({**recipe['platforms'][0], 'version': 'v0.25.0'})
     path.write_text(yaml.safe_dump(recipe))
     render_recipe(repo, path)
-    entries = [entry for entry in catalog(repo)['entries'] if entry['model_id'] == 'gemma-4']
-    assert len(entries) == 3
-    assert len({entry['id'] for entry in entries}) == 3
+    entries = [entry for entry in catalog(repo)['entries'] if entry['recipe_id'] == 'synthetic-ambiguous']
+    assert len(entries) == 2
+    assert len({entry['id'] for entry in entries}) == 2
     assert len({entry['hardware']['accelerator_key'] for entry in entries}) == 1
 
 
@@ -202,7 +202,7 @@ def attach_synthetic_run(repo):
 def test_only_referenced_metrics_preserve_zero_unknown_and_raw_content(repo):
     directory, run, result = attach_synthetic_run(repo)
     (directory / 'unreferenced.json').write_text('{"metrics":{"fabricated":9999}}')
-    entry = next(entry for entry in catalog(repo)['entries'] if entry['model_id'] == 'gemma-4')
+    entry = next(entry for entry in catalog(repo)['entries'] if entry['recipe_id'] == run['recipe_id'])
     evidence = entry['evidence'][0]
     assert evidence['result'] == result
     assert evidence['run'] == run
