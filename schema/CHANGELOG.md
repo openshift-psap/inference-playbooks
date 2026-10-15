@@ -1,5 +1,15 @@
 # Schema changelog
 
+## Forge-backed benchmark evidence (run v2)
+
+- Benchmark runs retain v1 compatibility and add v2 `evidence_source` with
+  conditional Forge provenance, immutable revision/digest, checksummed raw KPIs,
+  and explicit smoke/partial/full-sweep completeness.
+- Results add the v2 concurrency `sweep` contract with null latency percentiles,
+  `harness`, `completeness`, and `reference_concurrency`. Unknown KPIs remain in
+  raw artifacts; local and CI validation replay Forge normalization and reject
+  checksum/result drift.
+
 ## Add `contributed` maturity level
 
 - `maturity` enum now accepts four values:
