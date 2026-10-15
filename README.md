@@ -8,6 +8,9 @@ auditable benchmark evidence. It helps operators select, deploy, validate,
 and compare practical inference configurations rather than treat manifests
 or benchmark numbers in isolation.
 
+**[Browse the interactive recipe catalog](https://openshift-psap.github.io/inference-playbooks/)**
+to explore deployment configurations and available benchmark evidence.
+
 ## Supported Accelerators
 
 - NVIDIA B200
