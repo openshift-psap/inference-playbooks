@@ -7,11 +7,14 @@ Failed, ambiguous, stale, unavailable, or unattributed evidence fails closed.
 No cluster access is used. Imports open a separate evidence PR, never push to
 `main`, and never promote maturity or platform verification.
 
-This standalone ingestion change (PR1) adds the evidence tools, schemas,
-offline validator replay, tests, and workflow. It does not add or depend on
-site/catalog tooling, change existing recipes, or publish benchmark metrics
-to a UI. A future UI change (PR2) can consume this evidence contract to show
-individual runs, smoke stat cards, and MLflow/Prow provenance links.
+The standalone ingestion change (PR1) adds the evidence tools, schemas,
+offline validator replay, tests, and workflow without depending on site/catalog
+tooling or changing existing recipes. The catalog/UI change (PR2) consumes this
+contract to show individual runs, smoke stat cards, and MLflow/Prow provenance
+links. It adds a site-build check after ingestion validation; generated bundles
+remain build artifacts and are not included in the evidence import PR.
+The separate Pages workflow builds and publishes reviewed evidence after merge
+to `main`; ingestion itself does not publish the site or promote recipe maturity.
 
 ## Required Forge contract
 
@@ -105,5 +108,8 @@ the highest observed concurrency, explicitly recorded as `reference_concurrency`
 Raw artifacts must be sanitized **at source**: no private prompts, credentials,
 hostnames/IPs. Intake rejects common sensitive fields and obvious IP/credential
 strings; this is a guard, not a replacement for evidence-PR review. Cluster
-labels must be public aliases. The evidence workflow validates only; UI/catalog
-generation and publication are deliberately left to the future PR2 integration.
+labels must be public aliases. With PR2 applied, the evidence workflow validates
+and checks catalog/site generation before opening the import PR. The UI displays
+only referenced committed runs; smoke and partial evidence are labeled rather
+than presented as full sweeps. Synthetic sweep fixtures are test-only, not
+published model evidence.
