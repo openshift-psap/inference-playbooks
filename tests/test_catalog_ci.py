@@ -37,6 +37,35 @@ def test_workflow_separates_unprivileged_pr_and_main_deployment():
     assert 'refs/heads/main' in uploads[1]['if']
 
 
+def test_ingest_installs_same_pinned_kustomize_before_site_build():
+    ingest = yaml.safe_load((REPO / '.github/workflows/benchmark-ingest.yml').read_text())
+    pages = yaml.safe_load((REPO / '.github/workflows/pages.yml').read_text())
+    steps = ingest['jobs']['ingest']['steps']
+    install = next(step for step in steps if step.get('name') == 'Install Kustomize')
+    pages_install = next(step for step in pages['jobs']['build']['steps'] if step.get('name') == 'Install Kustomize')
+    assert install['run'] == pages_install['run']
+    build = next(step for step in steps if step.get('name') == 'Check catalog integration')
+    assert steps.index(install) < steps.index(build)
+    assert 'sha256sum --check' in install['run'] and '$GITHUB_PATH' in install['run']
+
+
+def test_chart_cdn_script_requires_integrity_and_crossorigin():
+    from html.parser import HTMLParser
+    class Scripts(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.scripts = []
+        def handle_starttag(self, tag, attrs):
+            if tag == 'script':
+                self.scripts.append(dict(attrs))
+    parser = Scripts()
+    parser.feed((REPO / 'site/index.html').read_text())
+    chart = next(script for script in parser.scripts if 'cdn.jsdelivr.net' in script.get('src', ''))
+    assert chart['src'] == 'https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js'
+    assert re.fullmatch(r'sha384-[A-Za-z0-9+/]{64}', chart['integrity'])
+    assert chart['crossorigin'] == 'anonymous'
+
+
 def test_site_build_is_deterministic_and_does_not_modify_tracked_sources():
     before = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=REPO)
     outputs = [REPO / '.build/test-bundle-one', REPO / '.build/test-bundle-two']

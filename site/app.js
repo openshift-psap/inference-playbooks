@@ -349,6 +349,10 @@ function renderSweepCharts(sweep, completeness) {
   if (peak.itl_ms_avg != null) statsRow.append(statCard(`${Math.round(peak.itl_ms_avg * 10) / 10}ms`, 'ITL avg', `at C=${peak.concurrency}`));
   if (statsRow.children.length) fragment.append(statsRow);
   if (sweep.length <= 2 || completeness === 'smoke') return fragment;
+  if (typeof Chart === 'undefined') {
+    fragment.append(node('p', 'Charts unavailable. Summary statistics and run evidence remain available.', 'banner'));
+    return fragment;
+  }
 
   // Charts grid
   const grid = node('div', null, 'chart-grid');

@@ -43,6 +43,23 @@ def test_full_sweep_percentile_series(benchmark_page, missing_p90):
     assert next(s for s in series if s['label'] == 'p50')['hidden'] is False
 
 
+def test_missing_chart_library_preserves_stats_and_evidence(benchmark_page):
+    points = json.loads((REPO / 'tests/fixtures/sample-sweep-guidellm.json').read_text())['sweep']
+    errors = []
+    benchmark_page.on('pageerror', lambda error: errors.append(str(error)))
+    benchmark_page.evaluate('delete window.Chart')
+    item = {'run': {'run_id': 'full-sweep', 'harness': 'guidellm'},
+            'result': {'metrics': {'output_tok_s': 1120}, 'sweep': points,
+                       'completeness': 'full-sweep'}}
+    benchmark_page.evaluate('(item) => { document.getElementById("app").replaceChildren(renderBenchmark({validation: {}, evidence: [item]})); }', item)
+    expect(benchmark_page.locator('.stat-card').first).to_be_visible()
+    expect(benchmark_page.get_by_text('Charts unavailable.', exact=False)).to_be_visible()
+    expect(benchmark_page.locator('canvas')).to_have_count(0)
+    benchmark_page.get_by_text('Run: full-sweep', exact=True).click()
+    expect(benchmark_page.locator('details').get_by_text('1120', exact=True)).to_be_visible()
+    assert errors == []
+
+
 def test_provenance_links_and_no_cross_run_sweep(benchmark_page):
     run = {'run_id': 'test-run', 'harness': 'aiperf', 'environment': {}, 'forge': {
         'mlflow_run_url': 'https://mlflow.example/#/experiments/470/runs/child',
