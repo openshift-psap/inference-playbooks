@@ -1,5 +1,18 @@
 # Schema changelog
 
+## Forge base and served model identity
+
+- Results optionally retain explicit `model_name`, `served_model`, and
+  `quantization` labels in `model_identity` when the served-model contract is
+  present. Fields are nonempty strings; absent labels are not synthesized.
+- Intake and offline replay validate the base against `model.yaml`, the served
+  checkpoint against `recipe.serving.model` (never a request alias), and any
+  quantization against an exact checkpoint/name declaration.
+- Historical exact-checkpoint labels retain their normalized result shape;
+  original labels remain in run `workload.tests`. Legacy unlabeled tests retain
+  their existing behavior, but base-only labels cannot identify a different
+  served checkpoint. Raw evidence and admission receipts are unchanged.
+
 ## Forge declared model revisions
 
 - Forge run `environment.model_revision` accepts nonempty declared identifiers

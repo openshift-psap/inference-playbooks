@@ -61,7 +61,7 @@ def normalize(document, *, run_id, deployment_scope, accelerator_key, expected_c
             continue
         points = groups.setdefault(harness, {})
         # Distinct workloads must not silently become a single sweep.
-        identity = {k: labels[k] for k in ('benchmark_key', 'model_name', 'prompt_toks',
+        identity = {k: labels[k] for k in ('benchmark_key', 'model_name', 'served_model', 'quantization', 'prompt_toks',
                     'output_toks', 'turns', 'deployment_profile') if labels.get(k)}
         if harness in workloads and workloads[harness] != identity:
             raise ValueError(f'{harness}: mixed workload attribution')
@@ -119,7 +119,12 @@ def normalize(document, *, run_id, deployment_scope, accelerator_key, expected_c
             'deployment_scope': deployment_scope, 'accelerator_key': accelerator_key,
             'harness': harness, 'completeness': completeness,
             'reference_concurrency': sweep[-1]['concurrency'],
-            'metrics': {k: v for k, v in sweep[-1].items() if k != 'concurrency'}, 'sweep': sweep}
+             'metrics': {k: v for k, v in sweep[-1].items() if k != 'concurrency'}, 'sweep': sweep}
+        # The served_model marker identifies the new contract. Historical exact-label
+        # results retain their original shape; all original labels also live in run.yaml.
+        if 'served_model' in workloads[harness]:
+            results[harness]['model_identity'] = {key: workloads[harness][key]
+                for key in ('model_name', 'served_model', 'quantization') if key in workloads[harness]}
     if not results:
         raise ValueError('no supported benchmark harness found')
     return results

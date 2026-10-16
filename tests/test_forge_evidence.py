@@ -1,5 +1,6 @@
 """Offline Forge contract and intake tests; no live credentials or network needed."""
 import copy
+import hashlib
 import json
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tools'))
 from fetch_forge_evidence import Client, NoKpiArtifactsError, NoRedirect, append_reference, import_parent, safe_artifact
+from forge_model_identity import validate_model_identity
 from ingest_forge import selected_run
 from forge_admission import admitted_execution, load_admissions
 from normalize_kpis import normalize
@@ -212,6 +214,142 @@ def test_import_replay_and_idempotence(intake, model_revision):
         result_path.write_bytes(before[result_path])
     import_parent(client, repo, 'd' * 32, revision, 34, 123)
     assert before == {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
+
+
+@pytest.fixture
+def variant_intake(intake):
+    repo, path, _, client, parent, values = intake
+    recipe = yaml.safe_load(path.read_text())
+    recipe['serving'].update(model='example/base-FP8', served_model_name='request-alias')
+    path.write_text(yaml.safe_dump(recipe, sort_keys=False))
+    (repo / 'models/test/model.yaml').write_text(yaml.safe_dump({
+        'huggingface_id': 'example/base', 'quantizations': [
+            {'name': 'fp8', 'huggingface_id': 'example/base-FP8'},
+            {'name': 'int4', 'huggingface_id': 'example/base-INT4'}]}))
+    for args in (['add', '.'], ['-c', 'user.email=test@example.org', '-c', 'user.name=Test',
+                              'commit', '-m', 'variant fixture']):
+        subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+    revision = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    next(tag for tag in parent['data']['tags'] if tag['key'] == 'playbooks.tested_revision')['value'] = revision
+    return repo, path, revision, client, parent, values
+
+
+@pytest.mark.parametrize('labels', [
+    {'model_name': 'example/base', 'served_model': 'example/base-FP8'},
+    {'model_name': 'example/base', 'served_model': 'example/base-FP8', 'quantization': 'fp8'},
+    {'model_name': 'example/base-FP8'},
+    {'model_name': 'example/base-FP8', 'quantization': 'fp8'},
+])
+def test_exact_checkpoint_identity_accepted_and_preserved(variant_intake, kpis, labels):
+    repo, path, revision, client, _, _ = variant_intake
+    for test in kpis['tests']:
+        test['labels'].update(labels)
+    raw = client.kpis('a' * 32)[1]
+    import_parent(client, repo, 'd' * 32, revision, 34)
+    for run_path in path.parent.glob('results/*/run.yaml'):
+        run = yaml.safe_load(run_path.read_text())
+        for stored in run['workload']['tests']:
+            assert {key: stored[key] for key in labels} == labels
+        assert (run_path.parent / 'kpis.json').read_bytes() == raw
+        result = json.loads((run_path.parent / 'result.json').read_text())
+        if 'served_model' in labels:
+            assert result['model_identity'] == labels
+        else:
+            assert 'model_identity' not in result  # Historical replay stays byte-compatible.
+        assert validate_benchmark_run(repo, run_path, run)[0] == []
+
+
+@pytest.mark.parametrize('model', [
+    {'huggingface_id': 'example/base'},
+    {'huggingface_id': 'example/base', 'quantizations': [{'name': 'fp8'}]},
+    {'huggingface_id': 'example/base', 'quantizations': [
+        {'name': 'fp8', 'huggingface_id': 'example/base-FP8-other'}]},
+])
+def test_quantization_requires_explicit_exact_checkpoint_declaration(model):
+    document = {'tests': [{'labels': {'model_name': 'example/base',
+        'served_model': 'example/base-FP8', 'quantization': 'fp8'}}]}
+    with pytest.raises(ValueError, match='KPI quantization attribution'):
+        validate_model_identity(document, {'serving': {'model': 'example/base-FP8'}}, model)
+
+
+@pytest.mark.parametrize('model', [{}, {'huggingface_id': ''}])
+def test_new_contract_requires_declared_base_identity(model):
+    document = {'tests': [{'labels': {'model_name': 'example/base', 'served_model': 'example/base'}}]}
+    with pytest.raises(ValueError, match='KPI base model attribution'):
+        validate_model_identity(document, {'serving': {'model': 'example/base'}}, model)
+
+
+@pytest.mark.parametrize('labels', [
+    {'model_name': 'example/base', 'served_model': 'example/base-INT4'},
+    {'model_name': 'wrong/base', 'served_model': 'example/base-FP8'},
+    {'model_name': 'example/base', 'served_model': 'example/base-FP8', 'quantization': 'int4'},
+    {'model_name': 'example/base'},
+])
+def test_offline_replay_rejects_consistently_wrong_model_identity(variant_intake, kpis, labels):
+    repo, path, revision, client, _, _ = variant_intake
+    for test in kpis['tests']:
+        test['labels'].update(model_name='example/base', served_model='example/base-FP8')
+    import_parent(client, repo, 'd' * 32, revision, 34)
+    for test in kpis['tests']:
+        test['labels'].pop('served_model', None)
+        test['labels'].update(labels)
+    # Even internally consistent raw evidence, checksums, labels and normalization
+    # must not pass replay when they contradict the owning recipe/model.
+    raw = json.dumps(kpis).encode()
+    checksum = 'sha256:' + hashlib.sha256(raw).hexdigest()
+    results = normalized(kpis)
+    for run_path in path.parent.glob('results/*/run.yaml'):
+        run = yaml.safe_load(run_path.read_text())
+        run['forge']['kpis_checksum'] = checksum
+        run['artifacts'][0]['checksum'] = checksum
+        run['workload']['tests'] = [test['labels'] for test in kpis['tests']
+                                  if test['labels']['benchmark_tool'] == run['harness']]
+        (run_path.parent / 'kpis.json').write_bytes(raw)
+        (run_path.parent / 'result.json').write_text(json.dumps(results[run['harness']]))
+        assert 'KPI ' in str(validate_benchmark_run(repo, run_path, run)[0])
+
+
+@pytest.mark.parametrize('field', ['model_name', 'served_model', 'quantization'])
+def test_result_model_identity_schema_requires_nonempty_strings(kpis, field):
+    result = normalized(kpis)['guidellm']
+    result['model_identity'] = {field: ''}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(result, json.loads((REPO / 'schema/benchmark-result.schema.json').read_text()))
+
+
+@pytest.mark.parametrize('labels', [
+    {'model_name': 'example/base', 'served_model': 'request-alias'},
+    {'model_name': 'example/base', 'served_model': 'example/base-INT4'},
+    {'model_name': 'different/base', 'served_model': 'example/base-FP8'},
+    {'model_name': 'example/base-FP8', 'served_model': 'example/base-FP8'},
+    {'served_model': 'example/base-FP8'},
+    {'model_name': 'example/base', 'served_model': ''},
+    {'model_name': 'example/base'},
+    {'model_name': 'example/base', 'quantization': 'fp8'},
+    {'model_name': 'example/base', 'served_model': 'example/base-FP8', 'quantization': 'int4'},
+    {'model_name': 'example/base-FP8', 'quantization': 'int4'},
+    {'model_name': 'example/base-FP8', 'quantization': ''},
+])
+def test_ambiguous_or_mismatched_model_identity_rejected(variant_intake, kpis, labels):
+    repo, path, revision, client, _, _ = variant_intake
+    for test in kpis['tests']:
+        test['labels'].pop('model_name', None)
+        test['labels'].update(labels)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='KPI .*attribution'):
+        import_parent(client, repo, 'd' * 32, revision, 34)
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('field', ['served_model', 'quantization'])
+def test_normalization_does_not_merge_distinct_model_labels(kpis, field):
+    ai = copy.deepcopy(kpis['tests'][1])
+    duplicate = copy.deepcopy(ai)
+    duplicate['labels'].update(concurrency='32', **{field: 'different'})
+    with pytest.raises(ValueError, match='mixed workload attribution'):
+        normalized({'tests': [ai, duplicate]})
 
 
 @pytest.mark.parametrize('model_revision', [None, '', ' ', ' main', 'main ', 'release candidate',

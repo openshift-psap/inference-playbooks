@@ -11,6 +11,17 @@
     "accelerator_key": {"type": "string"},
     "metrics": {"type": "object"},
     "raw_metrics": {"type": "object"},
+    "model_identity": {
+      "description": "Explicit KPI labels under the served-model contract; absent on historical exact-label results.",
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "model_name": {"type": "string", "minLength": 1},
+        "served_model": {"type": "string", "minLength": 1},
+        "quantization": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
     "sweep": {
       "description": "Concurrency sweep results — one entry per concurrency level. Present in schema_version 2 results.",
       "type": "array",

@@ -18,6 +18,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, HTTPSHand
 import yaml
 
 from normalize_kpis import normalize
+from forge_model_identity import validate_model_identity
 from recipe_evidence import load_unique_yaml
 
 
@@ -250,10 +251,10 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         artifact_path, raw = artifact
         document = json.loads(raw)
         safe_artifact(document)
+        model = load_unique_yaml((path.parent.parent.parent / 'model.yaml').read_text())
+        validate_model_identity(document, recipe, model)
         for test in document['tests']:
             labels = test.get('labels', {})
-            if labels.get('model_name') and labels['model_name'] != recipe['serving']['model']:
-                raise ValueError('KPI model attribution disagrees with recipe')
             if platform['stack'] == 'vllm' and labels.get('product_version') and labels['product_version'].lstrip('v') != platform['version'].lstrip('v'):
                 raise ValueError('KPI platform version disagrees with run attribution')
         results = normalize(document, run_id=f'forge-{child_id}', deployment_scope=recipe['deployment']['scope'],
