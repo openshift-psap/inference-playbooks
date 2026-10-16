@@ -1,0 +1,189 @@
+# EPP + Envoy for the GLM-5.3 PCP P/D DisaggregatedSet (prefill DP4 x PCP8 HT,
+# decode DP16 x TP2 LL), without flow control. Same plugin chain as
+# ../deployment-pcp-offloading/router.values.yaml, except prefix-cache routing
+# uses KV events instead of the approx hash index:
+#
+#   - approx-prefix-cache-producer (+ its hand-tuned lruCapacityPerServer) is
+#     replaced by precise-prefix-cache-producer, which subscribes to the ZMQ
+#     kv event streams the prefill pods publish (--kv-events-config in
+#     disaggregatedset.yaml, port 5557, topic kv@<pod ip>:8000@...). The index
+#     is exact block-level truth straight from vLLM: no capacity guessing, and
+#     evictions are removed from the index as they happen.
+#   - prefix-cache-affinity-filter and inflight-load-producer name the precise
+#     producer via prefixMatchInfoProducerName. Without it, each falls back to
+#     the approx key and the framework auto-creates an untuned approx producer
+#     (autoTune on, 64-token blocks, 128K match cap) that the routing then uses.
+#   - The precise index hashes real engine tokens, so token-producer renders
+#     each request on the prefill pods' own vLLM servers (vllm.endpointDiscovery),
+#     which have the same chat template, served name and vLLM release as the
+#     engine that emits the kv events. The framework's auto-created
+#     token-producer is the `estimate` backend (~4 bytes/token fake IDs), which
+#     never matches a kv event.
+#
+# The CPU offload tier is indexed too: TieringOffloadingSpec emits
+# BlockStored(medium=CPU) events carrying only engine hashes, which the indexer
+# resolves through the GPU events' engine->request key mapping and weights at
+# 0.8 (default kvCacheBackendConfigs).
+#
+# helm upgrade --install canary-dev oci://ghcr.io/llm-d/charts/llm-d-router-standalone --version v0.11.0 -n glm52-canary -f router.values.yaml
+router:
+  epp:
+    replicas: 1
+    image:
+      registry: ghcr.io/llm-d
+      repository: llm-d-router-endpoint-picker
+      # v0.11.0 for #2445: podLabelSelector now filters the endpoint-notification
+      # subscribers (below). v0.11.0 also removed disagg-headers-handler;
+      # disagg-profile-handler sets x-prefiller-host-port itself.
+      tag: v0.11.0@sha256:39257d24552d16d8f215d3de25cc734fd44af3b282b67032db01aff900c610cf
+      pullPolicy: IfNotPresent
+    flags:
+      ha-enable-leader-election: false
+      metrics-endpoint-auth: false
+
+    env:
+      - name: HF_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: llm-d-hf-token
+            key: HF_TOKEN
+
+    pluginsConfigFile: "plugins.yaml"
+    pluginsCustomConfig:
+      plugins.yaml: |
+        apiVersion: llm-d.ai/v1alpha1
+        kind: EndpointPickerConfig
+        plugins:
+          - type: always-disagg-pd-decider
+          - type: disagg-profile-handler
+            parameters:
+              deciders:
+                prefill: always-disagg-pd-decider
+          - type: prefill-filter
+          - type: decode-filter
+          # Endpoint add/delete events. It has to be declared here because
+          # dataLayer.sources references it by name; the precise producer
+          # uses it to open and close a ZMQ subscriber per endpoint.
+          - type: endpoint-notification-source
+          # Renders on the prefill endpoints' /render (port 8000 + rank
+          # index), round-robin. Endpoints that match no portRule are
+          # dropped, so decode's routing-proxy never gets render traffic.
+          # Same stanza as production (glm53-production-epp), minus
+          # minModelLen.
+          - type: token-producer
+            parameters:
+              modelName: zai-org/GLM-5.3
+              vllm:
+                endpointDiscovery:
+                  attemptTimeout: 5s
+                  portRules:
+                  - selector:
+                      matchLabels:
+                        llm-d.ai/role: prefill
+                    basePort: 8000
+                prefillOnly: true
+                messagesRenderMode: native
+                timeout: 15s
+          # Hash at 512: under DCP8 vLLM's KV manager block is 64 x 8 = 512
+          # tokens, and its BlockStored events carry block_size=512 with one
+          # engine hash per 512 tokens (checked on a live prefill publisher).
+          # Matching it keeps the engine->request key mapping 1:1, which the
+          # hash-only CPU-tier events need to resolve. discoverPods finds the
+          # publishers on socketPort 5557 (+ rank index) from the pool's
+          # endpoints; podLabelSelector limits that to prefill, since decode
+          # ranks publish no kv events and would only retry "connection
+          # refused" forever. topicFilter kv@ matches every publisher's topic.
+          - type: precise-prefix-cache-producer
+            parameters:
+              tokenProcessorConfig:
+                blockSizeTokens: 512
+              kvEventsConfig:
+                topicFilter: "kv@"
+                concurrency: 32
+                discoverPods: true
+                podDiscoveryConfig:
+                  socketPort: 5557
+                  podLabelSelector: llm-d.ai/role=prefill
+              indexerConfig:
+                kvBlockIndexConfig:
+                  enableMetrics: true
+          - type: inflight-load-producer
+            parameters:
+              prefixMatchInfoProducerName: precise-prefix-cache-producer
+          # affinityThreshold 0.6 (default 0.8) keeps multi-turn requests
+          # that add a large new turn on the rank that has their history.
+          # maxTTFTPenaltyMs 60000 (default 18000): at 25K tok/s the default
+          # broke stickiness at ~450K in-flight tokens of imbalance, less
+          # than two 275K prompts; 60s is ~1.5M tokens, more than a full
+          # rank at MAX_NUM_SEQS=4. Same values as the approx deployment
+          # (../../../rob-experiments/glm-deepep-pcp) so the A/B isolates
+          # the index.
+          - type: prefix-cache-affinity-filter
+            parameters:
+              prefixMatchInfoProducerName: precise-prefix-cache-producer
+              affinityThreshold: 0.6
+              maxTTFTPenaltyMs: 60000
+              peakPrefillThroughput: 25000
+          - type: token-load-scorer
+          - type: active-request-scorer
+          - type: max-score-picker
+        dataLayer:
+          sources:
+            - pluginRef: endpoint-notification-source
+              extractors:
+                - pluginRef: precise-prefix-cache-producer
+        schedulingProfiles:
+        - name: prefill
+          plugins:
+          - pluginRef: prefill-filter
+          - pluginRef: prefix-cache-affinity-filter
+          - pluginRef: token-load-scorer
+          - pluginRef: max-score-picker
+        - name: decode
+          plugins:
+          - pluginRef: decode-filter
+          - pluginRef: active-request-scorer
+          - pluginRef: max-score-picker
+
+  # The chart's envoy args use --cpuset-threads, which starts one worker per
+  # visible CPU (160 on these H100 nodes). With RITS's soft nofile limit of 1024
+  # the per-worker listen sockets and event fds run out and envoy crashes at
+  # startup with "socket(2) failed ... Too many open files". Pin the worker count.
+  proxy:
+    # The chart's default envoy image (distroless-v1.33.2, built 2025-03-26) is
+    # rejected by the cluster's StackRox "Block images older than 1 year" policy.
+    image: docker.io/envoyproxy/envoy:distroless-v1.38.4
+    args:
+      - "--service-node"
+      - "envoy-proxy"
+      - "--log-level"
+      - "warn"
+      - "--concurrency"
+      - "16"
+      - "--drain-strategy"
+      - "immediate"
+      - "--drain-time-s"
+      - "60"
+      - "-c"
+      - "/etc/envoy/envoy.yaml"
+
+  extraServicePorts:
+    - name: http
+      port: 80
+      protocol: TCP
+      targetPort: 8081
+
+  modelServers:
+    type: vllm
+    # targetPorts is pool-wide, so it is the union of both roles: decode's
+    # routing-proxy serves its 4 local DP ranks on 8000-8003. Prefill serves one
+    # rank per pod on 8000 and narrows itself to it with the
+    # llm-d.ai/active-ports: "8000" annotation (disaggregatedset.yaml); the EPP
+    # registers targetPorts ∩ active-ports as that pod's endpoints.
+    targetPorts:
+      - number: 8000
+      - number: 8001
+      - number: 8002
+      - number: 8003
+    matchLabels:
+      llm-d.ai/guide: glm53-pcp-canary
