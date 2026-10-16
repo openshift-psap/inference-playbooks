@@ -13,7 +13,8 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tools'))
 from fetch_forge_evidence import Client, NoKpiArtifactsError, NoRedirect, append_reference, import_parent, safe_artifact
-from ingest_forge import comment_runs
+from ingest_forge import selected_run
+from forge_admission import admitted_execution, load_admissions
 from normalize_kpis import normalize
 from validate import validate_benchmark_run
 
@@ -100,15 +101,48 @@ def test_duplicates_and_mixed_workloads_rejected(kpis):
         normalized(kpis)
 
 
-def test_comment_trust_and_origin():
-    url = 'https://mlflow.example/#/experiments/470/runs/' + 'a' * 32
-    comment = {'id': 123, 'user': {'login': 'psap-forge-bot[bot]'}, 'body': 'Succeeded: ' + url}
-    assert comment_runs([comment], 'https://mlflow.example') == {'a' * 32: 123}
-    assert not comment_runs([comment], 'https://other.example')
-    for body in ('failed: ' + url, 'not successful, error: ' + url, url):
-        assert not comment_runs([{**comment, 'body': body}], 'https://mlflow.example')
+def forge_report(run_id='d' * 32, comment_id=123, label='mlflow results'):
+    url = 'https://mlflow.example/#/experiments/470/runs/' + run_id
+    return {'id': comment_id, 'created_at': '2026-10-15T00:00:00Z',
+            'user': {'login': 'psap-forge-bot[bot]'},
+            'body': f'Succeeded\n**MLFlow links**\n* [{label}]({url}/artifacts?workspace=forge-sandbox)\n'
+                    '* [nested run](https://mlflow.example/#/experiments/470/runs/' + 'a' * 32 + ')'}
+
+
+@pytest.mark.parametrize('label', ['mlflow results', 'MLFlow Test Results'])
+def test_comment_trust_and_origin(label):
+    comment = forge_report(label=label)
+    assert selected_run([comment], 'https://mlflow.example', 'forge-sandbox') == ('d' * 32, 123)
+    with pytest.raises(ValueError, match='invalid primary'):
+        selected_run([comment], 'https://other.example', 'forge-sandbox')
+    for body in ('failed', 'not successful, error', 'unsuccessful', 'not passed', 'a link without status'):
+        assert selected_run([{**comment, 'body': body}], 'https://mlflow.example', 'forge-sandbox') is None
     for login in ('attacker', 'psap-forge-bot', 'psap-forge-bot-impostor[bot]'):
-        assert not comment_runs([{**comment, 'user': {'login': login}}], 'https://mlflow.example')
+        assert selected_run([{**comment, 'user': {'login': login}}],
+                            'https://mlflow.example', 'forge-sandbox') is None
+
+
+@pytest.mark.parametrize('body', [
+    'Succeeded but missing results',
+    'Succeeded [mlflow results](not-a-url)',
+    forge_report()['body'].replace('/artifacts?', '/artifacts/private.log?'),
+    forge_report()['body'].replace('workspace=forge-sandbox', 'workspace=other'),
+    forge_report()['body'] + '\n' + forge_report('b' * 32)['body'],
+])
+def test_latest_invalid_report_never_falls_back(body):
+    older = forge_report(comment_id=122)
+    selected = {**forge_report(), 'body': body}
+    with pytest.raises(ValueError):
+        selected_run([selected, older], 'https://mlflow.example', 'forge-sandbox')
+
+
+def test_report_order_and_duplicate_parent_reports():
+    older = forge_report('a' * 32, comment_id=999)
+    older['created_at'] = '2026-10-14T00:00:00Z'
+    newer = forge_report(comment_id=1)
+    duplicate = forge_report(comment_id=2, label='MLFlow Test Results')
+    assert selected_run([duplicate, older, newer], 'https://mlflow.example',
+                        'forge-sandbox') == ('d' * 32, 2)
 
 
 @pytest.fixture
@@ -304,58 +338,40 @@ def test_reference_update_preserves_surrounding_yaml(block):
     assert append_reference(result, 'results/new/run.yaml') == result
 
 
-@pytest.mark.parametrize('outcomes', [
-    ['valid'], ['empty', 'valid'], ['empty', 'empty'],
-    [ValueError('malformed'), 'valid'], ['empty', TimeoutError('unavailable'), 'valid'],
-    ['valid', PermissionError('forbidden'), 'valid'],
-])
-def test_merged_pr_discovery_intake(monkeypatch, tmp_path, capsys, outcomes):
+@pytest.mark.parametrize('failure', [None, NoKpiArtifactsError('empty'),
+                                    ValueError('stale or mismatched tested revision'), TimeoutError('unavailable')])
+def test_merged_pr_discovery_intake(monkeypatch, tmp_path, capsys, failure):
     import ingest_forge
     calls = []
     monkeypatch.setenv('GITHUB_REPOSITORY', 'org/repo')
     for key, value in {'MLFLOW_TRACKING_URI': 'https://mlflow.example', 'MLFLOW_USERNAME': 'user',
                        'MLFLOW_PASSWORD': 'password'}.items():
         monkeypatch.setenv(key, value)
-    parent_id = 'a' * 32
-    comment = {'id': 123, 'user': {'login': 'psap-forge-bot[bot]'},
-               'body': 'Succeeded https://mlflow.example/#/experiments/470/runs/' + parent_id}
-    comments = [{**comment, 'id': 123 + i, 'body': comment['body'].replace(parent_id, letter * 32)}
-                for i, letter in enumerate('abc'[:len(outcomes)])]
+    comment = forge_report()
+    comments = [forge_report('a' * 32, comment_id=122), comment]
     pr = {'number': 34, 'merged_at': '2026-10-14', 'base': {'ref': 'main'},
           'head': {'sha': 'b' * 40, 'ref': 'recipe-branch'}}
     def github(endpoint, paginated=False):
         return comments if endpoint.endswith('/comments') else pr
     monkeypatch.setattr(ingest_forge, 'github', github)
     monkeypatch.setattr(ingest_forge.subprocess, 'run', lambda *a, **kw: None)
-    def import_run(*args):
-        outcome = outcomes[len(calls)]
-        calls.append(args)
-        if outcome == 'empty':
-            raise NoKpiArtifactsError('no KPI artifacts on FINISHED parent/direct children')
-        if isinstance(outcome, Exception):
-            raise outcome
-        # Successful imports, including idempotent replay, return None.
+    monkeypatch.setattr(ingest_forge, 'load_admissions', lambda repo: {})
+    def import_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        if failure is not None:
+            raise failure
     monkeypatch.setattr(ingest_forge, 'import_parent', import_run)
     monkeypatch.setattr(sys, 'argv', ['ingest_forge.py', '--pr-number', '34', '--repo', str(tmp_path)])
-    fatal = next((outcome for outcome in outcomes if isinstance(outcome, Exception)), None)
-    if fatal is not None:
-        with pytest.raises(type(fatal)) as error:
+    if failure is not None:
+        with pytest.raises(type(failure)) as error:
             ingest_forge.main()
-        assert error.value is fatal
-        attempted = outcomes.index(fatal) + 1
-    elif all(outcome == 'empty' for outcome in outcomes):
-        with pytest.raises(ValueError, match='PR 34: all 2 .* had no KPI artifacts'):
-            ingest_forge.main()
-        attempted = len(outcomes)
+        assert error.value is failure
     else:
         ingest_forge.main()
-        attempted = len(outcomes)
-    assert len(calls) == attempted
-    assert calls[0][1:] == (tmp_path, parent_id, 'b' * 40, 34, 123)
-    output = capsys.readouterr().out
-    for i, outcome in enumerate(outcomes[:attempted]):
-        if outcome == 'empty':
-            assert f'PR 34: skipping linked run {"abc"[i] * 32}:' in output
+    assert len(calls) == 1
+    assert calls[0][0][1:] == (tmp_path, 'd' * 32, 'b' * 40, 34, 123)
+    assert calls[0][1] == {'require_parent': True, 'admissions': {}}
+    assert 'skipping' not in capsys.readouterr().out
     calls.clear()
     comments.clear()
     ingest_forge.main()
@@ -410,6 +426,294 @@ def test_existing_run_cannot_be_overwritten(intake):
     with pytest.raises(ValueError, match='immutable run already exists'):
         import_parent(client, repo, 'd' * 32, revision, 34)
     assert before == {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
+
+
+def commit_evidence(repo):
+    subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True, capture_output=True)
+    subprocess.run(['git', '-C', str(repo), '-c', 'user.email=test@example.org', '-c', 'user.name=Test',
+                    'commit', '-m', 'admitted evidence'], check=True, capture_output=True)
+
+
+@pytest.mark.parametrize('status', ['RUNNING', 'SCHEDULED', 'UNKNOWN'])
+def test_ingestion_requires_terminal_children_before_writes(intake, status):
+    repo, path, revision, client, parent, values = intake
+    child = client.children(parent)[0]
+    child['info']['status'] = status
+    original_kpis = client.kpis
+    client.kpis = lambda _: original_kpis('a' * 32)
+    with pytest.raises(ValueError, match='nonterminal direct children'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert not (path.parent / 'results').exists()
+    assert yaml.safe_load(path.read_text())['benchmark_runs'] == []
+
+
+@pytest.mark.parametrize('status', ['FAILED', 'KILLED'])
+def test_terminal_failed_children_remain_ineligible(intake, status):
+    repo, path, revision, client, parent, values = intake
+    client.children(parent)[0]['info']['status'] = status
+    raw = json.dumps(json.loads((REPO / 'tests/fixtures/forge-kpis-pr34-example.json').read_text())).encode()
+    client.kpis = lambda run_id: ('kpis.json', raw) if run_id == 'd' * 32 else pytest.fail('ineligible child')
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert len(list(path.parent.glob('results/*/forge-import.json'))) == 1
+
+
+def test_primary_child_rejected_but_direct_fetch_still_accepts_child(intake):
+    repo, path, revision, client, parent, values = intake
+    child = client.children(parent)[0]
+    child['data']['tags'] = [{'key': 'mlflow.parentRunId', 'value': 'd' * 32}]
+    client.run = lambda run_id: child if run_id == 'a' * 32 else parent
+    with pytest.raises(ValueError, match='not a parent'):
+        import_parent(client, repo, 'a' * 32, revision, 34, require_parent=True)
+    assert not (path.parent / 'results').exists()
+    import_parent(client, repo, 'a' * 32, revision, 34)
+    assert not list(path.parent.glob('results/*/forge-import.json'))
+
+
+def test_selected_parent_revision_cannot_be_overridden_by_child(intake):
+    repo, path, revision, client, parent, values = intake
+    parent['data']['tags'][1]['value'] = 'f' * 40
+    client.children(parent)[0]['data']['tags'] = [{'key': 'playbooks.tested_revision', 'value': revision}]
+    with pytest.raises(ValueError, match='selected execution tested revision mismatch'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert not (path.parent / 'results').exists()
+
+
+def test_legacy_replay_admits_once_without_changing_comment_provenance(intake):
+    repo, path, revision, client, parent, values = intake
+    import_parent(client, repo, 'd' * 32, revision, 34, 123)
+    commit_evidence(repo)
+    assert load_admissions(repo) == {}
+    before = {p: p.read_bytes() for p in path.parent.glob('results/*/*')}
+    admissions = {}
+    import_parent(client, repo, 'd' * 32, revision, 34, 999, require_parent=True, admissions=admissions)
+    assert len(admissions) == 1
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    receipt = next(path.parent.glob('results/*/forge-import.json'))
+    receipt_before = receipt.read_bytes()
+    import_parent(client, repo, 'd' * 32, revision, 34, 1000, require_parent=True)
+    assert receipt.read_bytes() == receipt_before
+    commit_evidence(repo)
+    assert admitted_execution(repo, load_admissions(repo), client, 'd' * 32, revision, 34, {})
+
+
+@pytest.mark.parametrize('failure', ['dirty-run', 'dirty-raw', 'staged-result', 'blob-mismatch',
+                                    'missing-output', 'subset-receipt', 'wrong-owner', 'duplicate-key'])
+def test_invalid_admission_fails_closed(intake, failure):
+    repo, path, revision, client, parent, values = intake
+    import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
+    commit_evidence(repo)
+    receipt_path = next(path.parent.glob('results/*/forge-import.json'))
+    receipt = json.loads(receipt_path.read_text())
+    anchor = repo / receipt['outputs'][0]['run_path']
+    if failure in {'dirty-run', 'dirty-raw', 'staged-result', 'blob-mismatch'}:
+        name = {'dirty-run': 'run.yaml', 'dirty-raw': 'kpis.json',
+                'staged-result': 'result.json', 'blob-mismatch': 'kpis.json'}[failure]
+        target = anchor.parent / name
+        target.write_text(target.read_text() + '\n')
+        if failure == 'staged-result':
+            subprocess.run(['git', '-C', str(repo), 'add', str(target)], check=True)
+        elif failure == 'blob-mismatch':
+            commit_evidence(repo)
+    elif failure == 'missing-output':
+        recipe = yaml.safe_load(path.read_text())
+        recipe['benchmark_runs'] = [str(anchor.relative_to(path.parent))]
+        path.write_text(yaml.safe_dump(recipe))
+        commit_evidence(repo)
+    elif failure == 'wrong-owner':
+        receipt['outputs'][0]['recipe_path'] = 'models/other/recipes/other/recipe.yaml'
+        receipt_path.write_text(json.dumps(receipt))
+        commit_evidence(repo)
+    elif failure == 'subset-receipt':
+        receipt['outputs'] = receipt['outputs'][:1]
+        receipt_path.write_text(json.dumps(receipt))
+        commit_evidence(repo)
+    else:
+        receipt_path.write_text(receipt_path.read_text().replace('"version": 1', '"version": 1, "version": 1'))
+        commit_evidence(repo)
+    with pytest.raises(ValueError):
+        load_admissions(repo)
+
+
+def test_unreferenced_receipt_cannot_authorize_skip(intake):
+    repo, path, revision, client, parent, values = intake
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    anchor = next(path.parent.glob('results/*/forge-import.json')).parent / 'run.yaml'
+    recipe = yaml.safe_load(path.read_text())
+    recipe['benchmark_runs'].remove(str(anchor.relative_to(path.parent)))
+    path.write_text(yaml.safe_dump(recipe))
+    commit_evidence(repo)
+    assert load_admissions(repo) == {}
+
+
+@pytest.mark.parametrize('reference_kind', ['untracked-alias', 'committed-alias', 'worktree-component',
+                                          'dot', 'parent', 'double-slash'])
+def test_admission_rejects_noncanonical_or_symlink_references(intake, reference_kind):
+    repo, path, revision, client, parent, values = intake
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    commit_evidence(repo)
+    if reference_kind == 'worktree-component':
+        (path.parent / 'results').rename(path.parent / 'saved-results')
+        (path.parent / 'results').symlink_to('saved-results', target_is_directory=True)
+        with pytest.raises(ValueError, match='dirty|symlink'):
+            load_admissions(repo)
+        return
+    recipe = yaml.safe_load(path.read_text())
+    if reference_kind.endswith('alias'):
+        recipe['benchmark_runs'] = [reference.replace('results/', 'alias/', 1)
+                                    for reference in recipe['benchmark_runs']]
+    else:
+        replacement = {'dot': './results/', 'parent': 'results/../results/',
+                       'double-slash': 'results//'}[reference_kind]
+        recipe['benchmark_runs'] = [reference.replace('results/', replacement, 1)
+                                    for reference in recipe['benchmark_runs']]
+    path.write_text(yaml.safe_dump(recipe))
+    if reference_kind == 'committed-alias':
+        (path.parent / 'alias').symlink_to('results', target_is_directory=True)
+    commit_evidence(repo)
+    if reference_kind == 'untracked-alias':
+        (path.parent / 'alias').symlink_to('results', target_is_directory=True)
+    with pytest.raises(ValueError, match='canonical|committed|symlink'):
+        load_admissions(repo)
+
+
+def test_admission_identity_is_namespaced_and_legacy_conflicts_are_local(intake):
+    repo, path, revision, client, parent, values = intake
+    import_parent(client, repo, 'd' * 32, revision, 34)
+    commit_evidence(repo)
+    legacy = load_admissions(repo)
+    with pytest.raises(ValueError, match='PR/revision'):
+        admitted_execution(repo, legacy, client, 'd' * 32, 'f' * 40, 34, {})
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    commit_evidence(repo)
+    admissions = load_admissions(repo)
+    client.headers = {'X-MLflow-Workspace': 'other'}
+    assert not admitted_execution(repo, admissions, client, 'd' * 32, revision, 34, {})
+    client.headers = {'X-MLflow-Workspace': 'forge-sandbox'}
+    client.uri = 'https://other.example'
+    assert not admitted_execution(repo, admissions, client, 'd' * 32, revision, 34, {})
+
+
+def test_uncommitted_admission_sources_cannot_authorize_skip(intake):
+    repo, path, revision, client, parent, values = intake
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    with pytest.raises(ValueError, match='dirty Forge admission source'):
+        load_admissions(repo)
+
+
+def test_legacy_subset_discovery_cannot_admit_parent(intake):
+    repo, path, revision, client, parent, values = intake
+    child = client.children(parent)[0]
+    sibling = copy.deepcopy(child)
+    sibling['info']['run_id'] = 'b' * 32
+    original_kpis = client.kpis
+    client.children = lambda _: [child, sibling]
+    client.kpis = lambda run_id: original_kpis('a' * 32) if run_id != 'd' * 32 else None
+    import_parent(client, repo, 'd' * 32, revision, 34)
+    commit_evidence(repo)
+    admissions = load_admissions(repo)
+    client.children = lambda _: [child]
+    before = {p: p.read_bytes() for p in path.parent.glob('results/*/*')}
+    with pytest.raises(ValueError, match='omitted previously committed positive outputs'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True, admissions=admissions)
+    assert before == {p: p.read_bytes() for p in path.parent.glob('results/*/*')}
+    assert not list(path.parent.glob('results/*/forge-import.json'))
+
+
+@pytest.mark.parametrize('failure', ['pr', 'revision', 'platform', 'profile', 'model', 'config', 'untracked'])
+def test_admission_hit_preserves_current_attribution(intake, failure):
+    repo, path, revision, client, parent, values = intake
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    commit_evidence(repo)
+    if failure == 'platform':
+        (path.parent / 'platforms/vllm.yaml').write_text('args: [changed]\n')
+    elif failure == 'profile':
+        (repo / 'hardware-profiles/test.yaml').write_text('profile_revision: 2\n')
+    elif failure == 'model':
+        (repo / 'models/test/model.yaml').write_text('huggingface_id: changed/model\n')
+    elif failure == 'config':
+        (path.parent / 'config/patch.yaml').write_text('args: [changed]\n')
+    elif failure == 'untracked':
+        (path.parent / 'config/new.yaml').write_text('{}\n')
+    with pytest.raises(ValueError):
+        admitted_execution(repo, load_admissions(repo), client, 'd' * 32,
+                           'f' * 40 if failure == 'revision' else revision,
+                           35 if failure == 'pr' else 34, {})
+
+
+@pytest.mark.parametrize('indexed', [False, True])
+def test_latest_only_thousand_reports_scale_and_privacy(intake, monkeypatch, capsys, indexed):
+    import fetch_forge_evidence
+    import forge_admission
+    import ingest_forge
+    import normalize_kpis
+    repo, path, revision, client, parent, values = intake
+    if indexed:
+        import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
+        commit_evidence(repo)
+    before = {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
+    reports = [forge_report(f'{i:032x}', comment_id=i) for i in range(1, 1001)]
+    reports.append(forge_report(comment_id=1001, label='MLFlow Test Results'))
+    pr = {'merged_at': '2026-10-15', 'base': {'ref': 'main'},
+          'head': {'sha': revision, 'ref': 'recipe-branch'}}
+    monkeypatch.setenv('GITHUB_REPOSITORY', 'org/repo')
+    for key, value in {'MLFLOW_TRACKING_URI': client.uri, 'MLFLOW_WORKSPACE': 'forge-sandbox',
+                       'MLFLOW_USERNAME': 'private-user', 'MLFLOW_PASSWORD': 'private-password'}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(ingest_forge, 'Client', lambda *args: client)
+    monkeypatch.setattr(ingest_forge, 'github', lambda endpoint, *args: reports if endpoint.endswith('/comments') else pr)
+    original_git = subprocess.run
+    git_calls = []
+    def run(command, **kwargs):
+        git_calls.append(command)
+        if command[:2] == ['git', 'fetch']:
+            return subprocess.CompletedProcess(command, 0)
+        return original_git(command, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', run)
+    requests = []
+    for method in ('run', 'children', 'kpis'):
+        original = getattr(client, method)
+        def observe(*args, method=method, original=original):
+            requests.append((method, args))
+            if indexed:
+                pytest.fail('indexed selected execution must not request MLflow')
+            return original(*args)
+        monkeypatch.setattr(client, method, observe)
+    if indexed:
+        def no_normalize(*args, **kwargs):
+            pytest.fail('indexed execution must not normalize')
+        monkeypatch.setattr(fetch_forge_evidence, 'normalize', no_normalize)
+        monkeypatch.setattr(normalize_kpis, 'normalize', no_normalize)
+        original_read_text, original_read_bytes = Path.read_text, Path.read_bytes
+        def metadata_only_text(file, *args, **kwargs):
+            assert file.name not in {'kpis.json', 'result.json'}
+            return original_read_text(file, *args, **kwargs)
+        def metadata_only_bytes(file, *args, **kwargs):
+            assert file.name not in {'kpis.json', 'result.json'}
+            return original_read_bytes(file, *args, **kwargs)
+        monkeypatch.setattr(Path, 'read_text', metadata_only_text)
+        monkeypatch.setattr(Path, 'read_bytes', metadata_only_bytes)
+    monkeypatch.setattr(sys, 'argv', ['ingest_forge.py', '--pr-number', '34', '--repo', str(repo)])
+    ingest_forge.main()
+    captured = capsys.readouterr()
+    output = captured.out
+    assert captured.err == ''
+    assert len(output.splitlines()) == 1
+    assert 'private-user' not in output and 'private-password' not in output
+    for receipt_path in path.parent.glob('results/*/forge-import.json'):
+        receipt_text = receipt_path.read_text()
+        assert 'private-user' not in receipt_text and 'private-password' not in receipt_text
+    assert sum('ls-tree' in command for command in git_calls) == 1
+    assert sum('status' in command for command in git_calls) == 1
+    if indexed:
+        assert requests == []
+        assert 'imported=0 indexed=1' in output
+        assert sum('show' in command for command in git_calls) == 1
+        monkeypatch.setattr(Path, 'read_bytes', original_read_bytes)
+        assert before == {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
+    else:
+        assert [args[0] for method, args in requests if method == 'run'] == ['d' * 32]
+        assert [args[0] for method, args in requests if method == 'kpis'] == ['d' * 32, 'a' * 32]
+        assert 'imported=1 indexed=0' in output
 
 
 def test_v1_run_and_result_remain_compatible():

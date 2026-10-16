@@ -1,20 +1,40 @@
 # Forge benchmark evidence ingestion
 
 `benchmark-ingest.yml` finds merged recipe PRs on a `main` push, or backfills
-one merged PR through `workflow_dispatch`. It accepts explicit successful
-`psap-forge-bot` comments containing MLflow run URLs from the configured origin.
+one merged PR through `workflow_dispatch`. It selects only the latest explicit
+successful `psap-forge-bot[bot]` report, ordered by GitHub `created_at` then ID.
+The primary `[mlflow results]` or `[MLFlow Test Results]` link must identify a
+parent run on the configured origin/workspace. Nested run/log links are ignored.
 Failed, ambiguous, stale, unavailable, or unattributed evidence fails closed.
 No cluster access is used. Imports open a separate evidence PR, never push to
 `main`, and never promote maturity or platform verification.
 
-Discovery visibly skips a linked run only when the selected `FINISHED` parent
-and its eligible direct children have no `kpis.json` artifacts, then tries later
-trusted links. If every attempted candidate for a PR is empty, ingestion fails
-explicitly. No trusted success comments and automation evidence PRs remain
-no-ops; identical evidence replay counts as a successful import. Present but
-unsupported, malformed, or ambiguous artifacts and permission/network errors
-remain fatal, as do attribution and immutable-evidence conflicts. Direct
-`fetch_forge_evidence.py` intake still rejects empty evidence.
+Only the selected execution's parent and eligible direct children are imported.
+The selected execution must match the final PR head through authoritative
+`playbooks.tested_revision` attribution; an override such as `PULL_PULL_SHA` is
+not evidence of the tested recipe revision. A missing/malformed primary link,
+empty execution, attribution mismatch, unsupported/malformed artifact, or
+permission/network error fails ingestion. **There is no fallback to older
+executions.** No trusted success report and automation evidence PRs remain no-ops.
+
+Successful complete ingestion writes one positive `forge-import.json` receipt
+beside its first output `run.yaml`. The parent must be `FINISHED`; any nonterminal
+direct child blocks admission before writes. Terminal `FAILED`/`KILLED` children
+remain ineligible. The receipt binds the entire normalized positive output set,
+source PR/revision, origin/workspace/parent identity, recipe ownership, and Git
+blob identities for each raw/result/run file. It stores no empty-run outcomes.
+
+Repeat ingestion builds one local lookup from committed recipe references and
+anchored receipts. A selected admitted execution is a successful no-op with no
+MLflow requests or KPI replay. Receipt/source files must be committed and clean;
+blob identities, references, metadata, and current deployment attribution must
+agree. Unreferenced receipts cannot authorize a skip. Full CI integrity/replay
+validation remains a separate gate; admission receipts assume reviewed importer
+output and attest a completed discovery snapshot, not future server immutability.
+Legacy evidence without a receipt requires normal selected-execution discovery
+and validation once before admission; immutable evidence and original comment
+provenance are preserved. Direct `fetch_forge_evidence.py` still accepts child
+links but does not create ingestion receipts.
 
 The standalone ingestion change (PR1) adds the evidence tools, schemas,
 offline validator replay, tests, and workflow without depending on site/catalog
@@ -98,7 +118,7 @@ python3 tools/normalize_kpis.py tests/fixtures/forge-kpis-pr34-example.json \
 python3 tools/fetch_forge_evidence.py --run-id <parent-or-child-run-id> \
   --pr-number 34 --tested-revision <PR-head-sha> --tracking-uri <https-uri>
 
-# Alternatively discover the successful bot comment for a merged PR (requires gh):
+# Alternatively select the latest successful bot report for a merged PR (requires gh):
 GITHUB_REPOSITORY=openshift-psap/inference-playbooks \
   python3 tools/ingest_forge.py --pr-number 34
 

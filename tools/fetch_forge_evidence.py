@@ -140,7 +140,26 @@ def attribution(repo, values, expected_revision, pr_number):
     relative = get('recipe_path')
     if not re.fullmatch(r'models/[^/]+/recipes/[^/]+/recipe.yaml', relative):
         raise ValueError('recipe_path must be canonical')
+    path, recipe = tested_inputs(repo, relative, expected_revision)
+    profile = load_unique_yaml(checked_path(repo, recipe['hardware_profile']).read_text())
+    if get('hardware_profile') != recipe['hardware_profile'] or int(get('hardware_profile_revision')) != profile['profile_revision']:
+        raise ValueError('hardware profile attribution mismatch')
+    platform = {'stack': get('platform_stack'), 'version': get('platform_version')}
+    if not any(all(p[k] == v for k, v in platform.items()) for p in recipe['platforms']):
+        raise ValueError('platform attribution mismatch')
+    if not re.fullmatch(r'sha256:[a-f0-9]{64}', get('image_digest')):
+        raise ValueError('image digest required')
+    if not re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})', get('model_revision')):
+        raise ValueError('immutable model revision hash required')
+    safe_artifact({'command': get('command')})
+    return path, recipe, profile, platform
+
+
+def tested_inputs(repo, relative, expected_revision, require_clean=None):
+    """Compare deployment inputs with the tested snapshot, also for local admission hits."""
     path = checked_path(repo, relative)
+    if require_clean is not None:
+        require_clean(relative)
     recipe = load_unique_yaml(path.read_text())
     # Compare all deployment inputs with the exact tested Git snapshot.
     tested = load_unique_yaml(subprocess.run(['git', '-C', str(repo), 'show', f'{expected_revision}:{relative}'],
@@ -160,6 +179,9 @@ def attribution(repo, values, expected_revision, pr_number):
                   for p in recipe['platforms'] if p.get('pinned_manifest'))
     inputs.extend(str(checked_path(repo, str(path.parent.relative_to(repo) / p['config'])).relative_to(repo))
                   for p in recipe['platforms'] if p.get('config'))
+    if require_clean is not None:
+        for input_path in [*inputs, str(path.parent.relative_to(repo) / 'config')]:
+            require_clean(input_path)
     diff = subprocess.run(['git', '-C', str(repo), 'diff', expected_revision, '--', *inputs,
                            str(path.parent.relative_to(repo) / 'config')], check=True, capture_output=True, text=True)
     if diff.stdout:
@@ -169,18 +191,7 @@ def attribution(repo, values, expected_revision, pr_number):
                                check=True, capture_output=True, text=True)
     if untracked.stdout:
         raise ValueError('untracked deployment inputs cannot be attributed')
-    profile = load_unique_yaml(checked_path(repo, recipe['hardware_profile']).read_text())
-    if get('hardware_profile') != recipe['hardware_profile'] or int(get('hardware_profile_revision')) != profile['profile_revision']:
-        raise ValueError('hardware profile attribution mismatch')
-    platform = {'stack': get('platform_stack'), 'version': get('platform_version')}
-    if not any(all(p[k] == v for k, v in platform.items()) for p in recipe['platforms']):
-        raise ValueError('platform attribution mismatch')
-    if not re.fullmatch(r'sha256:[a-f0-9]{64}', get('image_digest')):
-        raise ValueError('image digest required')
-    if not re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})', get('model_revision')):
-        raise ValueError('immutable model revision hash required')
-    safe_artifact({'command': get('command')})
-    return path, recipe, profile, platform
+    return path, recipe
 
 
 def append_reference(text, reference):
@@ -203,15 +214,26 @@ def append_reference(text, reference):
     return updated
 
 
-def import_parent(client, repo, parent_id, expected_revision, pr_number, comment_id=None):
+def import_parent(client, repo, parent_id, expected_revision, pr_number, comment_id=None,
+                  *, require_parent=False, admissions=None):
     parent = client.run(parent_id)
     actual_parent = tags(parent).get('mlflow.parentRunId')
     if actual_parent:
+        if require_parent:
+            raise ValueError('selected primary result link is not a parent run')
         parent_id = actual_parent
         parent = client.run(parent_id)
     if parent['info']['status'] != 'FINISHED':
         raise ValueError('parent run is not successful')
+    if require_parent:
+        if parent['info']['run_id'] != parent_id:
+            raise ValueError('selected execution identity mismatch')
+        if tags(parent).get('playbooks.tested_revision', expected_revision) != expected_revision:
+            raise ValueError('selected execution tested revision mismatch')
     candidates = [parent, *client.children(parent)]
+    if require_parent and any(run['info']['status'] not in {'FINISHED', 'FAILED', 'KILLED'}
+                              for run in candidates):
+        raise ValueError('selected execution has nonterminal direct children')
     prepared = []
     artifact_count = 0
     for child in candidates:
@@ -266,6 +288,15 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
             directory = checked_path(repo, str(path.parent.relative_to(repo) / 'results' / result['run_id']))
             files = {'result.json': json.dumps(result, indent=2, allow_nan=False) + '\n',
                      'run.yaml': yaml.safe_dump(run, sort_keys=False), 'kpis.json': raw.decode()}
+            if require_parent and (directory / 'run.yaml').is_file():
+                # A newer duplicate report must not change immutable comment provenance.
+                existing_text = (directory / 'run.yaml').read_text()
+                existing = load_unique_yaml(existing_text)
+                proposed = load_unique_yaml(files['run.yaml'])
+                existing['forge'].pop('pr_comment_id', None)
+                proposed['forge'].pop('pr_comment_id', None)
+                if existing == proposed:
+                    files['run.yaml'] = existing_text
             if directory.exists() and any(not (directory / name).is_file() or (directory / name).read_text() != text
                                           for name, text in files.items()):
                 raise ValueError('immutable run already exists with different evidence')
@@ -286,13 +317,34 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         text = updated_recipes.get(path, path.read_text())
         reference = str((directory / 'run.yaml').relative_to(path.parent))
         updated_recipes[path] = append_reference(text, reference)
+    if require_parent:
+        from forge_admission import admission_key, prepare_admission
+        receipt_path, receipt_text, admission = prepare_admission(repo, prepared)
+        key = admission_key(admission['receipt'])
+        previous = getattr(admissions, 'positive_outputs', {}).get(key, set())
+        if previous - set(admission['records']):
+            raise ValueError('selected discovery omitted previously committed positive outputs')
+        if receipt_path.exists() and receipt_path.read_text() != receipt_text:
+            raise ValueError('immutable Forge admission already exists with different coverage')
     for path, directory, files in prepared:
         directory.mkdir(parents=True, exist_ok=True)
         for name, text in files.items():
-            (directory / name).write_text(text)
+            if not (directory / name).exists():
+                (directory / name).write_text(text)
     for path, text in updated_recipes.items():
         if path.read_text() != text:
             path.write_text(text)
+    if require_parent:
+        if not receipt_path.exists():
+            receipt_path.write_text(receipt_text)
+        if admissions is not None:
+            admissions[key] = admission
+            if hasattr(admissions, 'positive_outputs'):
+                admissions.positive_outputs[key] = set(admission['records'])
+                for run in admission['records'].values():
+                    forge = run['forge']
+                    for run_id in {forge['mlflow_parent_run_id'], forge['mlflow_benchmark_run_id']}:
+                        admissions.known_sources[key[:2] + (run_id,)] = pr_number, expected_revision
 
 
 def main():
