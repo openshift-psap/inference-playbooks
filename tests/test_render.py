@@ -507,6 +507,35 @@ class RenderRecipeIntegrationTests(unittest.TestCase):
         self.assertTrue(output_path.is_file())
         self.assertEqual(output_path.read_text(), pinned_content)
 
+    def test_render_pd_recipe_with_pinned_manifest(self):
+        from render import render_recipe
+        recipe = make_recipe(
+            mode="dp", dp=8,
+            router={"strategy": "prefill-decode"},
+            prefill={"args": [{"flag": "--max-num-seqs", "value": "256", "required": True, "why": "Prefill batch."}]},
+        )
+        pinned_content = "kind: Deployment\napiVersion: apps/v1\nmetadata:\n  name: pd\n"
+        manifest_dir = self.recipe_dir / "manifests" / "vllm-v0.24.0"
+        manifest_dir.mkdir(parents=True)
+        (manifest_dir / "pd.yaml").write_text(pinned_content)
+        recipe["platforms"][0]["pinned_manifest"] = "manifests/vllm-v0.24.0/pd.yaml"
+        recipe["platforms"][0]["pinned_reason"] = "No P/D template yet."
+        recipe_path = self._write_recipe(recipe)
+        rendered, errors = render_recipe(self.tmpdir, recipe_path, dry_run=True)
+        self.assertFalse(errors, errors)
+        self.assertEqual(rendered.strip(), pinned_content.strip())
+
+    def test_render_pd_recipe_without_pinned_manifest_errors(self):
+        from render import render_recipe
+        recipe = make_recipe(
+            mode="dp", dp=8,
+            router={"strategy": "prefill-decode"},
+            prefill={"args": [{"flag": "--max-num-seqs", "value": "256", "required": True, "why": "Prefill batch."}]},
+        )
+        recipe_path = self._write_recipe(recipe)
+        rendered, errors = render_recipe(self.tmpdir, recipe_path, dry_run=True)
+        self.assertTrue(any("prefill/decode disaggregated serving not yet supported" in e for e in errors), errors)
+
     def test_render_all_blocked_produces_no_output(self):
         from render import render_recipe
         recipe = make_recipe(tp=1)
