@@ -7,6 +7,15 @@ Failed, ambiguous, stale, unavailable, or unattributed evidence fails closed.
 No cluster access is used. Imports open a separate evidence PR, never push to
 `main`, and never promote maturity or platform verification.
 
+Discovery visibly skips a linked run only when the selected `FINISHED` parent
+and its eligible direct children have no `kpis.json` artifacts, then tries later
+trusted links. If every attempted candidate for a PR is empty, ingestion fails
+explicitly. No trusted success comments and automation evidence PRs remain
+no-ops; identical evidence replay counts as a successful import. Present but
+unsupported, malformed, or ambiguous artifacts and permission/network errors
+remain fatal, as do attribution and immutable-evidence conflicts. Direct
+`fetch_forge_evidence.py` intake still rejects empty evidence.
+
 The standalone ingestion change (PR1) adds the evidence tools, schemas,
 offline validator replay, tests, and workflow without depending on site/catalog
 tooling or changing existing recipes. The catalog/UI change (PR2) consumes this

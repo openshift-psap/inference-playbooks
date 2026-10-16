@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fetch_forge_evidence import Client, import_parent
+from fetch_forge_evidence import Client, NoKpiArtifactsError, import_parent
 
 
 def github(endpoint, paginated=False):
@@ -77,8 +77,16 @@ def main():
             continue
         revision = pr['head']['sha']
         subprocess.run(['git', 'fetch', 'origin', f'refs/pull/{number}/head'], check=True)
+        imported = 0
         for run_id, comment_id in runs.items():
-            import_parent(client, args.repo.resolve(), run_id, revision, number, comment_id)
+            try:
+                import_parent(client, args.repo.resolve(), run_id, revision, number, comment_id)
+            except NoKpiArtifactsError as error:
+                print(f'PR {number}: skipping linked run {run_id}: {error}')
+            else:
+                imported += 1
+        if not imported:
+            raise ValueError(f'PR {number}: all {len(runs)} trusted successful Forge candidates had no KPI artifacts')
 
 
 if __name__ == '__main__':

@@ -12,7 +12,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tools'))
-from fetch_forge_evidence import Client, NoRedirect, append_reference, import_parent, safe_artifact
+from fetch_forge_evidence import Client, NoKpiArtifactsError, NoRedirect, append_reference, import_parent, safe_artifact
 from ingest_forge import comment_runs
 from normalize_kpis import normalize
 from validate import validate_benchmark_run
@@ -177,6 +177,49 @@ def test_import_replay_and_idempotence(intake):
     assert before == {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
 
 
+@pytest.mark.parametrize('with_children', [False, True])
+def test_successful_run_without_kpi_artifacts_does_not_write(intake, with_children):
+    repo, path, revision, client, parent, values = intake
+    if not with_children:
+        parent['info']['run_id'] = 'd3512ac9760743f49667f9c4113328bc'
+        client.children = lambda _: []
+    client.kpis = lambda _: None
+    with pytest.raises(NoKpiArtifactsError, match='no KPI artifacts'):
+        import_parent(client, repo, parent['info']['run_id'], revision, 34)
+    assert not (path.parent / 'results').exists()
+    assert yaml.safe_load(path.read_text())['benchmark_runs'] == []
+
+
+@pytest.mark.parametrize('raw', [b'not json', b'{}', b'{"tests": []}',
+                                 b'{"tests": [{"labels": {"benchmark_tool": "unsupported"}}]}'])
+def test_present_invalid_artifact_is_not_empty_evidence(intake, raw):
+    repo, path, revision, client, parent, values = intake
+    original_kpis = client.kpis
+    # Prepare valid parent evidence before encountering the invalid child.
+    client.kpis = lambda run_id: (original_kpis('a' * 32) if run_id == 'd' * 32
+                                 else ('kpis.json', raw))
+    with pytest.raises((ValueError, KeyError)) as error:
+        import_parent(client, repo, 'd' * 32, revision, 34)
+    assert not isinstance(error.value, NoKpiArtifactsError)
+    assert not (path.parent / 'results').exists()
+    assert yaml.safe_load(path.read_text())['benchmark_runs'] == []
+
+
+@pytest.mark.parametrize('failure', [TimeoutError('unavailable'), PermissionError('forbidden'),
+                                    ValueError('ambiguous kpis.json artifacts')])
+def test_artifact_discovery_failure_is_not_empty_evidence(intake, failure):
+    repo, path, revision, client, parent, values = intake
+    def kpis(run_id):
+        if run_id == 'a' * 32:
+            raise failure
+        return None
+    client.kpis = kpis
+    with pytest.raises(type(failure)) as error:
+        import_parent(client, repo, 'd' * 32, revision, 34)
+    assert error.value is failure
+    assert not (path.parent / 'results').exists()
+
+
 @pytest.mark.parametrize('failure', ['stale', 'missing', 'hardware', 'changed', 'model', 'config', 'untracked'])
 def test_attribution_failure_does_not_write(intake, failure):
     repo, path, revision, client, parent, values = intake
@@ -261,7 +304,12 @@ def test_reference_update_preserves_surrounding_yaml(block):
     assert append_reference(result, 'results/new/run.yaml') == result
 
 
-def test_merged_pr_discovery_intake(monkeypatch, tmp_path):
+@pytest.mark.parametrize('outcomes', [
+    ['valid'], ['empty', 'valid'], ['empty', 'empty'],
+    [ValueError('malformed'), 'valid'], ['empty', TimeoutError('unavailable'), 'valid'],
+    ['valid', PermissionError('forbidden'), 'valid'],
+])
+def test_merged_pr_discovery_intake(monkeypatch, tmp_path, capsys, outcomes):
     import ingest_forge
     calls = []
     monkeypatch.setenv('GITHUB_REPOSITORY', 'org/repo')
@@ -271,17 +319,49 @@ def test_merged_pr_discovery_intake(monkeypatch, tmp_path):
     parent_id = 'a' * 32
     comment = {'id': 123, 'user': {'login': 'psap-forge-bot[bot]'},
                'body': 'Succeeded https://mlflow.example/#/experiments/470/runs/' + parent_id}
+    comments = [{**comment, 'id': 123 + i, 'body': comment['body'].replace(parent_id, letter * 32)}
+                for i, letter in enumerate('abc'[:len(outcomes)])]
     pr = {'number': 34, 'merged_at': '2026-10-14', 'base': {'ref': 'main'},
           'head': {'sha': 'b' * 40, 'ref': 'recipe-branch'}}
     def github(endpoint, paginated=False):
-        return [comment] if endpoint.endswith('/comments') else pr
+        return comments if endpoint.endswith('/comments') else pr
     monkeypatch.setattr(ingest_forge, 'github', github)
     monkeypatch.setattr(ingest_forge.subprocess, 'run', lambda *a, **kw: None)
-    monkeypatch.setattr(ingest_forge, 'import_parent', lambda *args: calls.append(args))
+    def import_run(*args):
+        outcome = outcomes[len(calls)]
+        calls.append(args)
+        if outcome == 'empty':
+            raise NoKpiArtifactsError('no KPI artifacts on FINISHED parent/direct children')
+        if isinstance(outcome, Exception):
+            raise outcome
+        # Successful imports, including idempotent replay, return None.
+    monkeypatch.setattr(ingest_forge, 'import_parent', import_run)
     monkeypatch.setattr(sys, 'argv', ['ingest_forge.py', '--pr-number', '34', '--repo', str(tmp_path)])
-    ingest_forge.main()
+    fatal = next((outcome for outcome in outcomes if isinstance(outcome, Exception)), None)
+    if fatal is not None:
+        with pytest.raises(type(fatal)) as error:
+            ingest_forge.main()
+        assert error.value is fatal
+        attempted = outcomes.index(fatal) + 1
+    elif all(outcome == 'empty' for outcome in outcomes):
+        with pytest.raises(ValueError, match='PR 34: all 2 .* had no KPI artifacts'):
+            ingest_forge.main()
+        attempted = len(outcomes)
+    else:
+        ingest_forge.main()
+        attempted = len(outcomes)
+    assert len(calls) == attempted
     assert calls[0][1:] == (tmp_path, parent_id, 'b' * 40, 34, 123)
+    output = capsys.readouterr().out
+    for i, outcome in enumerate(outcomes[:attempted]):
+        if outcome == 'empty':
+            assert f'PR 34: skipping linked run {"abc"[i] * 32}:' in output
     calls.clear()
+    comments.clear()
+    ingest_forge.main()
+    assert 'no trusted successful Forge comment; no import' in capsys.readouterr().out
+    assert calls == []
+    comments.append(comment)
     pr['head']['ref'] = 'automation/forge-evidence-existing'
     ingest_forge.main()
     assert calls == []

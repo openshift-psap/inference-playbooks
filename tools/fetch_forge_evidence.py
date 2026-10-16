@@ -21,6 +21,10 @@ from normalize_kpis import normalize
 from recipe_evidence import load_unique_yaml
 
 
+class NoKpiArtifactsError(ValueError):
+    """Successful discovery found no KPI artifacts on eligible runs."""
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise ValueError('redirect rejected: credentials must not leave configured origin')
@@ -209,6 +213,7 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         raise ValueError('parent run is not successful')
     candidates = [parent, *client.children(parent)]
     prepared = []
+    artifact_count = 0
     for child in candidates:
         if child['info']['status'] != 'FINISHED':
             continue
@@ -216,6 +221,7 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         artifact = client.kpis(child_id)
         if artifact is None:
             continue
+        artifact_count += 1
         values = {**tags(parent), **tags(child)}
         path, recipe, profile, platform = attribution(repo, values, expected_revision, pr_number)
         artifact_path, raw = artifact
@@ -264,6 +270,8 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
                                           for name, text in files.items()):
                 raise ValueError('immutable run already exists with different evidence')
             prepared.append((path, directory, files))
+    if artifact_count == 0:
+        raise NoKpiArtifactsError(f'parent {parent_id}: no KPI artifacts on FINISHED parent/direct children')
     if not prepared:
         raise ValueError('no successful supported KPI evidence found')
     # Validate every candidate before mutating any recipe.
