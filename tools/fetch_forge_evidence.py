@@ -149,8 +149,9 @@ def attribution(repo, values, expected_revision, pr_number):
         raise ValueError('platform attribution mismatch')
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', get('image_digest')):
         raise ValueError('image digest required')
-    if not re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})', get('model_revision')):
-        raise ValueError('immutable model revision hash required')
+    if not re.fullmatch(r'[^\s\x00-\x1f\x7f]+', get('model_revision')):
+        raise ValueError('nonempty model revision identifier without whitespace or control characters required')
+    safe_artifact({'model_revision': get('model_revision')})
     safe_artifact({'command': get('command')})
     return path, recipe, profile, platform
 

@@ -1,5 +1,15 @@
 # Schema changelog
 
+## Forge declared model revisions
+
+- Forge run `environment.model_revision` accepts nonempty declared identifiers
+  without whitespace or control characters: `main`, tags, branches, and existing
+  40/64-character hashes. Intake applies the shared artifact privacy guard.
+- The attribution tag remains required and is stored exactly as supplied; Forge
+  supplies `main` when using the default model revision. No schema version or
+  stored field changes. Tested recipe SHA and runtime image digest rules remain
+  unchanged.
+
 ## Forge-backed benchmark evidence (run v2)
 
 - Benchmark runs retain v1 compatibility and add v2 `evidence_source` with

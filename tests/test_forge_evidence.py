@@ -189,8 +189,10 @@ def intake(tmp_path, kpis):
     return tmp_path, recipe_path, revision, FakeClient(), parent, values
 
 
-def test_import_replay_and_idempotence(intake):
+@pytest.mark.parametrize('model_revision', ['main', 'v1.2.0', 'release/model-v2', 'b' * 40, 'c' * 64])
+def test_import_replay_and_idempotence(intake, model_revision):
     repo, path, revision, client, parent, values = intake
+    next(tag for tag in parent['data']['tags'] if tag['key'] == 'playbooks.model_revision')['value'] = model_revision
     import_parent(client, repo, 'd' * 32, revision, 34, 123)
     before = {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
     recipe = yaml.safe_load(path.read_text())
@@ -199,6 +201,7 @@ def test_import_replay_and_idempotence(intake):
     for reference in recipe['benchmark_runs']:
         run_path = path.parent / reference
         run = yaml.safe_load(run_path.read_text())
+        assert run['environment']['model_revision'] == model_revision
         jsonschema.validate(run, json.loads((REPO / 'schema/benchmark-run.schema.json').read_text()))
         assert validate_benchmark_run(repo, run_path, run)[0] == []
         result_path = run_path.parent / 'result.json'
@@ -209,6 +212,35 @@ def test_import_replay_and_idempotence(intake):
         result_path.write_bytes(before[result_path])
     import_parent(client, repo, 'd' * 32, revision, 34, 123)
     assert before == {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
+
+
+@pytest.mark.parametrize('model_revision', [None, '', ' ', ' main', 'main ', 'release candidate',
+                                           'main\n', 'main\t', 'main\x00', 'main\x1b', 'main\x7f',
+                                           'Bearer credential', 'password=credential', 'secret=credential',
+                                           '--api-key=credential', 'https://user:credential@example.org/model'])
+def test_invalid_model_revision_does_not_write(intake, model_revision):
+    repo, path, revision, client, parent, values = intake
+    tag = next(tag for tag in parent['data']['tags'] if tag['key'] == 'playbooks.model_revision')
+    if model_revision is None:
+        parent['data']['tags'].remove(tag)
+    else:
+        tag['value'] = model_revision
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        import_parent(client, repo, 'd' * 32, revision, 34)
+    assert not (path.parent / 'results').exists()
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('model_revision', ['', ' ', ' main', 'main ', 'release candidate',
+                                           'main\n', 'main\t', 'main\x00', 'main\x1b', 'main\x7f'])
+def test_schema_rejects_empty_or_non_identifier_model_revision(intake, model_revision):
+    repo, path, revision, client, parent, values = intake
+    import_parent(client, repo, 'd' * 32, revision, 34)
+    run = yaml.safe_load(next(path.parent.glob('results/*/run.yaml')).read_text())
+    run['environment']['model_revision'] = model_revision
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(run, json.loads((REPO / 'schema/benchmark-run.schema.json').read_text()))
 
 
 @pytest.mark.parametrize('with_children', [False, True])

@@ -59,9 +59,17 @@ tags override them. Forge must supply these explicit tags:
 | `playbooks.hardware_profile_revision` | Profile revision at execution |
 | `playbooks.platform_stack` | Recipe platform stack, not the host OS/platform |
 | `playbooks.platform_version` | Exact recipe platform version |
-| `playbooks.model_revision` | Immutable model revision tested |
+| `playbooks.model_revision` | Declared model revision tested: `main`, tag, branch, or commit hash |
 | `playbooks.image_digest` | Resolved `sha256:…` image digest |
 | `playbooks.command` | Exact reproducible harness/Forge invocation, without secrets |
+
+The model repository is the tested recipe's `serving.model`. Its declared
+revision is recorded exactly as supplied, without resolving it to a commit hash.
+Forge supplies `main` for the default revision; ingestion still requires the
+explicit tag and never defaults a missing tag. Revision identifiers must be
+nonempty, contain no whitespace or control characters, and pass the shared
+artifact privacy guard. A Hugging Face repository with its declared revision
+is sufficient model identity; a model commit pin is not required.
 
 Optional `playbooks.prow_job_id` and `playbooks.prow_job_url` add execution
 links. `playbooks.expected_concurrencies` is a JSON object, for example

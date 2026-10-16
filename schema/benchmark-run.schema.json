@@ -44,7 +44,9 @@
               "properties": {"schema_version": {"const": 2},
                 "command": {"type": "string", "minLength": 1},
                 "environment": {"required": ["model_revision", "image_digest"],
-                  "properties": {"model_revision": {"type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"},
+                  "properties": {"model_revision": {"type": "string", "minLength": 1,
+                     "not": {"pattern": "[\\s\\u0000-\\u001f\\u007f]"},
+                     "description": "Declared model revision exactly as supplied by Forge: main, a tag, branch, or commit hash. Must contain no whitespace or control characters; intake also applies the shared artifact privacy guard."},
                     "image_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}}}}},
      "else": {"properties": {"forge": false}}}
   ],
