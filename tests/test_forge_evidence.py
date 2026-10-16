@@ -102,12 +102,13 @@ def test_duplicates_and_mixed_workloads_rejected(kpis):
 
 def test_comment_trust_and_origin():
     url = 'https://mlflow.example/#/experiments/470/runs/' + 'a' * 32
-    comment = {'id': 123, 'user': {'login': 'psap-forge-bot'}, 'body': 'Succeeded: ' + url}
+    comment = {'id': 123, 'user': {'login': 'psap-forge-bot[bot]'}, 'body': 'Succeeded: ' + url}
     assert comment_runs([comment], 'https://mlflow.example') == {'a' * 32: 123}
     assert not comment_runs([comment], 'https://other.example')
     for body in ('failed: ' + url, 'not successful, error: ' + url, url):
         assert not comment_runs([{**comment, 'body': body}], 'https://mlflow.example')
-    assert not comment_runs([{**comment, 'user': {'login': 'attacker'}}], 'https://mlflow.example')
+    for login in ('attacker', 'psap-forge-bot', 'psap-forge-bot-impostor[bot]'):
+        assert not comment_runs([{**comment, 'user': {'login': login}}], 'https://mlflow.example')
 
 
 @pytest.fixture
@@ -268,7 +269,7 @@ def test_merged_pr_discovery_intake(monkeypatch, tmp_path):
                        'MLFLOW_PASSWORD': 'password'}.items():
         monkeypatch.setenv(key, value)
     parent_id = 'a' * 32
-    comment = {'id': 123, 'user': {'login': 'psap-forge-bot'},
+    comment = {'id': 123, 'user': {'login': 'psap-forge-bot[bot]'},
                'body': 'Succeeded https://mlflow.example/#/experiments/470/runs/' + parent_id}
     pr = {'number': 34, 'merged_at': '2026-10-14', 'base': {'ref': 'main'},
           'head': {'sha': 'b' * 40, 'ref': 'recipe-branch'}}

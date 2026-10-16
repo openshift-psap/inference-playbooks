@@ -23,7 +23,7 @@ def comment_runs(comments, tracking_uri):
     """Only explicit success comments from the configured Forge bot are accepted."""
     runs = {}
     for comment in comments:
-        if comment.get('user', {}).get('login') != 'psap-forge-bot':
+        if comment.get('user', {}).get('login') != 'psap-forge-bot[bot]':
             continue
         body = comment.get('body', '')
         if not re.search(r'\b(success|successful|succeeded|passed)\b', body, re.I):
