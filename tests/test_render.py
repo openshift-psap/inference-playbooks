@@ -1,6 +1,10 @@
 """Tests for Recipe v4 template rendering."""
 
+import json
+import shlex
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,7 +16,9 @@ sys.path.insert(0, str(REPO / "tools"))
 from render import (
     TEMPLATE_MAP,
     build_template_context,
+    merge_overrides,
     render_template,
+    run_kustomize,
     sanitize_name,
     select_template,
 )
@@ -204,6 +210,25 @@ class BuildContextTests(unittest.TestCase):
 
 class RenderTemplateTests(unittest.TestCase):
     """Test actual Jinja2 template rendering."""
+
+    def test_shell_quoted_json_override_survives_args_env_rendering(self):
+        payload = json.dumps({"label": "a b's", "enabled": True})
+        flag = "--example-options"
+        merged = merge_overrides(
+            {"args": [{"flag": flag, "value": payload}]},
+            {"args": [{"flag": flag, "value": shlex.quote(payload)}]},
+        )
+        context = {
+            "name": "example-service", "model": "example/model",
+            "pvc_name": "example-cache", "replicas": 1, "tp": 2,
+            "gpu_count": 2,
+            "resources": {"requests": {}, "limits": {}}, "port": 8000,
+            "env": [], "args": merged["args"],
+        }
+        parsed = yaml.safe_load(render_template("rhoai/llmisvc.yaml.j2", context))
+        env = parsed["spec"]["template"]["containers"][0]["env"]
+        args_env = next(item["value"] for item in env if item["name"] == "VLLM_ADDITIONAL_ARGS")
+        self.assertEqual(shlex.split(args_env), [flag, payload])
 
     def test_vllm_deployment_renders(self):
         recipe = make_recipe(tp=1)
@@ -520,6 +545,42 @@ class RenderRecipeIntegrationTests(unittest.TestCase):
         rendered, errors = render_recipe(self.tmpdir, recipe_path, dry_run=True)
         self.assertFalse(errors, errors)
         self.assertEqual(rendered, "")
+
+
+class KustomizeOverlayTests(unittest.TestCase):
+    """Generic custom-resource overlay behavior, independent of recipe identity."""
+
+    @unittest.skipUnless(shutil.which("kustomize"), "Kustomize required for overlay integration")
+    def test_json6902_image_patch_preserves_custom_resource_container_fields(self):
+        base = {
+            "apiVersion": "example.test/v1", "kind": "ExampleService",
+            "metadata": {"name": "example-service"},
+            "spec": {"template": {"containers": [
+                {"name": "main", "env": [{"name": "EXAMPLE", "value": "preserve"}],
+                 "resources": {"requests": {"cpu": "1"}}},
+                {"name": "sidecar", "image": "registry.example.com/sidecar:fixture"},
+            ]}},
+        }
+        replacement = "registry.example.com/runtime:replacement"
+        patch = [
+            {"op": "test", "path": "/spec/template/containers/0/name", "value": "main"},
+            {"op": "add", "path": "/spec/template/containers/0/image", "value": replacement},
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            config = directory / "config"
+            config.mkdir()
+            (config / "image.yaml").write_text(yaml.safe_dump(patch))
+            (config / "kustomization.yaml").write_text(yaml.safe_dump({
+                "resources": ["../manifests/example.yaml"],
+                "patches": [{"path": "image.yaml", "target": {
+                    "group": "example.test", "version": "v1", "kind": "ExampleService",
+                    "name": "example-service",
+                }}],
+            }))
+            actual = yaml.safe_load(run_kustomize(yaml.safe_dump(base), directory))
+        base["spec"]["template"]["containers"][0]["image"] = replacement
+        self.assertEqual(actual, base)
 
 
 if __name__ == "__main__":

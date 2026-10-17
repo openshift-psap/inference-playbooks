@@ -1,0 +1,10 @@
+# RHOAI 3.5.0-GA single-node serving overrides.
+# Controller evaluates VLLM_ADDITIONAL_ARGS as shell text: preserve JSON quotes.
+# This is a platform-specific serialization of the base speculative-config value,
+# not a different MTP method or token count.
+args:
+  - flag: --speculative-config
+    value: >-
+      '{"method":"mtp","num_speculative_tokens":5}'
+    required: true
+    why: Shell-quote the existing JSON value for the controller's eval without changing its fields.
