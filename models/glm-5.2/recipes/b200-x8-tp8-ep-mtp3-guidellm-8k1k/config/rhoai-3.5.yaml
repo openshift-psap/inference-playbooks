@@ -1,0 +1,133 @@
+# JSON patches preserve generated container fields. Strategic merge of this
+# custom resource can replace the entire containers list without an OpenAPI
+# merge key, silently dropping generated flags, environment and GPU resources.
+- op: add
+  path: /metadata/labels
+  value:
+    app.kubernetes.io/name: glm-5-2
+    app.kubernetes.io/component: aggregated-b200
+    llm-d.ai/model: glm5.2
+    llm-d.ai/profile: aggregated-b200
+- op: add
+  path: /spec/baseRefs
+  value:
+    - name: v3-5-0-kserve-config-llm-template
+    - name: v3-5-0-kserve-config-llm-single-node-template-nvidia-cuda
+    - name: v3-5-0-kserve-config-llm-scheduler
+    - name: v3-5-0-kserve-config-llm-router-route
+- op: replace
+  path: /spec/replicas
+  value: 0
+- op: add
+  path: /spec/router
+  value:
+    route: {}
+    scheduler: {}
+- op: add
+  path: /spec/template/nodeSelector
+  value:
+    nvidia.com/gpu.product: NVIDIA-B200
+- op: add
+  path: /spec/template/initContainers
+  value:
+    # Runtime workaround, not a customer-ready or disconnected install path.
+    - name: install-instanttensor
+      image: docker.io/vllm/vllm-openai:v0.27.0
+      command:
+        - /bin/bash
+        - -lc
+        - python3 -m pip install --no-cache-dir --no-deps --index-url https://pypi.org/simple --target /opt/pydeps instanttensor==0.1.9
+      volumeMounts:
+        - name: pydeps
+          mountPath: /opt/pydeps
+# The current RHOAI TP template omits serving.image; keep both images aligned
+# with recipe.yaml until that shared template supports the image field.
+- op: add
+  path: /spec/template/containers/0/image
+  value: docker.io/vllm/vllm-openai:v0.27.0
+- op: add
+  path: /spec/template/containers/0/imagePullPolicy
+  value: IfNotPresent
+- op: add
+  path: /spec/template/containers/0/command
+  value:
+    - /bin/bash
+    - -c
+    - |-
+      set -euo pipefail
+      # Recipe values are whitespace-free, including compact speculative JSON.
+      # Array splitting preserves JSON quotes without eval or pathname expansion.
+      read -r -a serving_args <<< "${VLLM_ADDITIONAL_ARGS}"
+      exec vllm serve "{{ .Spec.Model.Name }}" \
+        --port 8000 \
+        --tensor-parallel-size "{{ .Spec.Parallelism.Tensor }}" \
+        "${serving_args[@]}" \
+        {{ if .GlobalConfig.EnableTLS }}--enable-ssl-refresh \
+        --ssl-certfile /var/run/kserve/tls/tls.crt \
+        --ssl-keyfile /var/run/kserve/tls/tls.key{{ end }}
+- op: replace
+  path: /spec/template/containers/0/env/0/valueFrom/secretKeyRef/name
+  value: llm-d-hf-token
+# The current template drops ephemeral-storage; preserve both bounds.
+- op: add
+  path: /spec/template/containers/0/resources/requests/ephemeral-storage
+  value: 1Ti
+- op: add
+  path: /spec/template/containers/0/resources/limits/ephemeral-storage
+  value: 1Ti
+- op: replace
+  path: /spec/template/containers/0/volumeMounts
+  value:
+    - name: dshm
+      mountPath: /dev/shm
+    - name: hf-cache
+      mountPath: /var/cache/huggingface
+    - name: jit-cache
+      mountPath: /var/cache/vllm
+    - name: pydeps
+      mountPath: /opt/pydeps
+- op: replace
+  path: /spec/template/containers/0/startupProbe
+  value:
+    httpGet:
+      path: /health
+      port: 8000
+      scheme: '{{ if .GlobalConfig.EnableTLS }}HTTPS{{else}}HTTP{{end}}'
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 270
+- op: add
+  path: /spec/template/containers/0/readinessProbe
+  value:
+    httpGet:
+      path: /health
+      port: 8000
+      scheme: '{{ if .GlobalConfig.EnableTLS }}HTTPS{{else}}HTTP{{end}}'
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 60
+- op: add
+  path: /spec/template/containers/0/livenessProbe
+  value:
+    httpGet:
+      path: /health
+      port: 8000
+      scheme: '{{ if .GlobalConfig.EnableTLS }}HTTPS{{else}}HTTP{{end}}'
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 3
+- op: replace
+  path: /spec/template/volumes
+  value:
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+    - name: hf-cache
+      persistentVolumeClaim:
+        claimName: glm-5-2-hf-cache
+    - name: jit-cache
+      persistentVolumeClaim:
+        claimName: glm-5-2-jit-cache
+    - name: pydeps
+      emptyDir: {}

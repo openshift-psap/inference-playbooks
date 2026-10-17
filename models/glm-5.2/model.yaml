@@ -10,3 +10,5 @@ architectures:
 quantizations:
   - name: FP8
     huggingface_id: zai-org/GLM-5.2-FP8
+  - name: NVFP4-FP8
+    huggingface_id: RedHatAI/GLM-5.2-NVFP4-FP8
