@@ -1,0 +1,91 @@
+# Root execution needs the namespace's anyuid-authorized service account. The
+# upstream image needs no site-packages patch.
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/serviceAccountName
+  value: default
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/serviceAccountName
+  value: default
+# LWS mirrors this pod profile into legacy seccomp annotations, which Janus's
+# anyuid SCC rejects. Leave the profile to the cluster's runtime default.
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/seccompProfile
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/seccompProfile
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsNonRoot
+  value: false
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsUser
+  value: 0
+- op: replace
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsNonRoot
+  value: false
+- op: replace
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsUser
+  value: 0
+# Local model staging does not require the template's HF_TOKEN secret.
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/env/0
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0
+# Janus allocates each GPU and its paired NIC through composite DRA, so suppress
+# the template's ordinary GPU request and request eight paired devices per pod.
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/requests/composite.dra.io~1gpu-nic-pair
+  value: "8"
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/composite.dra.io~1gpu-nic-pair
+  value: "8"
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/requests/composite.dra.io~1gpu-nic-pair
+  value: "8"
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/composite.dra.io~1gpu-nic-pair
+  value: "8"
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/requests/nvidia.com~1gpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/nvidia.com~1gpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/requests/nvidia.com~1gpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/nvidia.com~1gpu
+# Preserve the source's CPU request without the template's eight-core cap.
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/cpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/cpu
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/imagePullPolicy
+  value: IfNotPresent
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/imagePullPolicy
+  value: IfNotPresent
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/volumeMounts/-
+  value: &model_mount {name: model, mountPath: /models}
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/volumeMounts/-
+  value: *model_mount
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/volumes/-
+  value: &model_volume
+    name: model
+    persistentVolumeClaim:
+      claimName: inference-playbooks-model-kimi-k3-9fcb53074b
+      readOnly: true
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
+  value: *model_volume
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/volumes/0/emptyDir/sizeLimit
+  value: 16Gi
+- op: replace
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/volumes/0/emptyDir/sizeLimit
+  value: 16Gi
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/readinessProbe/initialDelaySeconds
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/readinessProbe/timeoutSeconds
+  value: 5
