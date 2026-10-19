@@ -52,6 +52,8 @@ def test_current_entries_follow_repository_inputs():
     assert {model['id'] for model in result['models']} == {recipe['model_id'] for recipe in recipes}
     assert all(entry['evidence'] == [] and entry['validation']['state'] == 'none' for entry in result['entries'])
     assert len({entry['id'] for entry in result['entries']}) == len(result['entries'])
+    quantizations = {(recipe['model_id'], recipe['recipe_id']): recipe.get('quantization') for recipe in recipes}
+    assert all(entry['quantization'] == quantizations[(entry['model_id'], entry['recipe_id'])] for entry in result['entries'])
 
 
 def test_deterministic_exact_artifacts_and_allocation():

@@ -22,14 +22,13 @@ def test_compact_header_and_layout_hooks(page, served, model):
     expect(page.get_by_role('button', name='Quick start', exact=True)).to_be_visible()
 
 
-def test_missing_qwen_quickstart_is_neutral_placeholder(page, served):
+def test_missing_qwen_walkthrough_does_not_invent_setup_instructions(page, served):
     page.goto(f'{served[0]}?model=qwen3-235b-a22b')
     page.get_by_role('button', name='Quick start', exact=True).click()
     panel = page.locator('.panel')
-    expect(panel).to_contain_text('Quickstart notes have not been supplied for this recipe.')
-    expect(panel).to_contain_text('not requirements for this recipe')
-    expect(panel).to_contain_text('PVC access mode (RWO/RWX)')
-    expect(panel).to_contain_text('weights pre-download')
+    expect(panel).to_contain_text('No deployment walkthrough has been supplied for this recipe.')
+    expect(panel).to_contain_text('Open Configuration to review and download the manifests.')
+    expect(panel).not_to_contain_text('Examples for future prerequisite notes')
     assert 'requires RWX' not in panel.inner_text()
     expect(panel.locator('pre')).to_have_count(0)
 
@@ -66,4 +65,38 @@ def test_validation_attribution_and_empty_steps_preserved(page, served):
     expect(page.locator('.model-meta')).to_contain_text('Engine: Unknown (unresolved source mapping)')
     expect(page.locator('.model-card')).to_contain_text('Selected platform has not been independently validated. Tested on vllm source-version.')
     page.get_by_role('button', name='Quick start', exact=True).click()
-    expect(page.locator('.panel')).to_contain_text('Quickstart notes have not been supplied for this recipe.')
+    expect(page.locator('.panel')).to_contain_text('No deployment walkthrough has been supplied for this recipe.')
+
+
+def test_kimi_walkthrough_has_copyable_commands_and_expected_results(page, served):
+    entry = next(entry for entry in served[1]['entries'] if entry['model_id'] == 'kimi-k3')
+    page.add_init_script("Object.defineProperty(navigator, 'clipboard', {value: {writeText: async text => {window.copiedText = text;}}});")
+    page.goto(f'{served[0]}?model=kimi-k3')
+    page.get_by_role('button', name='Quick start', exact=True).click()
+    panel = page.locator('.panel')
+    expect(panel).not_to_contain_text('Contributor notes are source prose')
+    expect(panel.locator('.quickstart-step')).to_have_count(len(entry['notes']['quickstart']))
+    for index, step in enumerate(entry['notes']['quickstart']):
+        section = panel.locator('.quickstart-step').nth(index)
+        expect(section.get_by_role('heading')).to_have_text(step['step'])
+        expect(section.locator('pre')).to_have_text(step['commands'])
+        expect(section.locator('.quickstart-expected')).to_have_text('Expected result: ' + step['expected'])
+        section.get_by_role('button', name='Copy', exact=True).click()
+        expect(section.get_by_role('button', name='Copied', exact=True)).to_be_visible()
+        assert page.evaluate('window.copiedText') == step['commands']
+        expect(section.get_by_role('button', name='Download', exact=True)).to_have_count(0)
+    expect(panel).to_contain_text('Stop if any of these are wrong')
+    expect(panel).to_contain_text('HTTP success alone is not an accuracy check')
+
+
+def test_quickstart_commands_are_text_not_executable_html(page, served):
+    payload = copy.deepcopy(served[1])
+    entry = payload['entries'][0]
+    command = '<img src=x onerror="window.executed=true">'
+    entry['notes'] = {'quickstart': [{'step': 'Inspect safely', 'commands': command, 'expected': '<script>window.executed=true</script>'}]}
+    page.route('**/catalog.json', lambda route: route.fulfill(json=payload))
+    page.goto(served[0])
+    page.get_by_role('button', name='Quick start', exact=True).click()
+    expect(page.locator('.panel pre')).to_have_text(command)
+    expect(page.locator('.panel img, .panel script')).to_have_count(0)
+    assert page.evaluate('window.executed') is None

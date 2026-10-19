@@ -36,8 +36,8 @@ def test_invalid_urls_model_switch_and_ambiguity(page, served):
     expect(page.locator('.model-card')).to_contain_text(entries[0]['maturity'])
     model = next(model for model in served[1]['models'] if model['id'] == 'gemma-4')
     page.get_by_role('radio', name=model['name'], exact=True).check()
-    expect(page.locator('.panel')).to_contain_text('1 GPUs')
-    expect(page.locator('.panel')).to_contain_text('8 accelerators')
+    expect(page.locator('.panel')).to_contain_text('1 GPU (no tensor sharding)')
+    expect(page.locator('.panel')).to_contain_text('GPUs per node')
 
 
 def test_empty_catalog_and_model_without_recipes(page, served):

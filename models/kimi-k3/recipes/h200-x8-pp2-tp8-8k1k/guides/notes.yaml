@@ -52,8 +52,69 @@ known_issues:
     impact: The source sweep's input distribution does not represent the selected workload.
     mitigation: Run the target workload and commit its exact harness configuration, prompt provenance, raw output, and normalized results.
 quickstart:
-  - {step: Prepare, detail: "Install the LeaderWorkerSet controller and composite DRA GPU/NIC-pair driver; verify the pre-populated RWX model claim, image availability, and anyuid authorization for the default service account."}
-  - {step: Network, detail: Verify target-cluster HCA and GID settings symmetrically; see recipe.yaml and the referenced hardware profile.}
-  - {step: Render, detail: Run tools/render.py for this recipe; config/ is an overlay and must not be applied directly.}
-  - {step: Deploy, detail: "Apply manifests/vllm-v0.29.0/leaderworkerset.yaml, which contains both the LeaderWorkerSet and leader-only Service."}
-  - {step: Verify, detail: "Wait for leader health, query /v1/models through the Service, then benchmark and record sanitized artifacts. Use guides/validation.md for the promotion reviewer checklist."}
+  - step: 1. Choose your cluster and namespace
+    detail: |-
+      Run these commands from the repository root, with Python tooling dependencies and Kustomize installed. Replace the namespace placeholder with an existing namespace you are allowed to deploy into. Check the printed cluster context before continuing.
+      This recipe starts one serving group across two nodes: a leader accepts API requests and a worker provides the second pipeline stage. Each node needs eight free H200 GPUs. This is an unverified configuration, not a production-ready install.
+    commands: |-
+      kubectl config current-context
+      export NAMESPACE='replace-with-your-namespace'
+      export RECIPE='models/kimi-k3/recipes/h200-x8-pp2-tp8-8k1k/recipe.yaml'
+      kubectl get namespace "$NAMESPACE"
+      kubectl get nodes -L nvidia.com/gpu.product
+    expected: The context is your intended cluster, the namespace exists, and two suitable H200 nodes are available. Stop if any of these are wrong.
+  - step: 2. Confirm the cluster is ready for this deployment
+    detail: |-
+      Ask the cluster administrator to confirm the LeaderWorkerSet controller is running. It creates and manages the two related pods. The composite DRA driver must also be installed: this recipe requests paired GPU and network devices, not ordinary GPU resources.
+      Both nodes must have compatible NVIDIA drivers and working RDMA connectivity. Review NCCL_IB_HCA and NCCL_IB_GID_INDEX in the recipe with the administrator; the submitted values are site-specific, not universal defaults.
+      The containers run as root. On OpenShift, the namespace's default service account must already be allowed to use the anyuid SCC. Do not grant broad privileges just to bypass an admission error. Operator, network and security installation are prerequisites, not actions performed by this recipe.
+    commands: |-
+      kubectl get crd leaderworkersets.leaderworkerset.x-k8s.io
+      kubectl -n "$NAMESPACE" get serviceaccount default
+    expected: The CRD and service account exist, and the administrator has confirmed controller health, paired-device allocation, network connectivity and admission permissions. These two commands alone do not prove all prerequisites are satisfied.
+  - step: 3. Check the shared model storage
+    detail: |-
+      Both pods read the model from the same existing volume. The claim must be Bound, support ReadWriteMany, and already contain the complete checkpoint at the model path declared in the recipe. Nothing in this walkthrough downloads model weights or creates storage.
+      If your claim has a different name, update deployment.storage.pvc.name in the recipe and both claimName values in config/lws-patch.yaml before rendering. See guides/storage.md for the mount layout and permission requirements.
+    commands: |-
+      export MODEL_CLAIM="$(python3 -c 'import os, yaml; print(yaml.safe_load(open(os.environ["RECIPE"]))["deployment"]["storage"]["pvc"]["name"])')"
+      kubectl -n "$NAMESPACE" get pvc "$MODEL_CLAIM" -o wide
+    expected: The claim is Bound with RWX access. Its owner has confirmed the complete checkpoint and read permissions for both nodes; a Bound claim alone does not establish that weights are present.
+  - step: 4. Generate and review the deployment file
+    detail: |-
+      The renderer combines recipe settings with the local patches. Apply only the resulting manifest, not the config directory. Review the generated file before the dry-run: it contains both the two-pod LeaderWorkerSet and the Service that forwards requests to its leader.
+      The dry-run asks your cluster to validate the submitted resources without saving them. It cannot prove that future pods will be admitted or that the model will load.
+    commands: |-
+      python3 tools/render.py "$RECIPE"
+      python3 tools/check_manifests.py "$(dirname "$RECIPE")"
+      export MANIFEST="$(python3 -c 'import os, pathlib, yaml; p = pathlib.Path(os.environ["RECIPE"]); print(p.parent / yaml.safe_load(p.read_text())["deployment"]["manifests"][0]["path"])')"
+      cat "$MANIFEST"
+      kubectl -n "$NAMESPACE" apply --dry-run=server -f "$MANIFEST"
+    expected: Rendering and drift checks pass. The file contains the intended resources, and server-side validation reports no errors. If validation fails, resolve the reported prerequisite or configuration issue before applying.
+  - step: 5. Start the serving group and watch startup
+    detail: |-
+      Applying the file requests GPU capacity and starts model loading. Only continue after reviewing the previous step. The watch command keeps running; press Ctrl-C once both pods are Ready, or to stop watching and investigate a failure. Ctrl-C does not stop the deployment.
+      Loading a large model can take a long time. If pods stay Pending or restart, use describe for scheduling/admission events and logs for model or distributed-startup errors.
+    commands: |-
+      kubectl -n "$NAMESPACE" apply -f "$MANIFEST"
+      export LWS="$(python3 -c 'import os, yaml; print(next(d["metadata"]["name"] for d in yaml.safe_load_all(open(os.environ["MANIFEST"])) if d and d.get("kind") == "LeaderWorkerSet"))')"
+      kubectl -n "$NAMESPACE" get pods -l "leaderworkerset.sigs.k8s.io/name=$LWS" -w
+      # Run after stopping the watch if startup needs investigation:
+      kubectl -n "$NAMESPACE" describe pods -l "leaderworkerset.sigs.k8s.io/name=$LWS"
+    expected: The group has two Ready pods, one leader and one worker. Pending or restarting pods are not a successful deployment.
+  - step: 6. Reach the API and send a small test request
+    detail: |-
+      Run the port-forward command in the current terminal and leave it running. In a second terminal, run the curl commands shown below. The Service selects only the leader; do not send requests directly to the worker.
+      A successful response is a basic serving check, not a benchmark. The configured total context budget is smaller than an 8K-input plus 1K-output benchmark request, so review that setting before attempting the advertised workload profile. See guides/validation.md before making validation or performance claims.
+    commands: |-
+      # Terminal 1 (keep the variables from the previous steps):
+      export SERVICE="$(python3 -c 'import os, yaml; print(next(d["metadata"]["name"] for d in yaml.safe_load_all(open(os.environ["MANIFEST"])) if d and d.get("kind") == "Service"))')"
+      kubectl -n "$NAMESPACE" port-forward "service/$SERVICE" 8000:8000
+
+      # Terminal 2:
+      curl --fail --silent --show-error http://127.0.0.1:8000/health
+      curl --fail --silent --show-error http://127.0.0.1:8000/v1/models
+      # Copy the exact model id from the /v1/models response:
+      export MODEL_ID='replace-with-returned-model-id'
+      python3 -c 'import json, os; print(json.dumps({"model": os.environ["MODEL_ID"], "messages": [{"role": "user", "content": "Reply with one short greeting."}], "max_tokens": 64}))' | curl --fail --silent --show-error http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @-
+    expected: /health succeeds, /v1/models lists the loaded checkpoint, and chat/completions returns a valid completion response without a server error. Inspect the response content; HTTP success alone is not an accuracy check.
