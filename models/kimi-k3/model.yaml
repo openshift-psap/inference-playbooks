@@ -1,0 +1,11 @@
+schema_version: 2
+model_id: kimi-k3
+name: Kimi K3
+family: Kimi
+huggingface_id: moonshotai/Kimi-K3
+source: huggingface
+model_type: kimi_k3
+architectures:
+  - KimiK3ForConditionalGeneration
+quantizations:
+  - name: MXFP4
