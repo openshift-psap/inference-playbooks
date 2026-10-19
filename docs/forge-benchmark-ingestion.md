@@ -9,18 +9,22 @@ Failed, ambiguous, stale, unavailable, or unattributed evidence fails closed.
 No cluster access is used. Imports open a separate evidence PR, never push to
 `main`, and never promote maturity or platform verification.
 
-Only the selected execution's parent and eligible direct children are imported.
-The selected execution must match the final PR head through authoritative
-`playbooks.tested_revision` attribution; an override such as `PULL_PULL_SHA` is
-not evidence of the tested recipe revision. A missing/malformed primary link,
+Current Forge executions publish consolidated KPIs on the selected parent at
+`01__test/<ordinal>__postprocessing/kpis/kpis.json`. Import these without
+enumerating children; ignore `historical_data` archives, never substitute them.
+Legacy executions without consolidated parent KPIs retain direct-child intake.
+The selected execution must match the final recipe PR head. For tagless current
+executions, use recorded `FORGE_FOREIGN_TESTING_PULL_PULL_SHA`, not the Forge
+checkout's `PULL_PULL_SHA`. This is the CI-requested/tested recipe context, not
+an independent attestation of the actual checkout. A missing/malformed primary link,
 empty execution, attribution mismatch, unsupported/malformed artifact, or
 permission/network error fails ingestion. **There is no fallback to older
 executions.** No trusted success report and automation evidence PRs remain no-ops.
 
 Successful complete ingestion writes one positive `forge-import.json` receipt
-beside its first output `run.yaml`. The parent must be `FINISHED`; any nonterminal
-direct child blocks admission before writes. Terminal `FAILED`/`KILLED` children
-remain ineligible. The receipt binds the entire normalized positive output set,
+beside its first output `run.yaml`. The parent must be `FINISHED`; for legacy
+direct-child discovery, any nonterminal direct child blocks admission before
+writes. Terminal `FAILED`/`KILLED` children remain ineligible. The receipt binds the entire normalized positive output set,
 source PR/revision, origin/workspace/parent identity, recipe ownership, and Git
 blob identities for each raw/result/run file. It stores no empty-run outcomes.
 
@@ -45,10 +49,56 @@ remain build artifacts and are not included in the evidence import PR.
 The separate Pages workflow builds and publishes reviewed evidence after merge
 to `main`; ingestion itself does not publish the site or promote recipe maturity.
 
-## Required Forge contract
+## Execution metadata
 
-The parent/benchmark run must be `FINISHED`. Parent tags are inherited; child
-tags override them. Forge must supply these explicit tags:
+Consolidated parent imports do not require custom `playbooks.*` tags. When these
+tags are incomplete, intake reads existing parent artifacts to populate the
+unchanged benchmark-run fields:
+
+- `01__test/000__ci_metadata/fournos_fjob.yaml`: foreign recipe PR number and
+  requested/tested recipe SHA from `spec.env`, checked against the final PR SHA.
+- `01__test/001__inference_playbooks_test_dir/config.yaml`: explicit recipe and
+  manifest selection, matched to the tested recipe, model, profile, and platform.
+- `01__test/run.log`: the recorded common Forge test invocation. It is not
+  reconstructed from configuration.
+
+Within that test directory, the serving inputs are fixed by kind:
+
+| Kind | Launch configuration | Runtime digest source |
+| --- | --- | --- |
+| Deployment | `src/<unique-name>-deployment.yaml`, `vllm` container arguments | Matching ready serving-container status in `01__test/run.log` |
+| LeaderWorkerSet | `src/<unique-name>-lws.yaml`, nested leader/worker templates and shell `vllm serve` arguments | `<ordinal>__capture_lws_state/artifacts/leaderworkerset.pods.yaml` |
+| LLMInferenceService | `src/<unique-service-name>.yaml`, `spec.model`, template/worker configuration and captured serving-pod arguments | `<ordinal>__capture_llmisvc_state/artifacts/llminferenceservice.pods.yaml` |
+
+Only the known `src/` and test directory are listed to resolve variable launch
+names and capture ordinals. There is no recursive runtime-artifact search or
+alternate digest-source fallback. LWS selects `vllm`, `vllm-leader`, or
+`vllm-worker` containers from its role templates. LLMInferenceService selects
+the `main` container running vLLM, not router, sidecar, or init containers.
+Declared revisions come from serving arguments or `VLLM_ADDITIONAL_ARGS`;
+omission uses the accepted `main` default. Model-less LWS workers share the
+leader's model load. LLMInferenceService supports HF and PVC model URIs; PVC
+contents, cache preparation, and weight revisions are not independently checked.
+The recipe and ordinary run model labels supply checkpoint identity. A local
+`/mnt/models` path or `spec.model.name` request alias is not treated as an HF ID.
+
+Serving roles must provide ready runtime image digests. Different serving-role
+digests are explicitly unsupported by the existing single-`image_digest` contract;
+no role is silently preferred. Missing or ambiguous required records reject
+intake. LLMInferenceService prefill-role layouts remain unsupported.
+
+Any supplied attribution tags must agree with acquired execution values. No
+execution logs/configuration are committed: run-level provenance uses the existing
+parent MLflow URL, while raw KPIs and their existing checksum remain unchanged.
+
+The existing model identity checks are unchanged: new KPI `served_model` labels
+identify the exact served checkpoint, alongside declared base model/quantization.
+Historical base-only labels do not establish a different quantized checkpoint.
+
+### Existing tagged execution contract
+
+Legacy tagged intake remains supported. The parent/benchmark run must be
+`FINISHED`. Parent tags are inherited; child tags override them. Its tags are:
 
 | Tag | Meaning |
 | --- | --- |
@@ -65,8 +115,8 @@ tags override them. Forge must supply these explicit tags:
 
 The model repository is the tested recipe's `serving.model`. Its declared
 revision is recorded exactly as supplied, without resolving it to a commit hash.
-Forge supplies `main` for the default revision; ingestion still requires the
-explicit tag and never defaults a missing tag. Revision identifiers must be
+Tagged intake supplies `main` explicitly for the default revision. Tagless
+execution intake uses the serving arguments' default when omitted. Identifiers must be
 nonempty, contain no whitespace or control characters, and pass the shared
 artifact privacy guard. A Hugging Face repository with its declared revision
 is sufficient model identity; a model commit pin is not required.
@@ -77,10 +127,11 @@ links. `playbooks.expected_concurrencies` is a JSON object, for example
 only when its points exactly match the explicit intended levels. Otherwise
 it is `partial`; ≤2 points, `ci-quick`, and smoke workload keys are `smoke`.
 
-The real PR #34 fixture lacks the required attribution tags. It is usable for
-normalizer tests, **not automatic publication**. Its JSON formatting is
+The real PR #34 execution tested recipe SHA `eecf4808…`, not its final PR head
+`e4fddc2…`. It is ineligible for import, regardless of tag availability or the
+separate Forge SHA. Its fixture is usable for normalizer tests, **not automatic
+publication**. Its JSON formatting is
 compact, but all source values, labels, and unknown KPIs are retained.
-Add attribution tags in Forge before enabling production ingestion.
 Names/GPU counts are never guessed from paths, cluster aliases, or KPI labels.
 KPI model/version labels, when present, must agree with the selected
 model/vLLM platform.
@@ -134,8 +185,10 @@ python3 -m pytest tests/test_forge_evidence.py -q
 python3 tools/validate.py --current
 ```
 
-Each harness receives its own `results/forge-<child-id>-<harness>/` containing
+Each harness receives its own `results/forge-<artifact-run-id>-<harness>/` containing
 unaltered `kpis.json`, normalized `result.json`, and `run.yaml` provenance.
+For consolidated parent KPIs, the artifact run ID and both existing MLflow run-ID
+fields identify the parent; GuideLLM and AIPerf retain separate harness outputs.
 SHA-256 and deterministic offline normalization are checked by the shared
 validator in local/pre-commit/CI. Unknown KPIs stay in the raw artifact.
 Missing percentiles are null, GuideLLM latency seconds become milliseconds,

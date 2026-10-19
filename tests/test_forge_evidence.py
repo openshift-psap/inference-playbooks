@@ -6,6 +6,7 @@ import subprocess
 import sys
 import shutil
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import jsonschema
 import pytest
@@ -233,6 +234,312 @@ def variant_intake(intake):
                               capture_output=True, text=True).stdout.strip()
     next(tag for tag in parent['data']['tags'] if tag['key'] == 'playbooks.tested_revision')['value'] = revision
     return repo, path, revision, client, parent, values
+
+
+@pytest.fixture
+def parent_intake(variant_intake, kpis):
+    repo, path, revision, client, parent, _ = variant_intake
+    parent['data']['tags'] = []
+    for test in kpis['tests']:
+        test['labels'].update(model_name='example/base', served_model='example/base-FP8', quantization='fp8')
+    raw = json.dumps(kpis).encode()
+    source = '01__test/001__inference_playbooks_test_dir/src/server-deployment.yaml'
+    artifacts = {
+        '01__test/000__ci_metadata/fournos_fjob.yaml': yaml.safe_dump({'spec': {'env': {
+            'FORGE_FOREIGN_TESTING_PULL_PULL_SHA': revision, 'FORGE_FOREIGN_TESTING_PULL_NUMBER': '34',
+            'PULL_PULL_SHA': '5' * 40}}}),
+        '01__test/001__inference_playbooks_test_dir/config.yaml': yaml.safe_dump({'inference_playbooks': {'recipe': 'test-recipe',
+            'manifest_path': 'models/test/recipes/test-recipe/manifests/vllm-0.24.0/deployment.yaml'}}),
+        source: yaml.safe_dump({'kind': 'Deployment', 'spec': {'template': {'spec': {'containers': [
+            {'name': 'vllm', 'image': 'docker.io/vllm/vllm-openai:v0.24.0', 'args': ['example/base-FP8']}]}}}}),
+        '01__test/run.log': ('   Command: /usr/bin/python3 /app/forge/projects/inference_playbooks/orchestration/ci.py test\n'
+            '|       containerStatuses:\n|       - allocatedResources: {}\n|         containerID: cri-o://example\n'
+            '|         image: docker.io/vllm/vllm-openai:v0.24.0\n'
+            '|         imageID: docker.io/vllm/vllm-openai@sha256:' + 'c' * 64 + '\n'
+            '|         lastState: {}\n|         name: vllm\n|         ready: true\n')}
+
+    def request(endpoint, body=None, raw=False):
+        query = parse_qs(urlsplit(endpoint).query)
+        assert query['run_id'] == ['d' * 32]
+        if endpoint.startswith('/get-artifact?'):
+            assert raw is True
+            return artifacts[query['path'][0]].encode()
+        assert query['path'] == ['01__test/001__inference_playbooks_test_dir/src']
+        return {'files': [{'path': source, 'is_dir': False}]}
+
+    client.request = request
+    client.kpis = lambda run_id: ('01__test/002__postprocessing/kpis/kpis.json', raw)
+    client.children = lambda parent: pytest.fail('current parent KPIs must not enumerate children')
+    return repo, path, revision, client, parent, artifacts, raw
+
+
+def test_tagless_parent_two_harnesses_replay_and_receipt(parent_intake, monkeypatch):
+    repo, path, revision, client, _, artifacts, raw = parent_intake
+    import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
+    references = yaml.safe_load(path.read_text())['benchmark_runs']
+    assert len(references) == 2
+    for reference in references:
+        run_path = path.parent / reference
+        run = yaml.safe_load(run_path.read_text())
+        assert run['run_id'] == f'forge-{"d" * 32}-{run["harness"]}'
+        assert run['forge']['mlflow_benchmark_run_id'] == run['forge']['mlflow_parent_run_id'] == 'd' * 32
+        assert f'/runs/{"d" * 32}?' in run['forge']['mlflow_run_url']
+        assert run['environment']['model_revision'] == 'main'
+        assert run['environment']['image_digest'] == 'sha256:' + 'c' * 64
+        assert run['command'] == artifacts['01__test/run.log'].splitlines()[0].strip().removeprefix('Command: ')
+        assert (run_path.parent / 'kpis.json').read_bytes() == raw
+        assert validate_benchmark_run(repo, run_path, run)[0] == []
+    for args in (['add', '.'], ['-c', 'user.email=test@example.org', '-c', 'user.name=Test', 'commit', '-m', 'parent evidence']):
+        subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+    client.request = client.run = client.kpis = lambda *a, **kw: pytest.fail('receipt hit must not contact MLflow')
+    monkeypatch.setattr('fetch_forge_evidence.normalize', lambda *a, **kw: pytest.fail('receipt hit must not normalize'))
+    assert admitted_execution(repo, load_admissions(repo), client, 'd' * 32, revision, 34, {})
+
+
+@pytest.mark.parametrize('failure', ['stale-recipe', 'forge-sha-only', 'pr', 'command', 'digest', 'not-ready',
+                                      'tag-conflict', 'checkpoint', 'old-model-labels', 'yaml'])
+def test_tagless_parent_failure_does_not_write(parent_intake, failure):
+    repo, path, revision, client, parent, artifacts, raw = parent_intake
+    fjob_path = '01__test/000__ci_metadata/fournos_fjob.yaml'
+    fjob = yaml.safe_load(artifacts[fjob_path])
+    if failure == 'stale-recipe':
+        fjob['spec']['env']['FORGE_FOREIGN_TESTING_PULL_PULL_SHA'] = 'eecf4808' + '1' * 32
+        fjob['spec']['env']['PULL_PULL_SHA'] = revision
+    elif failure == 'forge-sha-only':
+        del fjob['spec']['env']['FORGE_FOREIGN_TESTING_PULL_PULL_SHA']
+        fjob['spec']['env']['PULL_PULL_SHA'] = revision
+    elif failure == 'pr':
+        fjob['spec']['env']['FORGE_FOREIGN_TESTING_PULL_NUMBER'] = '35'
+    artifacts[fjob_path] = yaml.safe_dump(fjob)
+    if failure == 'command':
+        artifacts['01__test/run.log'] = '\n'.join(artifacts['01__test/run.log'].splitlines()[1:])
+    elif failure == 'digest':
+        artifacts['01__test/run.log'] = artifacts['01__test/run.log'].replace('sha256:', 'unknown:')
+    elif failure == 'not-ready':
+        artifacts['01__test/run.log'] = artifacts['01__test/run.log'].replace('ready: true', 'ready: false')
+    elif failure == 'tag-conflict':
+        parent['data']['tags'] = [{'key': 'playbooks.model_revision', 'value': 'different'}]
+    elif failure == 'checkpoint':
+        key = next(key for key in artifacts if key.endswith('-deployment.yaml'))
+        artifacts[key] = artifacts[key].replace('example/base-FP8', 'example/other')
+    elif failure == 'old-model-labels':
+        document = json.loads(raw)
+        for test in document['tests']:
+            del test['labels']['served_model']
+        client.kpis = lambda run_id: ('01__test/002__postprocessing/kpis/kpis.json', json.dumps(document).encode())
+    elif failure == 'yaml':
+        artifacts[fjob_path] = 'spec: {}\nspec: {private: do-not-echo}\n'
+    before = path.read_bytes()
+    with pytest.raises(ValueError) as error:
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert 'do-not-echo' not in str(error.value)
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+def test_tagless_parent_explicit_model_revision(parent_intake):
+    repo, path, revision, client, _, artifacts, _ = parent_intake
+    source = next(key for key in artifacts if key.endswith('-deployment.yaml'))
+    deployment = yaml.safe_load(artifacts[source])
+    deployment['spec']['template']['spec']['containers'][0]['args'].append('--revision=release/model-v2')
+    artifacts[source] = yaml.safe_dump(deployment)
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    for reference in yaml.safe_load(path.read_text())['benchmark_runs']:
+        run = yaml.safe_load((path.parent / reference).read_text())
+        assert run['environment']['model_revision'] == 'release/model-v2'
+
+
+@pytest.fixture(params=['LeaderWorkerSet', 'LLMInferenceService'])
+def distributed_intake(parent_intake, request):
+    repo, path, _, client, parent, artifacts, raw = parent_intake
+    kind = request.param
+    recipe = yaml.safe_load(path.read_text())
+    recipe['deployment']['scope'] = 'multi-node'
+    stack, version = ('rhoai', '3.5') if kind == 'LLMInferenceService' else ('vllm', '0.24.0')
+    recipe['platforms'][0].update(stack=stack, version=version)
+    path.write_text(yaml.safe_dump(recipe, sort_keys=False))
+    for args in (['add', '.'], ['-c', 'user.email=test@example.org', '-c', 'user.name=Test', 'commit', '-m', 'distributed fixture']):
+        subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+    revision = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    fjob = '01__test/000__ci_metadata/fournos_fjob.yaml'
+    data = yaml.safe_load(artifacts[fjob])
+    data['spec']['env']['FORGE_FOREIGN_TESTING_PULL_PULL_SHA'] = revision
+    artifacts[fjob] = yaml.safe_dump(data)
+    test_dir = '01__test/001__inference_playbooks_test_dir'
+    config_path = test_dir + '/config.yaml'
+    config = yaml.safe_load(artifacts[config_path])
+    config['inference_playbooks']['manifest_path'] = f'models/test/recipes/test-recipe/manifests/{stack}-{version}/serving.yaml'
+    artifacts[config_path] = yaml.safe_dump(config)
+    del artifacts[test_dir + '/src/server-deployment.yaml']
+    # Distributed captures need no pod status in the parent log, and no PVC/HF
+    # preparation record. The common executed Forge command remains recorded.
+    artifacts['01__test/run.log'] = artifacts['01__test/run.log'].splitlines()[0] + '\n'
+    if kind == 'LeaderWorkerSet':
+        image = 'docker.io/vllm/vllm-openai:v0.24.0'
+        leader = {'name': 'vllm-leader', 'image': image, 'command': ['sh', '-c'], 'args': [
+            'vllm serve example/base-FP8 \\\n  --served-model-name request-alias --nnodes 2 --node-rank 0']}
+        worker = {'name': 'vllm-worker', 'image': image, 'command': ['sh', '-c'], 'args': [
+            'vllm serve example/base-FP8 \\\n  --served-model-name request-alias --nnodes 2 --node-rank $(LWS_WORKER_INDEX) --headless']}
+        manifest = {'kind': kind, 'spec': {'leaderWorkerTemplate': {
+            'leaderTemplate': {'spec': {'containers': [leader]}}, 'workerTemplate': {'spec': {'containers': [worker]}}}}}
+        source = test_dir + '/src/server-12345678-lws.yaml'
+        capture = test_dir + '/003__capture_lws_state'
+        pod_path = capture + '/artifacts/leaderworkerset.pods.yaml'
+    else:
+        image = 'registry.redhat.io/rhaiis/vllm-cuda-rhel9:3.5'
+        override = {'name': 'main', 'env': [{'name': 'VLLM_ADDITIONAL_ARGS', 'value': '--kv-cache-dtype fp8'}]}
+        manifest = {'kind': kind, 'spec': {'model': {'uri': 'pvc://existing-weights', 'name': 'request-alias'},
+            'template': {'containers': [copy.deepcopy(override)]}, 'worker': {'containers': [copy.deepcopy(override)]}}}
+        leader = {**copy.deepcopy(override), 'image': image, 'command': ['/bin/bash', '-c',
+            'eval "exec vllm serve /mnt/models --served-model-name request-alias ${VLLM_ADDITIONAL_ARGS} $@"', '--']}
+        worker = copy.deepcopy(leader)
+        source = test_dir + '/src/server-12345678.yaml'
+        capture = test_dir + '/003__capture_llmisvc_state'
+        pod_path = capture + '/artifacts/llminferenceservice.pods.yaml'
+    pods = []
+    for container in (leader, worker):
+        sidecar = {'name': 'sidecar', 'image': 'registry.example/sidecar:1'}
+        pods.append({'kind': 'Pod', 'spec': {'containers': [copy.deepcopy(container), sidecar]}, 'status': {
+            'containerStatuses': [
+                {'name': container['name'], 'ready': True, 'imageID': image.split(':')[0] + '@sha256:' + 'c' * 64},
+                {'name': 'sidecar', 'ready': True, 'imageID': 'sha256:' + 'd' * 64}],
+            'initContainerStatuses': [{'name': 'init', 'ready': True, 'imageID': 'sha256:' + 'e' * 64}]}})
+    if kind == 'LLMInferenceService':
+        pods.append({'kind': 'Pod', 'spec': {'containers': [{'name': 'main', 'image': 'registry.example/router:1',
+            'command': ['router']}]}, 'status': {'containerStatuses': [{'name': 'main', 'ready': True,
+            'imageID': 'sha256:' + 'f' * 64}]}})
+    artifacts[source] = yaml.safe_dump(manifest)
+    artifacts[pod_path] = yaml.safe_dump({'kind': 'List', 'items': pods})
+
+    def call(endpoint, body=None, raw=False):
+        query = parse_qs(urlsplit(endpoint).query)
+        assert query['run_id'] == ['d' * 32]
+        if endpoint.startswith('/get-artifact?'):
+            assert raw
+            return artifacts[query['path'][0]].encode()
+        directory = query['path'][0]
+        assert directory in (test_dir, test_dir + '/src')
+        return {'files': [{'path': source, 'is_dir': False}]} if directory.endswith('/src') else {
+            'files': [{'path': capture, 'is_dir': True}]}
+
+    client.request = call
+    return repo, path, revision, client, parent, artifacts, raw, kind, source, pod_path
+
+
+@pytest.mark.parametrize('declared_revision', [None, 'release/model-v2'])
+def test_distributed_parent_import_replay_and_receipt(distributed_intake, declared_revision, monkeypatch):
+    repo, path, revision, client, _, artifacts, raw, kind, source, pod_path = distributed_intake
+    if declared_revision:
+        manifest = yaml.safe_load(artifacts[source])
+        if kind == 'LeaderWorkerSet':
+            templates = manifest['spec']['leaderWorkerTemplate']
+            containers = [templates[key]['spec']['containers'][0] for key in ('leaderTemplate', 'workerTemplate')]
+        else:
+            containers = [manifest['spec'][key]['containers'][0] for key in ('template', 'worker')]
+        pods = yaml.safe_load(artifacts[pod_path])
+        containers += [pod['spec']['containers'][0] for pod in pods['items'][:2]]
+        for container in containers:
+            if kind == 'LeaderWorkerSet':
+                container['args'][0] += ' --revision=' + declared_revision
+            else:
+                container['env'][0]['value'] += ' --revision ' + declared_revision
+        artifacts[source] = yaml.safe_dump(manifest)
+        artifacts[pod_path] = yaml.safe_dump(pods)
+    import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
+    references = yaml.safe_load(path.read_text())['benchmark_runs']
+    assert len(references) == 2
+    for reference in references:
+        run_path = path.parent / reference
+        run = yaml.safe_load(run_path.read_text())
+        assert run['environment']['model_revision'] == (declared_revision or 'main')
+        assert run['environment']['image_digest'] == 'sha256:' + 'c' * 64
+        assert run['platform']['stack'] == ('rhoai' if kind == 'LLMInferenceService' else 'vllm')
+        assert run['forge']['mlflow_parent_run_id'] == run['forge']['mlflow_benchmark_run_id'] == 'd' * 32
+        assert (run_path.parent / 'kpis.json').read_bytes() == raw
+        assert validate_benchmark_run(repo, run_path, run)[0] == []
+    for args in (['add', '.'], ['-c', 'user.email=test@example.org', '-c', 'user.name=Test', 'commit', '-m', 'distributed evidence']):
+        subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+    client.request = client.run = client.kpis = lambda *a, **kw: pytest.fail('receipt hit contacted MLflow')
+    monkeypatch.setattr('fetch_forge_evidence.normalize', lambda *a, **kw: pytest.fail('receipt hit normalized KPIs'))
+    assert admitted_execution(repo, load_admissions(repo), client, 'd' * 32, revision, 34, {})
+
+
+@pytest.mark.parametrize('failure', ['heterogeneous', 'missing-runtime', 'not-ready', 'wrong-model', 'wrong-kind', 'model-label-conflict'])
+def test_distributed_parent_failure_does_not_write(distributed_intake, failure):
+    repo, path, revision, client, _, artifacts, raw, kind, source, pod_path = distributed_intake
+    pods = yaml.safe_load(artifacts[pod_path])
+    if failure == 'heterogeneous':
+        pods['items'][1]['status']['containerStatuses'][0]['imageID'] = 'sha256:' + 'b' * 64
+    elif failure == 'missing-runtime':
+        pods['items'] = []
+    elif failure == 'not-ready':
+        pods['items'][1]['status']['containerStatuses'][0]['ready'] = False
+    elif failure == 'wrong-model':
+        container = pods['items'][0]['spec']['containers'][0]
+        key = 'args' if kind == 'LeaderWorkerSet' else 'command'
+        container[key] = [arg.replace('example/base-FP8', 'example/wrong').replace('/mnt/models', 'example/wrong')
+                          for arg in container[key]]
+    elif failure == 'wrong-kind':
+        manifest = yaml.safe_load(artifacts[source])
+        manifest['kind'] = 'StatefulSet'
+        artifacts[source] = yaml.safe_dump(manifest)
+    elif failure == 'model-label-conflict':
+        document = json.loads(raw)
+        document['tests'][0]['labels']['served_model'] = 'request-alias'
+        client.kpis = lambda run_id: ('01__test/002__postprocessing/kpis/kpis.json', json.dumps(document).encode())
+    artifacts[pod_path] = yaml.safe_dump(pods)
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+def test_lws_worker_can_omit_model(distributed_intake):
+    repo, path, revision, client, _, artifacts, _, kind, source, pod_path = distributed_intake
+    if kind != 'LeaderWorkerSet':
+        pytest.skip('LWS worker-only command shape')
+    manifest = yaml.safe_load(artifacts[source])
+    worker = manifest['spec']['leaderWorkerTemplate']['workerTemplate']['spec']['containers'][0]
+    worker['args'] = ['ray start --address=leader:6379 --block']
+    pods = yaml.safe_load(artifacts[pod_path])
+    pods['items'][1]['spec']['containers'][0] = copy.deepcopy(worker)
+    artifacts[source], artifacts[pod_path] = yaml.safe_dump(manifest), yaml.safe_dump(pods)
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert len(yaml.safe_load(path.read_text())['benchmark_runs']) == 2
+
+
+def test_llmisvc_unsupported_model_uri(distributed_intake):
+    repo, _, revision, client, _, artifacts, _, kind, source, _ = distributed_intake
+    if kind != 'LLMInferenceService':
+        pytest.skip('LLMInferenceService model URI shape')
+    manifest = yaml.safe_load(artifacts[source])
+    manifest['spec']['model']['uri'] = 's3://unknown/weights'
+    artifacts[source] = yaml.safe_dump(manifest)
+    with pytest.raises(ValueError, match='unsupported LLMInferenceService model URI'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+
+
+@pytest.mark.parametrize('current_count', [0, 1, 2])
+def test_kpi_discovery_ignores_archives_without_fallback(current_count):
+    client = Client('https://mlflow.example', 'forge-sandbox', 'test', 'test')
+    files = [{'path': '01__test/002__postprocessing/historical_data', 'is_dir': True}]
+    files.extend({'path': f'01__test/{i:03}__postprocessing/kpis/kpis.json', 'is_dir': False}
+                 for i in range(current_count))
+
+    def request(endpoint, body=None, raw=False):
+        query = parse_qs(urlsplit(endpoint).query)
+        assert query.get('path', [''])[0] != '01__test/002__postprocessing/historical_data'
+        return b'current' if raw else {'files': files}
+
+    client.request = request
+    if current_count == 2:
+        with pytest.raises(ValueError, match='ambiguous'):
+            client.kpis('d' * 32)
+    else:
+        assert client.kpis('d' * 32) == (('01__test/000__postprocessing/kpis/kpis.json', b'current')
+                                           if current_count else None)
 
 
 @pytest.mark.parametrize('labels', [

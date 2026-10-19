@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import ssl
 import subprocess
 import sys
@@ -84,6 +85,8 @@ class Client:
                     query['page_token'] = token
                 page = self.request('/api/2.0/mlflow/artifacts/list?' + urlencode(query))
                 for item in page.get('files', []):
+                    if 'historical_data' in item['path'].split('/'):
+                        continue
                     if item.get('is_dir'):
                         pending.append(item['path'])
                     elif item['path'].endswith('/kpis.json') or item['path'] == 'kpis.json':
@@ -91,6 +94,10 @@ class Client:
                 token = page.get('next_page_token')
                 if not token:
                     break
+        current = [path for path in matches if re.fullmatch(
+            r'01__test/\d+__postprocessing/kpis/kpis.json', path)]
+        if current:
+            matches = current
         if not matches:
             return None
         if len(matches) != 1:
@@ -155,6 +162,252 @@ def attribution(repo, values, expected_revision, pr_number):
     safe_artifact({'model_revision': get('model_revision')})
     safe_artifact({'command': get('command')})
     return path, recipe, profile, platform
+
+
+def serving_arguments(container):
+    """Read vLLM argv, including the shell/eval form used by LWS and KServe."""
+    command, args = container.get('command', []), container.get('args', [])
+    try:
+        tokens = []
+        for part in [*command, *args]:
+            tokens.extend(shlex.split(part))
+        # KServe wraps the final invocation in eval "exec vllm serve ...".
+        expanded = []
+        for token in tokens:
+            if re.match(r'(?:exec\s+)?vllm\s+serve\s', token):
+                expanded.extend(shlex.split(token))
+            else:
+                expanded.append(token)
+        tokens = expanded
+        start = next((i for i in range(len(tokens) - 1)
+                      if tokens[i:i + 2] == ['vllm', 'serve']), None)
+        tokens = tokens[start + 2:] if start is not None else args
+        additional = [entry for entry in container.get('env', []) if entry.get('name') == 'VLLM_ADDITIONAL_ARGS']
+        if len(additional) > 1 or any('value' not in entry for entry in additional):
+            raise ValueError('unresolved serving arguments')
+        for entry in additional:
+            tokens = [*tokens, *shlex.split(entry['value'])]
+    except (TypeError, ValueError):
+        raise ValueError('unsupported or unresolved serving arguments') from None
+    model = tokens[0] if start is not None and tokens and not tokens[0].startswith('-') else None
+    revisions = []
+    for i, token in enumerate(tokens):
+        if token in ('--revision', '--model'):
+            if i + 1 == len(tokens) or tokens[i + 1].startswith('-'):
+                raise ValueError('serving model or revision argument is missing')
+            value = tokens[i + 1]
+        elif token.startswith(('--revision=', '--model=')):
+            value = token.partition('=')[2]
+        else:
+            continue
+        if token.startswith('--revision'):
+            revisions.append(value)
+        elif model is not None and model != value:
+            raise ValueError('serving model arguments disagree')
+        else:
+            model = value
+    if len(revisions) > 1:
+        raise ValueError('execution model revision is ambiguous')
+    return model, revisions[0] if revisions else None
+
+
+def distributed_serving_values(manifest, pods, checkpoint):
+    """Use the producer's scoped pod capture, not sidecar/init images or aliases."""
+    kind, spec = manifest['kind'], manifest['spec']
+    if kind == 'LeaderWorkerSet':
+        templates = spec['leaderWorkerTemplate']
+        roles = [templates[key]['spec']['containers'] for key in ('leaderTemplate', 'workerTemplate')]
+        names = {'vllm', 'vllm-leader', 'vllm-worker'}
+    else:
+        roles = [spec['template']['containers']]
+        if 'worker' in spec:
+            roles.append(spec['worker']['containers'])
+        if 'prefill' in spec:
+            raise ValueError('LLMInferenceService prefill serving roles are not supported')
+        names = {'main'}
+    servers = []
+    for role in roles:
+        selected = [container for container in role if container.get('name') in names]
+        if len(selected) != 1:
+            raise ValueError('execution serving role container is missing or ambiguous')
+        servers.append(selected[0])
+
+    uri = spec.get('model', {}).get('uri', '') if kind == 'LLMInferenceService' else ''
+    if kind == 'LLMInferenceService':
+        # PVC contents are not inspected or independently attributed. The recipe
+        # and ordinary run model labels supply identity (checked by PR54).
+        if not uri.startswith('pvc://') and uri != 'hf://' + checkpoint:
+            raise ValueError('unsupported LLMInferenceService model URI or checkpoint')
+
+    if pods.get('kind') not in ('List', 'PodList') or not isinstance(pods.get('items'), list):
+        raise ValueError('serving pod capture must be a Kubernetes List')
+    digests, revisions, observed = set(), set(), set()
+    serving_pods = 0
+    for pod in pods['items']:
+        if pod.get('kind') != 'Pod':
+            raise ValueError('serving pod capture contains a non-Pod item')
+        statuses = pod.get('status', {}).get('containerStatuses', [])
+        matched = False
+        for container in pod.get('spec', {}).get('containers', []):
+            matches = [i for i, server in enumerate(servers) if container.get('name') == server['name']
+                       and (not server.get('image') or container.get('image') == server['image'])]
+            if not matches:
+                continue
+            model, revision = serving_arguments(container)
+            # main is also used by some router pods: only an actual vLLM
+            # invocation is a serving container for LLMInferenceService.
+            if kind == 'LLMInferenceService' and model is None:
+                continue
+            if model is not None and model != checkpoint:
+                if kind != 'LLMInferenceService' or model != '/mnt/models':
+                    raise ValueError('execution served checkpoint disagrees with recipe')
+            for i in matches:
+                declared_model, declared_revision = serving_arguments(servers[i])
+                allowed_models = {checkpoint, '/mnt/models'} if kind == 'LLMInferenceService' else {checkpoint}
+                if declared_model is not None and declared_model not in allowed_models:
+                    raise ValueError('execution served checkpoint disagrees with recipe')
+                if declared_revision is not None and revision != declared_revision:
+                    raise ValueError('runtime serving revision disagrees with role configuration')
+            status = [s for s in statuses if s.get('name') == container['name'] and s.get('ready') is True]
+            if len(status) != 1:
+                raise ValueError('ready serving container runtime evidence is missing or ambiguous')
+            digest = re.fullmatch(r'(?:\S+@)?(sha256:[a-f0-9]{64})', status[0].get('imageID', ''))
+            if not digest:
+                raise ValueError('ready serving container image digest is missing')
+            digests.add(digest[1])
+            # A model-less LWS worker participates in the leader's model load.
+            if model is not None or revision is not None:
+                revisions.add(revision or 'main')
+            observed.update(matches)
+            matched = True
+        serving_pods += matched
+    if observed != set(range(len(servers))) or serving_pods < len(roles):
+        raise ValueError('serving role runtime evidence is missing')
+    if len(digests) != 1:
+        raise ValueError('heterogeneous serving image digests are unsupported by the existing run contract')
+    if len(revisions) != 1:
+        raise ValueError('serving roles have missing or inconsistent model revisions')
+    return revisions.pop(), digests.pop()
+
+
+def execution_values(client, parent_id, repo, expected_revision, pr_number):
+    """Read existing Forge execution metadata into the existing run contract."""
+    def artifact(path):
+        return client.request('/get-artifact?' + urlencode({'run_id': parent_id, 'path': path}), raw=True).decode()
+
+    def document(path):
+        try:
+            return load_unique_yaml(artifact(path))
+        except (yaml.YAMLError, ValueError):
+            raise ValueError('invalid Forge execution YAML') from None
+
+    fjob = document('01__test/000__ci_metadata/fournos_fjob.yaml')
+    env = fjob['spec']['env']
+    # Recorded requested/tested recipe context, not an independent checkout
+    # attestation and not the Forge checkout's PULL_PULL_SHA.
+    revision = env.get('FORGE_FOREIGN_TESTING_PULL_PULL_SHA')
+    if revision != expected_revision or not re.fullmatch('[a-f0-9]{40}', revision or ''):
+        raise ValueError('stale or mismatched tested recipe revision')
+    if str(env.get('FORGE_FOREIGN_TESTING_PULL_NUMBER')) != str(pr_number):
+        raise ValueError('PR attribution mismatch')
+    config = document('01__test/001__inference_playbooks_test_dir/config.yaml')['inference_playbooks']
+    manifest_path = config['manifest_path']
+    match = re.fullmatch(r'(models/[^/]+/recipes/[^/]+)/manifests/[^/]+/[^/]+\.yaml', manifest_path)
+    if not match:
+        raise ValueError('execution manifest path must identify a canonical recipe')
+    relative = match[1] + '/recipe.yaml'
+    path, recipe = tested_inputs(repo, relative, expected_revision)
+    if config['recipe'] != recipe['recipe_id']:
+        raise ValueError('execution recipe identity mismatch')
+    platforms = [p for p in recipe['platforms'] if manifest_path.startswith(
+        f'{match[1]}/manifests/{p["stack"]}-{p["version"]}/')]
+    if len(platforms) != 1:
+        raise ValueError('execution platform is missing or ambiguous')
+    platform = platforms[0]
+    profile = load_unique_yaml(checked_path(repo, recipe['hardware_profile']).read_text())
+    source = '01__test/001__inference_playbooks_test_dir/src'
+    listing = client.request('/api/2.0/mlflow/artifacts/list?' + urlencode({'run_id': parent_id, 'path': source}))
+    paths = [item['path'] for item in listing.get('files', []) if not item.get('is_dir')
+             and re.fullmatch(re.escape(source) + r'/[^/]+\.yaml', item['path'])]
+    if platform['stack'] == 'rhoai':
+        paths = [p for p in paths if not p.endswith(('-service.yaml', '-deployment.yaml', '-lws.yaml'))]
+    else:
+        paths = [p for p in paths if p.endswith(('-deployment.yaml', '-lws.yaml'))]
+    manifests = [document(p) for p in paths]
+    if len(manifests) != 1:
+        raise ValueError('execution serving manifest is missing or ambiguous')
+    deployment = manifests[0]
+    kind = deployment.get('kind')
+    if kind not in ('Deployment', 'LeaderWorkerSet', 'LLMInferenceService'):
+        raise ValueError('unsupported execution serving manifest')
+    if (kind == 'LLMInferenceService') != (platform['stack'] == 'rhoai'):
+        raise ValueError('execution serving kind disagrees with selected platform')
+    log = artifact('01__test/run.log')
+    if kind != 'Deployment':
+        capture_name = 'lws' if kind == 'LeaderWorkerSet' else 'llmisvc'
+        test_dir = '01__test/001__inference_playbooks_test_dir'
+        listing = client.request('/api/2.0/mlflow/artifacts/list?' + urlencode({'run_id': parent_id, 'path': test_dir}))
+        captures = [item['path'] for item in listing.get('files', []) if item.get('is_dir') and re.fullmatch(
+            re.escape(test_dir) + r'/\d+__capture_' + capture_name + '_state', item['path'])]
+        if len(captures) != 1:
+            raise ValueError('execution serving state capture is missing or ambiguous')
+        basename = 'leaderworkerset' if kind == 'LeaderWorkerSet' else 'llminferenceservice'
+        pods = document(captures[0] + '/artifacts/' + basename + '.pods.yaml')
+        model_revision, image_digest = distributed_serving_values(deployment, pods, recipe['serving']['model'])
+        values = {'recipe_path': relative, 'tested_revision': revision, 'pr_number': str(pr_number),
+                  'hardware_profile': recipe['hardware_profile'], 'hardware_profile_revision': str(profile['profile_revision']),
+                  'platform_stack': platform['stack'], 'platform_version': platform['version'],
+                  'model_revision': model_revision, 'image_digest': image_digest}
+    else:
+        values = deployment_serving_values(deployment, log, recipe['serving']['model'])
+        values.update({'recipe_path': relative, 'tested_revision': revision, 'pr_number': str(pr_number),
+                       'hardware_profile': recipe['hardware_profile'], 'hardware_profile_revision': str(profile['profile_revision']),
+                       'platform_stack': platform['stack'], 'platform_version': platform['version']})
+    commands = set(re.findall(r'(?m)^\s*Command: (\S[^\r\n]*)$', log))
+    if len(commands) != 1:
+        raise ValueError('recorded common Forge invocation is missing or ambiguous')
+    command = commands.pop()
+    # This is the recorded invocation, not a command reconstructed from fjob args.
+    argv = shlex.split(command)
+    if not any(arg.endswith('/inference_playbooks/orchestration/ci.py') for arg in argv) or argv[-1] != 'test':
+        raise ValueError('recorded command is not the Forge test invocation')
+    values['command'] = command
+    safe_artifact(values)
+    return {'playbooks.' + key: value for key, value in values.items()}
+
+
+def deployment_serving_values(deployment, log, checkpoint):
+    """Preserve the existing Deployment capture format embedded in run.log."""
+    containers = deployment['spec']['template']['spec']['containers']
+    servers = [container for container in containers if container.get('name') == 'vllm']
+    if len(servers) != 1:
+        raise ValueError('execution serving container is missing or ambiguous')
+    server = servers[0]
+    args = server.get('args', [])
+    if not args or args[0] != checkpoint:
+        raise ValueError('execution served checkpoint disagrees with recipe')
+    revisions = []
+    for i, arg in enumerate(args):
+        if arg == '--revision':
+            if i + 1 == len(args):
+                raise ValueError('execution model revision is missing')
+            revisions.append(args[i + 1])
+        elif arg.startswith('--revision='):
+            revisions.append(arg.partition('=')[2])
+    if len(revisions) > 1:
+        raise ValueError('execution model revision is ambiguous')
+    plain = re.sub(r'(?m)^\| ?', '', log)
+    digests = set()
+    for block in re.split(r'(?m)^\s*containerID:', plain)[1:]:
+        image = re.search(r'(?m)^\s*image: (\S+)\s*$', block)
+        image_id = re.search(r'(?m)^\s*imageID: \S*@(sha256:[a-f0-9]{64})\s*$', block)
+        name = re.search(r'(?m)^\s*name: (\S+)\s*$', block)
+        ready = re.search(r'(?m)^\s*ready: (true|false)\s*$', block)
+        if image and image_id and name and ready and ready[1] == 'true' and image[1] == server['image'] and name[1] == server['name']:
+            digests.add(image_id[1])
+    if len(digests) != 1:
+        raise ValueError('ready serving container image digest is missing or ambiguous')
+    return {'model_revision': revisions[0] if revisions else 'main', 'image_digest': digests.pop()}
 
 
 def tested_inputs(repo, relative, expected_revision, require_clean=None):
@@ -232,7 +485,10 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
             raise ValueError('selected execution identity mismatch')
         if tags(parent).get('playbooks.tested_revision', expected_revision) != expected_revision:
             raise ValueError('selected execution tested revision mismatch')
-    candidates = [parent, *client.children(parent)]
+    parent_artifact = client.kpis(parent_id)
+    current_parent = parent_artifact is not None and re.fullmatch(
+        r'01__test/\d+__postprocessing/kpis/kpis.json', parent_artifact[0])
+    candidates = [parent] if current_parent else [parent, *client.children(parent)]
     if require_parent and any(run['info']['status'] not in {'FINISHED', 'FAILED', 'KILLED'}
                               for run in candidates):
         raise ValueError('selected execution has nonterminal direct children')
@@ -242,11 +498,18 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         if child['info']['status'] != 'FINISHED':
             continue
         child_id = child['info']['run_id']
-        artifact = client.kpis(child_id)
+        artifact = parent_artifact if child_id == parent_id else client.kpis(child_id)
         if artifact is None:
             continue
         artifact_count += 1
         values = {**tags(parent), **tags(child)}
+        required = ('recipe_path', 'tested_revision', 'hardware_profile', 'hardware_profile_revision',
+                    'model_revision', 'image_digest', 'platform_stack', 'platform_version', 'pr_number', 'command')
+        if current_parent and any(not values.get('playbooks.' + key) for key in required):
+            recorded = execution_values(client, parent_id, repo, expected_revision, pr_number)
+            if any(key in values and values[key] != value for key, value in recorded.items()):
+                raise ValueError('Forge attribution tags disagree with recorded execution')
+            values = {**values, **recorded}
         path, recipe, profile, platform = attribution(repo, values, expected_revision, pr_number)
         artifact_path, raw = artifact
         document = json.loads(raw)
