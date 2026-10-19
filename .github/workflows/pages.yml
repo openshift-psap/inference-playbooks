@@ -3,10 +3,10 @@ name: Catalog site
 on:
   pull_request:
   push:
-    branches: [main, staging/all-pr-manifests]
+    branches: [main]
   workflow_dispatch:
   workflow_run:
-    workflows: [Catalog site]
+    workflows: [Staging catalog]
     branches: [staging/all-pr-manifests]
     types: [completed]
 
@@ -20,7 +20,7 @@ concurrency:
 jobs:
   build:
     if: >-
-      ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging/all-pr-manifests') &&
+      ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') &&
       (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event != 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository)) }}
     runs-on: ubuntu-latest
