@@ -1,0 +1,34 @@
+schema_version: 1
+profile:
+  label: Gemma 4 B200 base single-GPU serving
+  sub: One GPU requested from an eight-B200 node.
+  headline: single-GPU text-only serving
+  specs:
+  - label: Node scope
+    source: recipe.yaml#/deployment/scope
+  - label: Tensor parallelism
+    source: recipe.yaml#/serving/parallelism/tp
+decisions:
+- subjects:
+  - serving command
+  why: Preserves the contributor-provided text-only TP=1 configuration.
+  status:
+    state: needs-verification
+    note: No B200 deployment or benchmark artifacts have been supplied.
+- subjects:
+  - CPU and memory resources
+  why: Uses the existing Gemma recipe CPU and memory allocations as initial deployment
+    settings.
+  status:
+    state: needs-verification
+    note: Validate CPU and host-memory sizing on the B200 deployment.
+quickstart:
+- step: Prepare access
+  detail: Create hf-token with an HF_TOKEN authorized to download the selected checkpoint;
+    do not commit the token.
+- step: Deploy
+  detail: Apply manifests/vllm-v0.31.0/deployment.yaml on a B200 node with one available
+    GPU.
+- step: Benchmark
+  detail: Run the shared GuideLLM 8K/1K job and record provenance and raw output before
+    claiming validated maturity.
