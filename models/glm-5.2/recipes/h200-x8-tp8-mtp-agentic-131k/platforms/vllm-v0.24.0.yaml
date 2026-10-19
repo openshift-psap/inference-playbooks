@@ -1,0 +1,5 @@
+# Standalone vLLM inherits serving image/engine, parallelism, args and resources.
+# RHOAI's shell-prequoted argument override is intentionally not shared.
+image_usage:
+  kind: default
+  variant: cuda

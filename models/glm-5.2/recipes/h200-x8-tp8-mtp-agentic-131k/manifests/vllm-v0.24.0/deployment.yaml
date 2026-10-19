@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: inference-playbooks
+    app.kubernetes.io/name: glm-5-2-fp8-h200-agentic
+  name: glm-5-2-fp8-h200-agentic
+spec:
+  progressDeadlineSeconds: 7200
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: glm-5-2-fp8-h200-agentic
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: glm-5-2-fp8-h200-agentic
+    spec:
+      containers:
+      - args:
+        - /mnt/models
+        - --served-model-name=glm-5.2-fp8
+        - --kv-cache-dtype=fp8
+        - --max-model-len=131072
+        - --enable-prefix-caching
+        - --enable-chunked-prefill
+        - --speculative-config={"method":"mtp","num_speculative_tokens":5}
+        - --tool-call-parser=glm47
+        - --reasoning-parser=glm45
+        - --enable-auto-tool-choice
+        - --tensor-parallel-size=8
+        command:
+        - /bin/bash
+        - -c
+        - |
+          vllm serve "$@"
+        - --
+        image: docker.io/vllm/vllm-openai:v0.24.0
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 30
+          timeoutSeconds: 10
+        name: vllm
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /v1/models
+            port: 8000
+          periodSeconds: 10
+          timeoutSeconds: 5
+        resources:
+          limits:
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+          requests:
+            cpu: "32"
+            memory: 512Gi
+            nvidia.com/gpu: "8"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          failureThreshold: 720
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 10
+        volumeMounts:
+        - mountPath: /home/nobody/.cache
+          name: hf-cache
+        - mountPath: /tmp
+          name: tmp
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /mnt/models
+          name: model-weights
+          readOnly: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - emptyDir: {}
+        name: hf-cache
+      - emptyDir: {}
+        name: tmp
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+        name: dshm
+      - name: model-weights
+        persistentVolumeClaim:
+          claimName: glm52-weights
+          readOnly: true
