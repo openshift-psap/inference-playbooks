@@ -49,6 +49,7 @@ the workload is specific to that model, framework, or deployment shape.
 | GLM-5.2-FP8 | [h200-x8-pp2-tp8-agentx-128k-rhoai](models/glm-5.2/recipes/h200-x8-pp2-tp8-agentx-128k-rhoai/recipe.yaml) | RHOAI 3.5 | PP2+TP8 (LLMI) |
 | Qwen3-235B-A22B | [h200-x8-pp2-tp8-agentx-128k](models/qwen3-235b-a22b/recipes/h200-x8-pp2-tp8-agentx-128k/recipe.yaml) | RHOAI 3.5 | PP2+TP8 (LLMI) |
 | GLM-5 / GLM-5-FP8 | — | — | [Model Ops](models/glm-5/model-ops/) only |
+| GLM-5.2-NVFP4-FP8 | [Aggregated B200](models/glm-5.2/rhoai/3.4/README.md) | RHOAI 3.4 | TP8 (raw manifest) |
 
 ## Recipe Layout
 
