@@ -2,8 +2,6 @@ schema_version: 2
 model_id: glm-5.3
 name: GLM-5.3
 family: GLM
-presentation:
-  provider: Z.ai
 parameters: 753B
 huggingface_id: zai-org/GLM-5.3
 license: other
