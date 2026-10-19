@@ -1,3 +1,4 @@
+{% from 'probes.yaml.j2' import probe %}
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
@@ -5,7 +6,7 @@ metadata:
 spec:
   model:
     uri: pvc://{{ pvc_name }}
-    name: {{ model }}
+    name: {{ served_model_name | tojson if served_model_name != model else model }}
   storageInitializer:
     enabled: false
   replicas: {{ replicas }}
@@ -14,25 +15,42 @@ spec:
   template:
     containers:
       - name: main
+{% if image_usage.get('kind') == 'custom' or weights %}
+        image: {{ image | tojson }}
+{% endif %}
+{% if weights %}
+        command: ["/bin/bash", "-c", "vllm serve \"$@\"", "--"]
+        args:
+          - {{ model_path | tojson }}
+          - {{ ('--served-model-name=' ~ served_model_name) | tojson }}
+{% for arg in args %}
+          - {{ (arg.flag ~ '=' ~ arg.value if arg.value is defined and arg.value is not none else arg.flag) | tojson }}
+{% endfor %}
+{% if tp > 1 %}
+          - {{ ('--tensor-parallel-size=' ~ tp) | tojson }}
+{% endif %}
+{% endif %}
         env:
           - name: HF_TOKEN
             valueFrom:
               secretKeyRef:
                 name: hf-token
                 key: HF_TOKEN
+{% if not weights %}
           - name: VLLM_ADDITIONAL_ARGS
             value: >-
 {% for arg in args %}
 {% if arg.value is defined and arg.value is not none %}
-              {{ arg.flag }} {{ arg.value }}
+              {{ arg.flag }} {{ arg.value | shellquote }}
 {% else %}
               {{ arg.flag }}
 {% endif %}
 {% endfor %}
+{% endif %}
 {% for e in env %}
 {% if e.value is defined %}
           - name: {{ e.name }}
-            value: "{{ e.value }}"
+            value: {{ e.value | tojson }}
 {% elif e.value_from is defined %}
           - name: {{ e.name }}
             valueFrom: {{ e.value_from | tojson }}
@@ -44,21 +62,36 @@ spec:
             memory: {{ resources.requests.memory | default('32Gi') }}
             nvidia.com/gpu: "{{ gpu_count }}"
           limits:
+{% if resources.limits.cpu is defined %}
+            cpu: {{ resources.limits.cpu | tojson }}
+{% endif %}
             memory: {{ resources.limits.memory | default('64Gi') }}
             nvidia.com/gpu: "{{ gpu_count }}"
-        startupProbe:
-          httpGet:
-            path: /health
-            port: {{ port }}
-          failureThreshold: 720
-          periodSeconds: 10
-{% if tp > 1 %}
+{% for name, values in probes.items() %}
+{{ probe(name, values) | trim | indent(8, true) }}
+{% endfor %}
+{% if use_shared_memory or weights %}
         volumeMounts:
+{% if use_shared_memory %}
           - name: dshm
             mountPath: /dev/shm
+{% endif %}
+{% if weights %}
+          - name: model-weights
+            mountPath: {{ weights.mount_path | tojson }}
+            readOnly: {{ weights.read_only | tojson }}
+{% endif %}
     volumes:
+{% if use_shared_memory %}
       - name: dshm
         emptyDir:
           medium: Memory
-          sizeLimit: 4Gi
+          sizeLimit: {{ shared_memory }}
+{% endif %}
+{% if weights %}
+      - name: model-weights
+        persistentVolumeClaim:
+          claimName: {{ weights.name | tojson }}
+          readOnly: {{ weights.read_only | tojson }}
+{% endif %}
 {% endif %}
