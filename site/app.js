@@ -163,7 +163,8 @@ function renderModelCard(model, entry) {
   icon.style.color = '#fff'; icon.style.padding = '18px'; icon.style.borderRadius = '8px';
   const content = node('div'); content.append(node('h1', model.name || model.id));
   const meta = node('div', null, 'model-meta');
-  meta.append(node('span', `Provider: ${presentation.provider || model.metadata.huggingface_id?.split('/')[0] || 'Unknown'}`));
+  const hfOrganization = model.metadata.huggingface_id?.match(/^([^/\s]+)\/[^/\s]+$/)?.[1] || 'Unknown';
+  meta.append(node('span', `HF organization: ${hfOrganization}`));
   if (entry) {
     meta.append(node('span', `Recipe maturity: ${entry.maturity}`));
     if (entry.validation.label) meta.append(node('span', entry.validation.label, 'pill--validated'));

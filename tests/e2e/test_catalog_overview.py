@@ -14,7 +14,7 @@ def test_compact_header_and_layout_hooks(page, served, model):
     meta = page.locator('.model-card .model-meta')
     expect(meta).to_be_visible()
     expect(meta.locator('p')).to_have_count(0)
-    expect(meta).to_contain_text('Provider:')
+    expect(meta).to_contain_text('HF organization:')
     expect(meta).to_contain_text(f"Recipe maturity: {entry['maturity']}")
     expect(meta).to_contain_text(f"Engine: {entry['engine']['version'] or 'Unknown'} ({entry['engine']['source'] or 'unresolved'})")
     assert page.locator('.catalog-layout').get_attribute('style') is None
@@ -32,6 +32,33 @@ def test_missing_qwen_quickstart_is_neutral_placeholder(page, served):
     expect(panel).to_contain_text('weights pre-download')
     assert 'requires RWX' not in panel.inner_text()
     expect(panel.locator('pre')).to_have_count(0)
+
+
+@pytest.mark.parametrize('hf_id, organization', [
+    ('upstream-org/base-model', 'upstream-org'),
+    ('OtherOrg/model.v1', 'OtherOrg'),
+    (None, 'Unknown'),
+    ('unqualified-checkpoint', 'Unknown'),
+])
+def test_hf_organization_comes_from_canonical_model_id_not_brand_or_quantizer(page, served, hf_id, organization):
+    payload = copy.deepcopy(served[1])
+    model = payload['models'][0]
+    metadata = model['metadata']
+    metadata['presentation'] = {'provider': 'Manually branded provider'}
+    if hf_id is None:
+        metadata.pop('huggingface_id', None)
+    else:
+        metadata['huggingface_id'] = hf_id
+    for entry in payload['entries']:
+        if entry['model_id'] == model['id']:
+            entry['serving']['model'] = 'Quantizer/quantized-checkpoint'
+    page.route('**/catalog.json', lambda route: route.fulfill(json=payload))
+    page.goto(served[0])
+    meta = page.locator('.model-meta')
+    expect(meta).to_contain_text(f'HF organization: {organization}')
+    expect(meta).not_to_contain_text('Manually branded provider')
+    expect(meta).not_to_contain_text('Quantizer')
+    expect(meta).not_to_contain_text('Provider:')
 
 
 def test_populated_steps_preserve_source_without_placeholder(page, served):
