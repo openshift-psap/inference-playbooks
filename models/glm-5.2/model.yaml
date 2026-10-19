@@ -4,7 +4,7 @@ name: GLM-5.2
 family: GLM
 presentation:
   provider: Z.ai
-huggingface_id: THUDM/GLM-5.2
+huggingface_id: zai-org/GLM-5.2
 source: manual
 model_type: glm_moe_dsa
 architectures:
