@@ -1,0 +1,81 @@
+# llm-d router chart values — EPP + InferencePool + HTTPRoute for the
+# Nemotron-3-Ultra-550B PD (3 prefill / 1 decode) deployment.
+#
+# Install (requires Gateway API Inference Extension CRDs and an Istio
+# control plane; see the llm-d-router deploy guide):
+#
+#   git clone https://github.com/llm-d/llm-d-router
+#   helm install nemotron-pd-router ./llm-d-router/config/charts/llm-d-router-gateway \
+#     -n <namespace> --values charts/router/values.yaml
+#
+router:
+  epp:
+    image:
+      tag: v0.11.0
+    # P/D disaggregated scheduling: prefix-cache-driven prefill placement,
+    # decode filtering, and weighted scorers translated from the original
+    # scheduler configuration (prefixCacheWeight=3, kvCacheWeight=2,
+    # queueWeight=2, activeRequestWeight=2).
+    pluginsConfigFile: pd-plugins.yaml
+    pluginsCustomConfig:
+      pd-plugins.yaml: |
+        apiVersion: llm-d.ai/v1alpha1
+        kind: EndpointPickerConfig
+        plugins:
+        - type: approx-prefix-cache-producer
+          parameters:
+            # 256 blocks x 64 tokens per block
+            maxPrefixTokensToMatch: 16384
+            lruCapacityPerServer: 4000000
+        - type: prefix-cache-scorer
+        - type: kv-cache-utilization-scorer
+        - type: queue-scorer
+        - type: active-request-scorer
+        - type: prefill-filter
+        - type: decode-filter
+        - type: max-score-picker
+        - type: disagg-profile-handler
+          parameters:
+            deciders:
+              prefill: prefix-based-pd-decider
+        - type: prefix-based-pd-decider
+          parameters:
+            nonCachedTokens: 16
+        schedulingProfiles:
+        - name: prefill
+          plugins:
+          - pluginRef: prefill-filter
+          - pluginRef: max-score-picker
+          - pluginRef: prefix-cache-scorer
+            weight: 3
+          - pluginRef: kv-cache-utilization-scorer
+            weight: 2
+          - pluginRef: queue-scorer
+            weight: 2
+          - pluginRef: active-request-scorer
+            weight: 2
+        - name: decode
+          plugins:
+          - pluginRef: decode-filter
+          - pluginRef: max-score-picker
+          - pluginRef: prefix-cache-scorer
+            weight: 3
+          - pluginRef: kv-cache-utilization-scorer
+            weight: 2
+          - pluginRef: queue-scorer
+            weight: 2
+          - pluginRef: active-request-scorer
+            weight: 2
+  # Model-server pods selected by the InferencePool: both prefill and
+  # decode LeaderWorkerSets carry llm-d.ai/inferenceServing: "true".
+  modelServers:
+    matchLabels:
+      llm-d.ai/inferenceServing: "true"
+  inferencePool:
+    create: true
+
+provider:
+  name: istio
+
+httpRoute:
+  create: true

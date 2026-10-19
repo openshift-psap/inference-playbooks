@@ -1,0 +1,15 @@
+schema_version: 1
+model_id: nemotron-3-ultra-550b
+name: "Nemotron-3-Ultra 550B"
+family: Nemotron
+parameters: "550B"
+huggingface_id: RedHatAI/NVIDIA-Nemotron-3-Ultra-550B-A55B-FP8-block
+license: "NVIDIA Nemotron Terms of Use"
+access:
+  type: gated
+  note: "Gated model on HuggingFace"
+quantizations:
+  - name: "fp8-block"
+    description: "FP8 block quantization, ~550 GB total weights (~69 GB per GPU at TP8)"
+  - name: "bf16"
+    description: "BrainFloat16, ~1.1 TB total weights (~137 GB per GPU at TP8)"
