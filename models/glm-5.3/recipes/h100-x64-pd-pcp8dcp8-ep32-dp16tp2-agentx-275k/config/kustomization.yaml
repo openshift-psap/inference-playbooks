@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: glm52-canary
+resources:
+  - ../raw-manifest/disaggregatedset.yaml
+  - ../raw-manifest/podmonitor.yaml
+  - ../raw-manifest/vllm-startup-patches.configmap.yaml
+images:
+  - name: busybox
+    newName: docker.io/library/busybox
+    newTag: '1.36'
+patches:
+  - target:
+      group: disaggregatedset.x-k8s.io
+      version: v1
+      kind: DisaggregatedSet
+    patch: |-
+      - op: remove
+        path: /spec/roles/0/spec/leaderWorkerTemplate/workerTemplate/spec/affinity/nodeAffinity/requiredDuringSchedulingIgnoredDuringExecution/nodeSelectorTerms/0/matchExpressions/1
+      - op: remove
+        path: /spec/roles/0/spec/leaderWorkerTemplate/workerTemplate/spec/affinity/nodeAffinity/preferredDuringSchedulingIgnoredDuringExecution
+      - op: remove
+        path: /spec/roles/1/spec/leaderWorkerTemplate/workerTemplate/spec/affinity/nodeAffinity/requiredDuringSchedulingIgnoredDuringExecution/nodeSelectorTerms/0/matchExpressions/1

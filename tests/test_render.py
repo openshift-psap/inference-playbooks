@@ -230,20 +230,16 @@ class BuildContextTests(unittest.TestCase):
 class RenderTemplateTests(unittest.TestCase):
     """Test actual Jinja2 template rendering."""
 
-    def test_shell_quoted_json_override_survives_args_env_rendering(self):
+    def test_raw_json_override_survives_args_env_shell_quoting(self):
         payload = json.dumps({"label": "a b's", "enabled": True})
         flag = "--example-options"
         merged = merge_overrides(
+            {"args": [{"flag": flag, "value": "{}"}]},
             {"args": [{"flag": flag, "value": payload}]},
-            {"args": [{"flag": flag, "value": shlex.quote(payload)}]},
         )
-        context = {
-            "name": "example-service", "model": "example/model",
-            "pvc_name": "example-cache", "replicas": 1, "tp": 2,
-            "gpu_count": 2,
-            "resources": {"requests": {}, "limits": {}}, "port": 8000,
-            "env": [], "args": merged["args"],
-        }
+        recipe = make_recipe(tp=2)
+        recipe["serving"]["args"] = merged["args"]
+        context = build_template_context(recipe, {}, None)
         parsed = yaml.safe_load(render_template("rhoai/llmisvc.yaml.j2", context))
         env = parsed["spec"]["template"]["containers"][0]["env"]
         args_env = next(item["value"] for item in env if item["name"] == "VLLM_ADDITIONAL_ARGS")

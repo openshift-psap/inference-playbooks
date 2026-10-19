@@ -1,7 +1,7 @@
 schema_version: 1
 profile:
   label: GLM-5.2 NVFP4-FP8 aggregated B200
-  sub: Rendered RHOAI 3.5 with a separately preserved RHOAI 3.4 pin
+  sub: RHOAI 3.5, a preserved RHOAI 3.4 pin and an independently unverified upstream vLLM target
   specs:
     - label: Checkpoint
       source: recipe.yaml#/serving/model
@@ -27,9 +27,9 @@ known_issues:
   - issue: The 3.4 pin inherits its startup-probe budget from installed configs.
     impact: Cold model download or JIT can exceed the reviewed base template's approximately ten-minute allowance.
     mitigation: Confirm cold-start duration and the resolved probe budget before deploying the pin.
-  - issue: The 3.5 launch adapter splits generated argument values on whitespace.
-    impact: Values containing spaces are not supported by this recipe's adapter; compact speculative JSON is preserved.
-    mitigation: Keep values whitespace-free or revise and reverify the adapter before adding such flags.
+  - issue: The authored vLLM target is not an automatically inferred equivalent of the RHOAI targets.
+    impact: It preserves the converted 3.5 runtime and cache/init dependencies, but uses a standalone Deployment without RHOAI gateway or TLS integration. It owns independent day-zero verification and no benchmark evidence.
+    mitigation: Verify PVC permissions, external package access, startup and serving behavior independently before use.
   - issue: Current templates cannot express every Kubernetes setting in the serving block.
     impact: Images, TLS/probes, cache volumes and initialization are explicit overlay inputs; image references must remain aligned with recipe metadata.
     mitigation: Run renderer, drift and configuration-parity checks after changing either input.

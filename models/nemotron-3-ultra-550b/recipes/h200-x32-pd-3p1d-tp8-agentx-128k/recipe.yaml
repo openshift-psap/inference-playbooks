@@ -1,0 +1,117 @@
+schema_version: 4
+recipe_id: h200-x32-pd-3p1d-tp8-agentx-128k
+model_id: nemotron-3-ultra-550b
+quantization: fp8-block
+platforms:
+  - stack: vllm
+    version: v0.26.0
+    overrides: platforms/vllm-v0.26.0.yaml
+    config: null
+    pinned_manifest: manifests/vllm-v0.26.0/pd.yaml
+    pinned_reason: No P/D template preserves the contributed three-prefill/one-decode LWS topology, runtime MoE patch, RDMA discovery and routing-proxy sidecar. Rebuild from config/kustomization.yaml.
+hardware_profile: hardware-profiles/h200-8gpu.yaml
+workload_profile: aiperf-agentx-128k
+deployment_mode: pd-3p1d-tp8
+optimization_intent: latency
+maturity: day-zero
+serving:
+  image: docker.io/vllm/vllm-openai:v0.26.0
+  image_usage:
+    kind: custom
+    note: Upstream image with a preserved conditional startup patch for vllm issue 43396; conversion has not been deployed or benchmarked.
+  engine:
+    name: vllm
+    version: 0.26.0
+    image: docker.io/vllm/vllm-openai:v0.26.0
+    source: https://github.com/vllm-project/vllm/releases/tag/v0.26.0
+  model: RedHatAI/NVIDIA-Nemotron-3-Ultra-550B-A55B-FP8-block
+  parallelism:
+    mode: tp
+    tp: 8
+  port: 8200
+  resources:
+    requests:
+      cpu: '45'
+      memory: 1711Gi
+      nvidia.com/gpu: '8'
+      rdma/ib: '1'
+    limits:
+      cpu: '45'
+      memory: 1711Gi
+      nvidia.com/gpu: '8'
+      rdma/ib: '1'
+  router:
+    strategy: prefill-decode
+  args:
+    - flag: --trust-remote-code
+      required: true
+      why: Preserve the submitted loading contract.
+    - flag: --api-server-count
+      value: '1'
+      required: true
+      why: Preserve one API server per submitted TP8 pod.
+    - flag: --enable-expert-parallel
+      required: true
+      why: Preserve expert parallelism within each TP8 pod.
+    - flag: --max-model-len
+      value: '262144'
+      required: true
+      why: Preserve the submitted context limit.
+    - flag: --enable-prefix-caching
+      required: true
+      why: Preserve the submitted cache configuration.
+    - flag: --kv-cache-dtype
+      value: fp8
+      required: true
+      why: Preserve the submitted KV-cache dtype.
+    - flag: --max-num-seqs
+      value: '64'
+      required: true
+      why: Preserve the submitted sequence limit in both roles.
+    - flag: --enable-auto-tool-choice
+      required: true
+      why: Preserve the submitted tool-calling configuration.
+    - flag: --tool-call-parser
+      value: qwen3_coder
+      required: true
+      why: Preserve the submitted parser; compatibility has not been independently tested.
+    - flag: --model-loader-extra-config
+      value: '{"enable_multithread_load":true,"num_threads":96}'
+      required: true
+      why: Preserve the submitted multithreaded loading configuration.
+    - flag: --disable-uvicorn-access-log
+      required: false
+      why: Preserve the submitted logging choice.
+  prefill:
+    args:
+      - flag: --gpu-memory-utilization
+        value: '0.95'
+        required: true
+        why: Preserve the submitted prefill memory budget.
+      - flag: --kv-transfer-config
+        value: '{"kv_connector":"MultiConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"connectors":[{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_connector_extra_config":{"bidirectional_kv_xfer":true}},{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"cpu_bytes_to_use":214748364800,"lazy_offload":true}}]}}'
+        required: true
+        why: Preserve the prefill NIXL producer and CPU offloading connector.
+  decode:
+    args:
+      - flag: --gpu-memory-utilization
+        value: '0.9'
+        required: true
+        why: Preserve the submitted decode memory budget.
+      - flag: --kv-transfer-config
+        value: '{"kv_connector":"MultiConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"connectors":[{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"bidirectional_kv_xfer":true}},{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"cpu_bytes_to_use":214748364800,"lazy_offload":true}}]}}'
+        required: true
+        why: Preserve the decode NIXL consumer and CPU offloading connector.
+deployment:
+  scope: multi-node
+  status:
+    state: needs-verification
+    note: Converted from PR 23 with no deployment or committed benchmark evidence. Only serving image references were qualified; contributed runtime commands and pod bindings are preserved by the pin.
+  storage:
+    type: hostpath
+    why: The submitted hostPath cache and RDMA-discovery ConfigMap remain prerequisites; conversion does not create or populate them.
+  manifests:
+    - path: manifests/vllm-v0.26.0/pd.yaml
+      kind: LeaderWorkerSet
+      generated: true
+notes: guides/notes.yaml

@@ -1,0 +1,24 @@
+schema_version: 1
+profile:
+  label: GLM-5.3 H100 DisaggregatedSet P/D
+  headline: Multi-node DisaggregatedSet with LWS roles; manual pin, deployment and benchmarks unverified
+  specs:
+    - label: Deployment pattern
+      source: recipe.yaml#/deployment_mode
+    - label: Deployment scope
+      source: recipe.yaml#/deployment/scope
+    - label: Decode parallelism (prefill differs; see pinned set)
+      source: recipe.yaml#/serving/parallelism
+    - label: GPUs per node
+      source: hardware_profile#/accelerators/count_per_node
+default_stance: The pinned multi-object artifact owns exact per-role commands and environment. Recipe serving fields summarize shared settings and decode topology, not a symmetric template or all startup arguments.
+known_issues:
+  - issue: Private contributor image with unknown bundled vLLM version and a runtime startup patch.
+    impact: Requires registry access and review before deployment; no public image replacement or engine version has been verified.
+  - issue: Installation-specific network, security and storage requirements remain.
+    impact: Requires privileged service account, eight RoCE NADs, cross-rail routes, pre-populated PVC subPath, JIT hostPath, Prometheus operator and DisaggregatedSet/LWS controllers. Review the preserved raw README and converted guide before use.
+  - issue: Workload profile is a planned long-context target only.
+    impact: No committed benchmark run or validation claim; no independent deployment verification.
+quickstart:
+  - step: Read guides/README.md and satisfy all prerequisites before applying the pinned artifact.
+  - step: Install the router separately using raw-manifest/router.values.yaml and the chart release in platforms.

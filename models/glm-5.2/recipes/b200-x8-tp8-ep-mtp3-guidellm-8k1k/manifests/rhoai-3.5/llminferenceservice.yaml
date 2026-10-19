@@ -31,9 +31,9 @@ spec:
       - -c
       - |-
         set -euo pipefail
-        # Recipe values are whitespace-free, including compact speculative JSON.
-        # Array splitting preserves JSON quotes without eval or pathname expansion.
-        read -r -a serving_args <<< "${VLLM_ADDITIONAL_ARGS}"
+        # The template shell-quotes raw values. Decode once without eval so JSON
+        # quotes and whitespace survive as one argv element.
+        mapfile -d '' -t serving_args < <(python3 -c 'import os, shlex, sys; sys.stdout.write("\0".join(shlex.split(os.environ["VLLM_ADDITIONAL_ARGS"])) + "\0")')
         exec vllm serve "{{ .Spec.Model.Name }}" \
           --port 8000 \
           --tensor-parallel-size "{{ .Spec.Parallelism.Tensor }}" \
@@ -50,7 +50,7 @@ spec:
       - name: VLLM_ADDITIONAL_ARGS
         value: --disable-access-log-for-endpoints /health,/metrics,/v1/models --max-num-seqs
           64 --max-num-batched-tokens 8192 --max-cudagraph-capture-size 256 --long-prefill-token-threshold
-          4096 --enable-expert-parallel --moe-backend auto --speculative-config {"method":"mtp","num_speculative_tokens":3}
+          4096 --enable-expert-parallel --moe-backend auto --speculative-config '{"method":"mtp","num_speculative_tokens":3}'
           --kv-cache-dtype fp8 --load-format instanttensor
       - name: PYTHONPATH
         value: /opt/pydeps

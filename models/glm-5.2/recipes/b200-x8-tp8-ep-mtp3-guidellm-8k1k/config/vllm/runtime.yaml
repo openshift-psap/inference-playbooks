@@ -1,0 +1,60 @@
+- op: replace
+  path: /spec/replicas
+  value: 0
+- op: add
+  path: /spec/template/spec/nodeSelector
+  value:
+    nvidia.com/gpu.product: NVIDIA-B200
+- op: add
+  path: /spec/template/spec/initContainers
+  value:
+    - name: install-instanttensor
+      image: docker.io/vllm/vllm-openai:v0.27.0
+      command:
+        - /bin/bash
+        - -lc
+        - python3 -m pip install --no-cache-dir --no-deps --index-url https://pypi.org/simple --target /opt/pydeps instanttensor==0.1.9
+      volumeMounts:
+        - name: pydeps
+          mountPath: /opt/pydeps
+- op: replace
+  path: /spec/template/spec/containers/0/env/0/valueFrom/secretKeyRef/name
+  value: llm-d-hf-token
+- op: add
+  path: /spec/template/spec/containers/0/resources/requests/ephemeral-storage
+  value: 1Ti
+- op: add
+  path: /spec/template/spec/containers/0/resources/limits/ephemeral-storage
+  value: 1Ti
+- op: remove
+  path: /spec/template/spec/containers/0/resources/limits/cpu
+- op: replace
+  path: /spec/template/spec/containers/0/volumeMounts/0/mountPath
+  value: /var/cache/huggingface
+- op: add
+  path: /spec/template/spec/containers/0/volumeMounts/-
+  value:
+    name: jit-cache
+    mountPath: /var/cache/vllm
+- op: add
+  path: /spec/template/spec/containers/0/volumeMounts/-
+  value:
+    name: pydeps
+    mountPath: /opt/pydeps
+- op: replace
+  path: /spec/template/spec/volumes/0
+  value:
+    name: hf-cache
+    persistentVolumeClaim:
+      claimName: glm-5-2-hf-cache
+- op: add
+  path: /spec/template/spec/volumes/-
+  value:
+    name: jit-cache
+    persistentVolumeClaim:
+      claimName: glm-5-2-jit-cache
+- op: add
+  path: /spec/template/spec/volumes/-
+  value:
+    name: pydeps
+    emptyDir: {}

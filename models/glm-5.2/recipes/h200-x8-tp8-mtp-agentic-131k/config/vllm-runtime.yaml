@@ -14,9 +14,6 @@
   value: 7200
 - op: test
   path: /spec/template/spec/containers/0/args/1
-  value: --served-model-name=zai-org/GLM-5.2-FP8
-- op: replace
-  path: /spec/template/spec/containers/0/args/1
   value: --served-model-name=glm-5.2-fp8
 - op: test
   path: /spec/template/spec/containers/0/env/0/name

@@ -1,0 +1,116 @@
+schema_version: 4
+recipe_id: h100-x64-pd-pcp8dcp8-ep32-dp16tp2-agentx-275k
+model_id: glm-5.3
+platforms:
+  - stack: llm-d
+    version: v0.11.0
+    overrides: platforms/llm-d-v0.11.0.yaml
+    config: null
+    pinned_manifest: manifests/llm-d-v0.11.0/disaggregated.yaml
+    pinned_reason: No DisaggregatedSet P/D template exists. Rebuild this pin from config/kustomization.yaml; llm-d version names the router release, not the unknown bundled vLLM version.
+hardware_profile: hardware-profiles/nvidia-h100-8x-roce-r1.yaml
+workload_profile: aiperf-agentx-unlimited-context
+deployment_mode: pd-pcp8dcp8-ep32-dp16tp2
+optimization_intent: long-context prefill/decode disaggregation
+maturity: day-zero
+serving:
+  image: us.icr.io/llmd/llm-d-cuda@sha256:43f1297937b36cd973a2cde4d5137a3ffaebc1de78c8e28c97e8a17515e07d1c
+  # Bundled vLLM is unknown. Leave engine/image_usage unresolved rather than
+  # fabricate an image-bound engine declaration; see guides/notes.yaml.
+  model: zai-org/GLM-5.3
+  served_model_name: zai-org/GLM-5.3
+  # Decode summary only. The pinned set owns asymmetric per-role topology:
+  # prefill DP4/TP1/PCP8/DCP8 across four nodes; decode DP16/TP2 across four.
+  parallelism:
+    mode: tp+dp
+    tp: 2
+    dp: 16
+  port: 8200
+  resources:
+    requests:
+      cpu: '64'
+      memory: 1500Gi
+      ephemeral-storage: 128Gi
+      nvidia.com/gpu: '8'
+      nvidia.com/roce_gdr: '8'
+    limits:
+      cpu: '64'
+      memory: 1500Gi
+      ephemeral-storage: 128Gi
+      nvidia.com/gpu: '8'
+      nvidia.com/roce_gdr: '8'
+  router:
+    strategy: prefill-decode
+  args:
+    - flag: --release-weight-page-cache
+      required: true
+      why: Preserved startup patch provides this flag in both submitted role commands.
+    - flag: --trust-remote-code
+      required: true
+      why: Preserve the submitted model-loading contract.
+    - flag: --max-model-len
+      value: '275000'
+      required: true
+      why: Preserve the submitted context limit; the workload profile is a planned target, not benchmark evidence.
+    - flag: --kv-cache-dtype
+      value: fp8
+      required: true
+      why: Preserve the submitted KV-cache dtype in both roles.
+    - flag: --enable-expert-parallel
+      required: true
+      why: Preserve expert parallelism in both submitted roles.
+    - flag: --reasoning-parser
+      value: glm45
+      required: true
+      why: Preserve the submitted reasoning parser.
+    - flag: --tool-call-parser
+      value: glm47
+      required: true
+      why: Preserve the submitted tool-call parser.
+    - flag: --enable-auto-tool-choice
+      required: true
+      why: Preserve the submitted tool-calling configuration.
+  prefill:
+    args:
+      - flag: --prefill-context-parallel-size
+        value: '8'
+        required: true
+        why: Preserve the prefill role's PCP_SIZE environment value.
+      - flag: --decode-context-parallel-size
+        value: '8'
+        required: true
+        why: Preserve the prefill role's DCP_SIZE environment value.
+      - flag: --speculative-config
+        value: '{"method":"mtp","num_speculative_tokens":1}'
+        required: true
+        why: Preserve prefill MTP1; decode uses MTP3.
+      - flag: --all2all-backend
+        value: deepep_high_throughput
+        required: true
+        why: Preserve the submitted prefill backend.
+  decode:
+    args:
+      - flag: --speculative-config
+        value: '{"method":"mtp","num_speculative_tokens":3}'
+        required: true
+        why: Preserve the decode role's SPEC_TOKENS environment value.
+      - flag: --all2all-backend
+        value: deepep_low_latency
+        required: true
+        why: Preserve the submitted decode backend.
+deployment:
+  scope: multi-node
+  status:
+    state: needs-verification
+    note: Converted from PR 33 without deployment or committed benchmark evidence. The pin preserves role startup, networking, storage and security; only hostname affinity is removed and the BusyBox image is fully qualified.
+  storage:
+    type: pvc
+    pvc:
+      name: glm52-canary-model-cache-rox-pvc
+      access_modes: [ReadOnlyMany]
+    why: The pinned set owns the read-only /model-cache mount and rits-models subPath, with weights at /model-cache/models/zai-org/GLM-5.3. No declarative template mapping or storage provisioning is implied.
+  manifests:
+    - path: manifests/llm-d-v0.11.0/disaggregated.yaml
+      kind: DisaggregatedSet
+      generated: true
+notes: guides/notes.yaml

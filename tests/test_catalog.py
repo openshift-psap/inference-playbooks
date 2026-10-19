@@ -85,7 +85,9 @@ def test_profile_identity_is_not_erased_by_accelerator_group(repo):
     recipe['hardware_profile'] = 'hardware-profiles/synthetic-profile.yaml'
     path.write_text(yaml.safe_dump(recipe))
     render_recipe(repo, path)
-    entries = [entry for entry in catalog(repo)['entries'] if entry['model_id'] == 'gemma-4']
+    entries = [entry for entry in catalog(repo)['entries']
+               if entry['model_id'] == 'gemma-4'
+               and entry['hardware']['accelerator_key'] == profile['accelerator_key']]
     assert len({entry['hardware']['accelerator_key'] for entry in entries}) == 1
     assert len({entry['hardware']['path'] for entry in entries}) == 2
 

@@ -1,0 +1,19 @@
+schema_version: 1
+profile_id: nvidia-h100-8x-roce-r1
+profile_revision: 1
+kind: hardware-profile
+description: Contributor-reported eight H100 80GB HBM3 GPUs per node with eight RoCE rails; host capacity and bandwidth are not independently established.
+accelerator_key: nvidia-h100-x8
+accelerators:
+  vendor: nvidia
+  model: H100
+  count_per_node: 8
+  memory_per_gpu_gib: 80
+network:
+  inter_node_transport: roce
+  rdma: true
+  accelerator_nic_allocation: Eight RoCE rails per node, mlx5_1 through mlx5_8.
+  notes: Requires GPUDirect RDMA, eight Multus NADs deepep-ll-port-1 through -8, nvidia.com/roce_gdr device resources, GID index 3, cross-rail routes, NVSHMEM IBGDA and GDRCopy. Names and routing must be adapted to the target installation.
+correction_log:
+  - revision: 1
+    summary: Record only contributor-reported accelerator and RoCE facts; pod resource requests are requirements, not measured host capacity.

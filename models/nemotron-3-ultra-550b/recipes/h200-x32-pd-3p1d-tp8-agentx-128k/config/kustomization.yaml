@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../vllm/v0.26.0/multi-node/manifests/nemotron-3-ultra-550b-h200-pd-prefill.yaml
+  - ../../../vllm/v0.26.0/multi-node/manifests/nemotron-3-ultra-550b-h200-pd-decode.yaml
+images:
+  - name: vllm/vllm-openai
+    newName: docker.io/vllm/vllm-openai
+    newTag: v0.26.0

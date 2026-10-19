@@ -1,6 +1,6 @@
 schema_version: 1
 profile_id: h200-8gpu
-profile_revision: 1
+profile_revision: 2
 kind: hardware-profile
 description: Eight NVIDIA H200 GPUs in one node with NVLink connectivity.
 accelerator_key: nvidia-h200-x8
@@ -18,8 +18,12 @@ host:
   memory_min_gib: 512
 
 network:
-  required: false
+  required: true
+  rdma: true
+  notes: Requires the rdma/ib device-plugin resource, /dev/infiniband, GDRCopy and a site-provided RDMA discovery ConfigMap. Transport and bandwidth are not established; do not infer InfiniBand versus RoCE from a resource name.
 
 correction_log:
   - revision: 1
     summary: Initial profile.
+  - revision: 2
+    summary: Correct the optional-network claim to record required RDMA devices and discovery prerequisites; accelerator identity is unchanged.

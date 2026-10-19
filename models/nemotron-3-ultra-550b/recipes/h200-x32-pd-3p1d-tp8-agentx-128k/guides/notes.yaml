@@ -1,0 +1,24 @@
+schema_version: 1
+profile:
+  label: Nemotron-3-Ultra H200 prefill/decode
+  headline: Multi-node LeaderWorkerSets, 3P/1D TP8; manual pin, deployment and benchmarks unverified
+  specs:
+    - label: Deployment pattern
+      source: recipe.yaml#/deployment_mode
+    - label: Deployment scope
+      source: recipe.yaml#/deployment/scope
+    - label: Per-pod parallelism
+      source: recipe.yaml#/serving/parallelism
+    - label: Workload target
+      source: recipe.yaml#/workload_profile
+default_stance: The pinned two-LWS artifact owns exact role replica counts, commands, environment, RDMA bindings, security and startup patch. Recipe fields summarize shared serving settings; no symmetric P/D template is implied.
+known_issues:
+  - issue: RDMA discovery and privileged runtime are installation prerequisites.
+    impact: Requires the site-provided rdma-discovery-script ConfigMap, rdma/ib device resource, /dev/infiniband, privileged service account and hostPath model cache. Network transport and bandwidth are not inferred.
+  - issue: Runtime MoE patch is preserved from the contribution.
+    impact: Stock image version does not describe the full runtime; the patched deployment needs independent verification.
+  - issue: No committed benchmark evidence.
+    impact: The AgentX workload profile is a target only. Legacy performance or memory-saving prose is not published as a measured result.
+quickstart:
+  - step: Read guides/README.md and satisfy the original deployment prerequisites.
+  - step: Review the separate legacy router values before installation; no chart revision has been pinned by this conversion.

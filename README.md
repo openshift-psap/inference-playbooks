@@ -1,5 +1,57 @@
 # Inference Playbooks
 
+## Leadership staging snapshot
+
+This branch, **`staging/all-pr-manifests`**, combines all 11 open PR heads
+captured on 2026-10-19, including draft submissions. It is an integration
+preview, not a production release or evidence that these configurations have
+been independently tested. `main` and the published catalog are unchanged.
+
+### Included recipe and manifest submissions
+
+| PR | Submission | Browse the configuration |
+|----|------------|--------------------------|
+| [#3](https://github.com/openshift-psap/inference-playbooks/pull/3) | GLM-5.2 B200, RHOAI 3.4 | [Original manifest](models/glm-5.2/rhoai/3.4/aggregated-b200/manifests/) |
+| [#4](https://github.com/openshift-psap/inference-playbooks/pull/4) | GLM-5.2 B200, RHOAI 3.4 / 3.5 | [Recipe and manifests](models/glm-5.2/recipes/b200-x8-tp8-ep-mtp3-guidellm-8k1k/) |
+| [#10](https://github.com/openshift-psap/inference-playbooks/pull/10) | GLM-5.2 H200, TP8 + MTP | [Recipe and manifests](models/glm-5.2/recipes/h200-x8-tp8-mtp-agentic-131k/) |
+| [#19](https://github.com/openshift-psap/inference-playbooks/pull/19) | Kimi K3 H200, TP8 × PP2 | [Recipe and manifests](models/kimi-k3/recipes/h200-x8-pp2-tp8-8k1k/) |
+| [#23](https://github.com/openshift-psap/inference-playbooks/pull/23) | Nemotron-3-Ultra-550B H200, multi-node P/D with two LeaderWorkerSets | [v4 recipe and pinned bundle](models/nemotron-3-ultra-550b/recipes/h200-x32-pd-3p1d-tp8-agentx-128k/) |
+| [#33](https://github.com/openshift-psap/inference-playbooks/pull/33) | GLM-5.3 H100 ×64, multi-node P/D DisaggregatedSet with LWS roles (draft) | [v4 recipe and pinned bundle](models/glm-5.3/recipes/h100-x64-pd-pcp8dcp8-ep32-dp16tp2-agentx-275k/) |
+| [#35](https://github.com/openshift-psap/inference-playbooks/pull/35) | Gemma 4 B200, base / NVFP4 (draft) | [Base recipe](models/gemma-4/recipes/b200-x8-base-single-gpu-8k1k/) · [NVFP4 recipe](models/gemma-4/recipes/b200-x8-nvfp4-single-gpu-8k1k/) |
+| [#40](https://github.com/openshift-psap/inference-playbooks/pull/40) | GLM-5.3 H200, aggregated DP8/EP8 + HiSparse | [Recipe and manifests](models/glm-5.3/recipes/h200-x8-dep8-mtp3-hisparse-agentx-128k/) |
+| [#43](https://github.com/openshift-psap/inference-playbooks/pull/43) | GLM-5.3 H200, prefill/decode (draft) | [Recipe and pinned manifest](models/glm-5.3/recipes/h200-x16-pd-pcp8dcp8-dep8-mtp3-offload-agentx-128k/) |
+
+Also merged: [#44](https://github.com/openshift-psap/inference-playbooks/pull/44)
+(single-node companion and scope-aware renderer support) and
+[#9](https://github.com/openshift-psap/inference-playbooks/pull/9)
+(CI experiment marker; no recipe).
+
+### Preview status and limitations
+
+- Browse the configurations above directly on this branch. The catalog link
+  below still points to the published **main** site, not this snapshot.
+- PRs #33 and #23 now have v4 recipes with reproducible manual-pin fallbacks
+  for unsupported P/D templates. Deployment pattern, multi-node scope,
+  asymmetric topology and required controllers are documented; original
+  raw/legacy inputs remain available for provenance.
+- The B200 GLM-5.2 recipe has an explicit, independently unverified vLLM
+  Deployment target instead of an automatically inferred RHOAI companion.
+- Strict raw-conversion validation, manifest drift checks and the local
+  catalog build pass. The H100 contribution still requires access to its
+  private image; its bundled vLLM version is unknown and shown as unresolved.
+- No validation requirements were disabled, benchmark numbers fabricated, or
+  maturity levels promoted for this preview. Benchmark/UI completeness is
+  not a condition for including submitted manifests in this snapshot.
+
+Build and browse the staging catalog locally (this does not publish Pages):
+
+```bash
+python3 tools/build-site.py --out .build/staging-site
+python3 -m http.server 8000 --directory .build/staging-site
+```
+
+---
+
 Inference Playbooks is a curated, reproducible collection of deployment
 recipes for serving large language models on OpenShift/Kubernetes with GPU
 accelerators. Each playbook connects a model, serving stack, hardware

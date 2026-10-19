@@ -6,11 +6,23 @@ platforms:
   - stack: rhoai
     version: "3.5"
     overrides: platforms/rhoai-3.5.yaml
+    config: config
   - stack: rhoai
     version: "3.4"
     overrides: platforms/rhoai-3.4.yaml
+    config: null
     pinned_manifest: manifests/rhoai-3.4/glm-5-2-aggregated-b200-llmisvc.yaml
     pinned_reason: Preserve PR 3's original configuration while 3.5 is converted; the pin does not inherit rendered overrides or verification.
+  - stack: vllm
+    version: v0.27.0
+    overrides: platforms/vllm-v0.27.0.yaml
+    config: config/vllm
+    verification:
+      maturity: day-zero
+      deployment_status:
+        state: needs-verification
+        note: Explicitly authored upstream Deployment preserving the converted 3.5 runtime, InstantTensor init dependency and writable caches. Not an automatically inferred equivalent of either RHOAI platform; no deployment or benchmark verification.
+      benchmark_runs: []
 hardware_profile: hardware-profiles/nvidia-b200-8x-r1.yaml
 # Planned benchmark target, not evidence of a completed 8K/1K run.
 workload_profile: guidellm-8k1k
@@ -33,6 +45,8 @@ serving:
     tp: 8
   port: 8000
   config_overrides: true
+  shared_memory:
+    size: 2Gi
   resources:
     requests:
       cpu: "64"
@@ -117,4 +131,7 @@ deployment:
     - path: manifests/rhoai-3.4/glm-5-2-aggregated-b200-llmisvc.yaml
       kind: LLMInferenceService
       generated: false
+    - path: manifests/vllm-v0.27.0/deployment.yaml
+      kind: Deployment
+      generated: true
 notes: guides/notes.yaml

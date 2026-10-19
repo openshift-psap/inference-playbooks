@@ -10,14 +10,16 @@ GuideLLM 8K/1K is a planned benchmark target, not a published result.
 |---|---|---|
 | RHOAI 3.5 | Shared serving block + platform override + Kustomize overlay | [Generated LLMI](../manifests/rhoai-3.5/llminferenceservice.yaml) |
 | RHOAI 3.4 | Hand-authored pin, preserved from PR #3 | [Pinned LLMI](../manifests/rhoai-3.4/glm-5-2-aggregated-b200-llmisvc.yaml) |
+| vLLM | Explicit upstream target + platform-owned overlay; independently day-zero | [Generated Deployment](../manifests/vllm-v0.27.0/deployment.yaml) |
 
-Both artifacts intentionally use the same resource name. Select exactly one
-platform for a namespace; do not apply both as concurrent services there.
+The RHOAI artifacts intentionally use the same resource name. Select exactly
+one target at a time; the writable caches and GPU capacity are shared prerequisites.
 
 ## Prerequisites
 
-- The matching RHOAI/KServe `LLMInferenceService` v1alpha2 API, all referenced
-  `LLMInferenceServiceConfig` objects and a configured inference gateway.
+- For the RHOAI targets: the matching KServe `LLMInferenceService` v1alpha2
+  API, all referenced `LLMInferenceServiceConfig` objects and a configured
+  inference gateway. The upstream target uses a Kubernetes Deployment instead.
 - A node labelled `nvidia.com/gpu.product: NVIDIA-B200`, eight free GPUs,
   NVIDIA GPU operator and sufficient allocatable CPU, host memory and local
   ephemeral storage for the [recipe's resource requests](../recipe.yaml).
@@ -51,7 +53,7 @@ python3 tools/render.py models/glm-5.2/recipes/b200-x8-tp8-ep-mtp3-guidellm-8k1k
 python3 tools/check_manifests.py models/glm-5.2/recipes/b200-x8-tp8-ep-mtp3-guidellm-8k1k
 ```
 
-Both artifacts default to `replicas: 0`. Prepare a deployment copy of the
+All artifacts default to `replicas: 0`. Prepare a deployment copy of the
 selected final artifact, set `spec.replicas: 1` only after capacity and
 prerequisites are checked, then perform server-side dry-run before applying
 it in the intended namespace. Do not hand-edit the generated 3.5 artifact.
@@ -65,8 +67,8 @@ config refs, resource name, probes and scaling default. Serving flags are
 generated from the recipe, rather than duplicated in its launch command.
 The source's sequence/speculation arithmetic is resolved to a capture size
 of 256; update it consistently if changing sequence count or MTP tokens.
-The adapter requires whitespace-free argument values; speculative JSON is
-compact and is split without `eval`, preserving JSON quotes.
+The template shell-quotes canonical argument values. The adapter decodes that
+representation with Python `shlex` without `eval`, preserving JSON and whitespace.
 
 TLS flags and probe schemes follow KServe's `.GlobalConfig.EnableTLS` during
 controller reconciliation. With TLS enabled, certificates come from the
@@ -85,6 +87,18 @@ TLS-enabled inherited probes/gateway settings, and its inherited startup
 budget may be too short for cold download/JIT. Check the installed configs
 and resolved pod before using it. Any correction to this pin is a separate
 reviewed deployment change, not an automatic consequence of 3.5 conversion.
+
+### Upstream vLLM
+
+This is an explicitly authored, independently **day-zero / needs-verification**
+Deployment, not an automatically inferred equivalent of either RHOAI platform.
+It preserves the converted 3.5 runtime image, raw serving arguments, InstantTensor
+init dependency, writable caches, B200 placement, resource requests and shared
+memory. Its platform-owned overlay is in `config/vllm/`; it never applies the
+RHOAI overlay to a Deployment. It has no RHOAI gateway, router, Service or TLS
+integration. Expose the API using an independently reviewed Service or a local
+port-forward only after scaling and verifying the deployment. PVC permissions,
+image admission, package access and loader compatibility still require testing.
 
 ## Verification and benchmark evidence
 

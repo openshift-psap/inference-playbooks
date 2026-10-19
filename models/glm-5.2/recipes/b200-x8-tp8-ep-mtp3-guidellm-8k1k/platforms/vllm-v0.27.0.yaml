@@ -1,0 +1,21 @@
+# Authored upstream target, not an automatically generated companion.
+# Shared runtime uses the declared custom vLLM image and raw JSON arguments.
+probes:
+  startup:
+    path: /health
+    port: 8000
+    period_seconds: 10
+    timeout_seconds: 5
+    failure_threshold: 270
+  readiness:
+    path: /health
+    port: 8000
+    period_seconds: 10
+    timeout_seconds: 5
+    failure_threshold: 60
+  liveness:
+    path: /health
+    port: 8000
+    period_seconds: 30
+    timeout_seconds: 10
+    failure_threshold: 3
