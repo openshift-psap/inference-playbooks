@@ -19,10 +19,17 @@ class ManifestDriftTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.repo = Path(self.temporary.name)
-        for directory in ("schema", "templates", "models"):
+        for directory in ("schema", "templates"):
             shutil.copytree(REPO / directory, self.repo / directory)
-        self.recipe = next(self.repo.glob("models/gemma-4/recipes/*/recipe.yaml"))
-        self.directory = self.recipe.parent
+        source_recipe = sorted(REPO.glob("models/gemma-4/recipes/*/recipe.yaml"))[0]
+        self.directory = self.repo / source_recipe.parent.relative_to(REPO)
+        self.directory.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_recipe.parent, self.directory)
+        self.recipe = self.directory / "recipe.yaml"
+        model = REPO / "models/gemma-4/model.yaml"
+        model_copy = self.repo / "models/gemma-4/model.yaml"
+        model_copy.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(model, model_copy)
         _, errors = render_recipe(self.repo, self.recipe)
         self.assertFalse(errors)
         self.output = next((self.directory / "manifests").glob("*/*.yaml"))
@@ -55,6 +62,7 @@ class ManifestDriftTests(unittest.TestCase):
         recipe = yaml.safe_load(self.recipe.read_text())
         recipe["serving"]["config_overrides"] = True
         self.recipe.write_text(yaml.safe_dump(recipe))
+        (self.directory / "config").mkdir(parents=True, exist_ok=True)
         (self.directory / "config/kustomization.yaml").write_text("resources: []\n")
 
     def test_failed_and_missing_kustomize_fail(self):

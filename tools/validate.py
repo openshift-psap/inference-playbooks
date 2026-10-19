@@ -554,6 +554,35 @@ def validate_benchmark_run(repo: Path, path: Path, run: dict) -> tuple[list[str]
         elif artifact_uri:
             if not artifact.get("checksum"):
                 errors.append(f"{path}: artifact[{i}] external URI requires a checksum: {artifact_uri}")
+    if run.get('evidence_source') == 'forge-kpis' and result_path and result_path.is_file():
+        # The same offline replay runs in local validation/pre-commit and CI.
+        from normalize_kpis import normalize
+        from forge_model_identity import validate_model_identity
+        import hashlib
+        try:
+            raw_path = path.parent / 'kpis.json'
+            raw = raw_path.read_bytes()
+            checksum = 'sha256:' + hashlib.sha256(raw).hexdigest()
+            forge = run['forge']
+            if checksum != forge['kpis_checksum']:
+                raise ValueError('Forge KPI checksum mismatch')
+            if not any(a.get('path') == 'kpis.json' and a.get('checksum') == checksum
+                       and a.get('type') == 'raw-output' for a in run['artifacts']):
+                raise ValueError('Forge evidence must reference checksummed local kpis.json')
+            document = json.loads(raw)
+            recipe_path = path.parent.parent.parent / 'recipe.yaml'
+            recipe = load_yaml(recipe_path)
+            model = load_yaml(recipe_path.parent.parent.parent / 'model.yaml')
+            validate_model_identity(document, recipe, model)
+            expected = normalize(document, run_id='forge-' + forge['mlflow_benchmark_run_id'],
+                                 deployment_scope=run['deployment_scope'], accelerator_key=profile['accelerator_key'],
+                                 expected_concurrencies=forge.get('expected_concurrencies'))[run['harness']]
+            if json.loads(result_path.read_text()) != expected:
+                raise ValueError('Forge normalized result differs from raw KPI replay')
+            if forge['completeness'] != expected['completeness']:
+                raise ValueError('Forge completeness differs from raw KPI replay')
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            errors.append(f'{path}: {error}')
     return errors, result_path
 
 

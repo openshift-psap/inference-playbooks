@@ -1,5 +1,38 @@
 # Schema changelog
 
+## Forge base and served model identity
+
+- Results optionally retain explicit `model_name`, `served_model`, and
+  `quantization` labels in `model_identity` when the served-model contract is
+  present. Fields are nonempty strings; absent labels are not synthesized.
+- Intake and offline replay validate the base against `model.yaml`, the served
+  checkpoint against `recipe.serving.model` (never a request alias), and any
+  quantization against an exact checkpoint/name declaration.
+- Historical exact-checkpoint labels retain their normalized result shape;
+  original labels remain in run `workload.tests`. Legacy unlabeled tests retain
+  their existing behavior, but base-only labels cannot identify a different
+  served checkpoint. Raw evidence and admission receipts are unchanged.
+
+## Forge declared model revisions
+
+- Forge run `environment.model_revision` accepts nonempty declared identifiers
+  without whitespace or control characters: `main`, tags, branches, and existing
+  40/64-character hashes. Intake applies the shared artifact privacy guard.
+- The attribution tag remains required and is stored exactly as supplied; Forge
+  supplies `main` when using the default model revision. No schema version or
+  stored field changes. Tested recipe SHA and runtime image digest rules remain
+  unchanged.
+
+## Forge-backed benchmark evidence (run v2)
+
+- Benchmark runs retain v1 compatibility and add v2 `evidence_source` with
+  conditional Forge provenance, immutable revision/digest, checksummed raw KPIs,
+  and explicit smoke/partial/full-sweep completeness.
+- Results add the v2 concurrency `sweep` contract with null latency percentiles,
+  `harness`, `completeness`, and `reference_concurrency`. Unknown KPIs remain in
+  raw artifacts; local and CI validation replay Forge normalization and reject
+  checksum/result drift.
+
 ## Add `contributed` maturity level
 
 - `maturity` enum now accepts four values:
