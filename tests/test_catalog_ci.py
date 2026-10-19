@@ -13,8 +13,9 @@ def test_workflow_separates_unprivileged_pr_and_main_deployment():
     workflow = yaml.safe_load((REPO / '.github/workflows/pages.yml').read_text())
     events = workflow.get('on', workflow.get(True))  # YAML 1.1 treats on as boolean.
     assert 'pull_request' in events and 'pull_request_target' not in events
-    assert events['push']['branches'] == ['main', 'staging/all-pr-manifests']
-    assert events['workflow_run'] == {'workflows': ['Catalog site'], 'branches': ['staging/all-pr-manifests'], 'types': ['completed']}
+    assert events['push']['branches'] == ['main']
+    assert events['workflow_run'] == {'workflows': ['Staging catalog'], 'branches': ['staging/all-pr-manifests'], 'types': ['completed']}
+    assert workflow['name'] not in events['workflow_run']['workflows']
     assert workflow['permissions'] == {'contents': 'read'}
     build = workflow['jobs']['build']; deploy = workflow['jobs']['deploy']
     assert 'pull_request' in build['if'] and "refs/heads/main" in build['if']
@@ -52,6 +53,29 @@ def test_workflow_separates_unprivileged_pr_and_main_deployment():
     assembly = next(step for step in build['steps'] if step.get('name') == 'Build staging and assemble both sites')
     assert '--require-clean --source-sha "$STAGING_SHA"' in assembly['run']
     assert '--production .build/site --staging .build/staging-source/.build/site --out .build/pages' in assembly['run']
+
+
+def test_staging_validation_is_separate_read_only_and_triggers_main_publisher():
+    staging = yaml.safe_load((REPO / '.github/workflows/staging-pages.yml').read_text())
+    pages = yaml.safe_load((REPO / '.github/workflows/pages.yml').read_text())
+    events = staging.get('on', staging.get(True))
+    pages_events = pages.get('on', pages.get(True))
+    assert staging['name'] != pages['name']
+    assert pages_events['workflow_run']['workflows'] == [staging['name']]
+    assert events['push']['branches'] == ['staging/all-pr-manifests']
+    assert 'workflow_run' not in events and 'pull_request_target' not in events
+    assert staging['permissions'] == {'contents': 'read'}
+    assert set(staging['jobs']) == {'check'}
+    check = staging['jobs']['check']
+    assert check['if'] == "${{ github.ref == 'refs/heads/staging/all-pr-manifests' }}"
+    assert 'permissions' not in check and 'environment' not in check
+    assert check['steps'][0]['with']['persist-credentials'] is False
+    assert any('--require-clean --source-sha "$GITHUB_SHA"' in step.get('run', '') for step in check['steps'])
+    assert any('pytest tests -q' in step.get('run', '') for step in check['steps'])
+    for step in check['steps']:
+        if 'uses' in step:
+            assert re.search(r'@[a-f0-9]{40}$', step['uses'])
+            assert 'deploy' not in step['uses'] and 'upload-pages-artifact' not in step['uses']
 
 
 def test_ingest_installs_same_pinned_kustomize_before_site_build():

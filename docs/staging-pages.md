@@ -11,8 +11,9 @@ navigation stay within their respective sites. Both build-provenance files and
 the combined `pages-provenance.json` record the published source revisions.
 
 Main pushes and manual main dispatches rebuild both sites. Staging pushes run
-the normal validation and test suite without publishing privileges. Once a
-staging build succeeds, a main-branch `workflow_run` rebuilds both sites and
+the separate `Staging catalog` workflow's validation and test suite without
+publishing privileges. Once that build succeeds, a main-branch `Catalog site`
+`workflow_run` rebuilds both sites and
 publishes them. Failed staging builds do not replace the live preview. PR runs
 only produce unprivileged preview artifacts; fork PRs cannot trigger publication.
 
