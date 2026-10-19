@@ -39,6 +39,8 @@ def test_missing_qwen_quickstart_is_neutral_placeholder(page, served):
     ('OtherOrg/model.v1', 'OtherOrg'),
     (None, 'Unknown'),
     ('unqualified-checkpoint', 'Unknown'),
+    ('https://example.com/upstream/model', 'Unknown'),
+    ('../model', 'Unknown'),
 ])
 def test_hf_organization_comes_from_canonical_model_id_not_brand_or_quantizer(page, served, hf_id, organization):
     payload = copy.deepcopy(served[1])
@@ -59,6 +61,16 @@ def test_hf_organization_comes_from_canonical_model_id_not_brand_or_quantizer(pa
     expect(meta).not_to_contain_text('Manually branded provider')
     expect(meta).not_to_contain_text('Quantizer')
     expect(meta).not_to_contain_text('Provider:')
+    heading = page.locator('.model-card h1')
+    if organization != 'Unknown':
+        expect(heading.get_by_role('link')).to_have_attribute('href', f'https://huggingface.co/{hf_id}')
+        expect(heading.get_by_role('link')).to_have_text(model['name'])
+        organization_link = meta.get_by_role('link', name=organization, exact=True)
+        expect(organization_link).to_have_attribute('href', f'https://huggingface.co/{organization}')
+        expect(organization_link).to_have_attribute('rel', 'noopener noreferrer')
+    else:
+        expect(heading.get_by_role('link')).to_have_count(0)
+        expect(meta.get_by_role('link')).to_have_count(0)
 
 
 def test_populated_steps_preserve_source_without_placeholder(page, served):
