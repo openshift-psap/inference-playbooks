@@ -1,0 +1,27 @@
+# Prometheus scrape for both roles: every pod x its local-DP-rank vLLM servers,
+# scraped directly. Prefill has one rank per pod (vllm-rank0 = 8000); decode has
+# four (vllm-rank0-3 = 8200-8203, behind the routing-proxy on 8000-8003). Pods
+# without a given port name are skipped for that endpoint.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: glm53-pcp-canary
+  namespace: glm52-canary
+spec:
+  # job = glm53-pcp-prefill-dp4pcp8 / glm53-pcp-decode-dp16tp2
+  jobLabel: llm-d.ai/key
+  selector:
+    matchLabels:
+      llm-d.ai/guide: glm53-pcp-canary
+  podTargetLabels:
+    - disaggregatedset.x-k8s.io/revision
+    - leaderworkerset.sigs.k8s.io/group-index
+    - leaderworkerset.sigs.k8s.io/worker-index
+    - llm-d.ai/key
+    - llm-d.ai/model
+    - llm-d.ai/role
+  podMetricsEndpoints:
+    - {port: vllm-rank0, path: /metrics, interval: 5s, scrapeTimeout: 4s}
+    - {port: vllm-rank1, path: /metrics, interval: 5s, scrapeTimeout: 4s}
+    - {port: vllm-rank2, path: /metrics, interval: 5s, scrapeTimeout: 4s}
+    - {port: vllm-rank3, path: /metrics, interval: 5s, scrapeTimeout: 4s}
