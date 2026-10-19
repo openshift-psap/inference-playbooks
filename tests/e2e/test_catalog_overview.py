@@ -34,6 +34,17 @@ def test_missing_qwen_quickstart_is_neutral_placeholder(page, served):
     expect(panel.locator('pre')).to_have_count(0)
 
 
+def test_glm52_displays_model_provider_without_rewriting_checkpoint_identity(page, served):
+    page.goto(f'{served[0]}?model=glm-5.2')
+    expect(page.locator('.model-meta')).to_contain_text('Provider: Z.ai')
+    expect(page.locator('.model-meta')).not_to_contain_text('Provider: THUDM')
+    selected_id = page.locator('input[name="catalog-recipe"]:checked').input_value()
+    entry = next(entry for entry in served[1]['entries'] if entry['id'] == selected_id)
+    assert page.evaluate('currentView().serving.model') == entry['serving']['model']
+    model = next(model for model in served[1]['models'] if model['id'] == 'glm-5.2')
+    assert page.evaluate('currentModel().metadata.huggingface_id') == model['metadata']['huggingface_id']
+
+
 def test_populated_steps_preserve_source_without_placeholder(page, served):
     entry = next(entry for entry in served[1]['entries'] if not entry['blocked'] and (entry.get('notes') or {}).get('quickstart'))
     page.goto(served[0])
