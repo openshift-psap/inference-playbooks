@@ -4,7 +4,13 @@
 one merged PR through `workflow_dispatch`. It selects only the latest explicit
 successful `psap-forge-bot[bot]` report, ordered by GitHub `created_at` then ID.
 The primary `[mlflow results]` or `[MLFlow Test Results]` link must identify a
-parent run on the configured origin/workspace. Nested run/log links are ignored.
+parent run on the configured origin. Its workspace selects the MLflow request
+header: `forge-sandbox`, `forge-inference-playbooks`, and the configured
+`MLFLOW_WORKSPACE` are approved. Links without a workspace use `MLFLOW_WORKSPACE`
+(default `forge-sandbox`). Empty, repeated, or unapproved workspace values and
+primary links disagreeing on workspace/parent are rejected. Nested run/log links
+are ignored. Each PR selects its own workspace, including in a multi-PR push;
+there is no workspace probing or retry in another workspace.
 Failed, ambiguous, stale, unavailable, or unattributed evidence fails closed.
 No cluster access is used. Imports open a separate evidence PR, never push to
 `main`, and never promote maturity or platform verification.
@@ -147,9 +153,12 @@ rejected rather than merged; use separate benchmark runs/artifacts.
 Create protected environment `forge-evidence`, with:
 
 - Variables: `MLFLOW_TRACKING_URI`, `MLFLOW_WORKSPACE` (defaults to
-  `forge-sandbox`), optional `MLFLOW_INSECURE_TLS=true` for self-signed TLS.
+  `forge-sandbox`; a fallback for links without a workspace, not a restriction
+  to one workspace), optional `MLFLOW_INSECURE_TLS=true` for self-signed TLS.
   Prefer a trusted CA and leave insecure TLS disabled.
-- Secrets: read-only `MLFLOW_USERNAME`, `MLFLOW_PASSWORD`.
+- Secrets: read-only `MLFLOW_USERNAME`, `MLFLOW_PASSWORD`. The account needs
+  read access to each workspace used by selected reports; permission errors fail
+  ingestion without falling back to another workspace or older report.
 - Optional repository-level `FORGE_INGEST_RUNNER`: JSON runner labels with MLflow
   network access, e.g. `["self-hosted", "forge-evidence"]`. Default is `ubuntu-latest`.
   A custom runner must provide Bash, Git, and the GitHub CLI (`gh`).

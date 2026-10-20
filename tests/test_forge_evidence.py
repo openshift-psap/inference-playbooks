@@ -104,18 +104,19 @@ def test_duplicates_and_mixed_workloads_rejected(kpis):
         normalized(kpis)
 
 
-def forge_report(run_id='d' * 32, comment_id=123, label='mlflow results'):
+def forge_report(run_id='d' * 32, comment_id=123, label='mlflow results', workspace='forge-sandbox'):
     url = 'https://mlflow.example/#/experiments/470/runs/' + run_id
+    query = '' if workspace is None else '?workspace=' + workspace
     return {'id': comment_id, 'created_at': '2026-10-15T00:00:00Z',
             'user': {'login': 'psap-forge-bot[bot]'},
-            'body': f'Succeeded\n**MLFlow links**\n* [{label}]({url}/artifacts?workspace=forge-sandbox)\n'
+            'body': f'Succeeded\n**MLFlow links**\n* [{label}]({url}/artifacts{query})\n'
                     '* [nested run](https://mlflow.example/#/experiments/470/runs/' + 'a' * 32 + ')'}
 
 
 @pytest.mark.parametrize('label', ['mlflow results', 'MLFlow Test Results'])
 def test_comment_trust_and_origin(label):
     comment = forge_report(label=label)
-    assert selected_run([comment], 'https://mlflow.example', 'forge-sandbox') == ('d' * 32, 123)
+    assert selected_run([comment], 'https://mlflow.example', 'forge-sandbox') == ('d' * 32, 123, 'forge-sandbox')
     with pytest.raises(ValueError, match='invalid primary'):
         selected_run([comment], 'https://other.example', 'forge-sandbox')
     for body in ('failed', 'not successful, error', 'unsuccessful', 'not passed', 'a link without status'):
@@ -145,7 +146,38 @@ def test_report_order_and_duplicate_parent_reports():
     newer = forge_report(comment_id=1)
     duplicate = forge_report(comment_id=2, label='MLFlow Test Results')
     assert selected_run([duplicate, older, newer], 'https://mlflow.example',
-                        'forge-sandbox') == ('d' * 32, 2)
+                        'forge-sandbox') == ('d' * 32, 2, 'forge-sandbox')
+
+
+@pytest.mark.parametrize('default', ['forge-sandbox', 'forge-inference-playbooks', 'custom-workspace'])
+@pytest.mark.parametrize('workspace', ['forge-sandbox', 'forge-inference-playbooks', None])
+def test_report_workspace_routing_and_legacy_default(default, workspace):
+    assert selected_run([forge_report(workspace=workspace)], 'https://mlflow.example', default) == (
+        'd' * 32, 123, workspace or default)
+    assert selected_run([forge_report(workspace=default)], 'https://mlflow.example', default) == (
+        'd' * 32, 123, default)
+
+
+@pytest.mark.parametrize('workspace', [
+    '', 'other', 'forge-sandbox&workspace=forge-sandbox',
+    'forge-sandbox&workspace=forge-inference-playbooks',
+    'forge-sandbox%0d%0aInjected%3Atrue', '%20forge-sandbox', 'forge-sandbox%00',
+])
+def test_invalid_report_workspace_never_falls_back(workspace):
+    older = forge_report(comment_id=122)
+    with pytest.raises(ValueError, match='workspace'):
+        selected_run([older, forge_report(workspace=workspace)], 'https://mlflow.example', 'forge-sandbox')
+
+
+def test_primary_links_must_agree_on_workspace_and_parent():
+    first = forge_report()
+    duplicate = {**first, 'body': first['body'] + '\n' + first['body']}
+    assert selected_run([duplicate], 'https://mlflow.example', 'forge-sandbox') == (
+        'd' * 32, 123, 'forge-sandbox')
+    conflicting = {**first, 'body': first['body'] + '\n' +
+                   forge_report(workspace='forge-inference-playbooks')['body']}
+    with pytest.raises(ValueError, match='ambiguous primary'):
+        selected_run([conflicting], 'https://mlflow.example', 'forge-sandbox')
 
 
 @pytest.fixture
@@ -775,10 +807,11 @@ def test_sensitive_raw_artifact_rejected(artifact):
         safe_artifact(artifact)
 
 
-def test_workspace_header_auth_timeout_and_raw_download():
+@pytest.mark.parametrize('workspace', ['forge-sandbox', 'forge-inference-playbooks'])
+def test_workspace_header_auth_timeout_and_raw_download(workspace):
     import io
     import base64
-    client = Client('https://mlflow.example', 'forge-sandbox', 'user', 'password')
+    client = Client('https://mlflow.example', workspace, 'user', 'password')
     observed = []
     class Opener:
         def open(self, request, timeout):
@@ -788,7 +821,7 @@ def test_workspace_header_auth_timeout_and_raw_download():
     assert client.request('/get-artifact?run_id=abc', raw=True) == b'{"test": 1}'
     request, timeout = observed[0]
     headers = {k.lower(): v for k, v in request.header_items()}
-    assert headers['x-mlflow-workspace'] == 'forge-sandbox'
+    assert headers['x-mlflow-workspace'] == workspace
     assert headers['authorization'] == 'Basic ' + base64.b64encode(b'user:password').decode()
     assert timeout == 60
     with pytest.raises(ValueError):
@@ -817,14 +850,16 @@ def test_reference_update_preserves_surrounding_yaml(block):
 
 @pytest.mark.parametrize('failure', [None, NoKpiArtifactsError('empty'),
                                     ValueError('stale or mismatched tested revision'), TimeoutError('unavailable')])
-def test_merged_pr_discovery_intake(monkeypatch, tmp_path, capsys, failure):
+@pytest.mark.parametrize('workspace', ['forge-sandbox', 'forge-inference-playbooks'])
+def test_merged_pr_discovery_intake(monkeypatch, tmp_path, capsys, failure, workspace):
     import ingest_forge
     calls = []
     monkeypatch.setenv('GITHUB_REPOSITORY', 'org/repo')
-    for key, value in {'MLFLOW_TRACKING_URI': 'https://mlflow.example', 'MLFLOW_USERNAME': 'user',
+    for key, value in {'MLFLOW_TRACKING_URI': 'https://mlflow.example', 'MLFLOW_WORKSPACE': 'forge-sandbox',
+                       'MLFLOW_USERNAME': 'user',
                        'MLFLOW_PASSWORD': 'password'}.items():
         monkeypatch.setenv(key, value)
-    comment = forge_report()
+    comment = forge_report(workspace=workspace)
     comments = [forge_report('a' * 32, comment_id=122), comment]
     pr = {'number': 34, 'merged_at': '2026-10-14', 'base': {'ref': 'main'},
           'head': {'sha': 'b' * 40, 'ref': 'recipe-branch'}}
@@ -846,6 +881,7 @@ def test_merged_pr_discovery_intake(monkeypatch, tmp_path, capsys, failure):
     else:
         ingest_forge.main()
     assert len(calls) == 1
+    assert calls[0][0][0].headers['X-MLflow-Workspace'] == workspace
     assert calls[0][0][1:] == (tmp_path, 'd' * 32, 'b' * 40, 34, 123)
     assert calls[0][1] == {'require_parent': True, 'admissions': {}}
     assert 'skipping' not in capsys.readouterr().out
@@ -858,6 +894,41 @@ def test_merged_pr_discovery_intake(monkeypatch, tmp_path, capsys, failure):
     pr['head']['ref'] = 'automation/forge-evidence-existing'
     ingest_forge.main()
     assert calls == []
+
+
+def test_push_routes_each_pr_to_its_report_workspace(monkeypatch, tmp_path):
+    import ingest_forge
+    for key, value in {'GITHUB_REPOSITORY': 'org/repo', 'MLFLOW_TRACKING_URI': 'https://mlflow.example',
+                       'MLFLOW_WORKSPACE': 'forge-sandbox', 'MLFLOW_USERNAME': 'user',
+                       'MLFLOW_PASSWORD': 'password'}.items():
+        monkeypatch.setenv(key, value)
+    workspaces = {34: 'forge-inference-playbooks', 35: 'forge-sandbox'}
+    prs = {number: {'number': number, 'merged_at': '2026-10-14', 'base': {'ref': 'main'},
+                    'head': {'sha': 'b' * 40, 'ref': f'recipe-{number}'}} for number in workspaces}
+    def github(endpoint, paginated=False):
+        if '/commits/' in endpoint:
+            return list(prs.values())
+        number = int(endpoint.split('/')[-2 if endpoint.endswith('/comments') else -1])
+        return [forge_report(workspace=workspaces[number])] if endpoint.endswith('/comments') else prs[number]
+    monkeypatch.setattr(ingest_forge, 'github', github)
+    monkeypatch.setattr(ingest_forge.subprocess, 'run', lambda command, **kwargs:
+                        subprocess.CompletedProcess(command, 0, stdout='commit\n'))
+    scans = []
+    admissions = {}
+    def load(repo):
+        scans.append(repo)
+        return admissions
+    monkeypatch.setattr(ingest_forge, 'load_admissions', load)
+    calls = []
+    def import_run(client, repo, parent_id, revision, number, comment_id, **kwargs):
+        assert kwargs == {'require_parent': True, 'admissions': admissions}
+        calls.append((number, client.headers['X-MLflow-Workspace'], parent_id))
+    monkeypatch.setattr(ingest_forge, 'import_parent', import_run)
+    monkeypatch.setattr(sys, 'argv', ['ingest_forge.py', '--before', 'a' * 40,
+                                    '--head', 'b' * 40, '--repo', str(tmp_path)])
+    ingest_forge.main()
+    assert calls == [(number, workspace, 'd' * 32) for number, workspace in workspaces.items()]
+    assert scans == [tmp_path]
 
 
 def test_replay_rejects_raw_checksum_and_completeness_drift(intake):
@@ -1063,7 +1134,7 @@ def test_admission_identity_is_namespaced_and_legacy_conflicts_are_local(intake)
     import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
     commit_evidence(repo)
     admissions = load_admissions(repo)
-    client.headers = {'X-MLflow-Workspace': 'other'}
+    client.headers = {'X-MLflow-Workspace': 'forge-inference-playbooks'}
     assert not admitted_execution(repo, admissions, client, 'd' * 32, revision, 34, {})
     client.headers = {'X-MLflow-Workspace': 'forge-sandbox'}
     client.uri = 'https://other.example'
@@ -1118,25 +1189,31 @@ def test_admission_hit_preserves_current_attribution(intake, failure):
 
 
 @pytest.mark.parametrize('indexed', [False, True])
-def test_latest_only_thousand_reports_scale_and_privacy(intake, monkeypatch, capsys, indexed):
+@pytest.mark.parametrize('workspace', ['forge-sandbox', 'forge-inference-playbooks'])
+def test_latest_only_thousand_reports_scale_and_privacy(intake, monkeypatch, capsys, indexed, workspace):
     import fetch_forge_evidence
     import forge_admission
     import ingest_forge
     import normalize_kpis
     repo, path, revision, client, parent, values = intake
+    client.headers = {'X-MLflow-Workspace': workspace}
     if indexed:
         import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
         commit_evidence(repo)
     before = {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
     reports = [forge_report(f'{i:032x}', comment_id=i) for i in range(1, 1001)]
-    reports.append(forge_report(comment_id=1001, label='MLFlow Test Results'))
+    reports.append(forge_report(comment_id=1001, label='MLFlow Test Results', workspace=workspace))
     pr = {'merged_at': '2026-10-15', 'base': {'ref': 'main'},
           'head': {'sha': revision, 'ref': 'recipe-branch'}}
     monkeypatch.setenv('GITHUB_REPOSITORY', 'org/repo')
     for key, value in {'MLFLOW_TRACKING_URI': client.uri, 'MLFLOW_WORKSPACE': 'forge-sandbox',
                        'MLFLOW_USERNAME': 'private-user', 'MLFLOW_PASSWORD': 'private-password'}.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setattr(ingest_forge, 'Client', lambda *args: client)
+    def make_client(uri, selected_workspace, *args):
+        assert uri == client.uri
+        assert selected_workspace == workspace
+        return client
+    monkeypatch.setattr(ingest_forge, 'Client', make_client)
     monkeypatch.setattr(ingest_forge, 'github', lambda endpoint, *args: reports if endpoint.endswith('/comments') else pr)
     original_git = subprocess.run
     git_calls = []
@@ -1191,6 +1268,12 @@ def test_latest_only_thousand_reports_scale_and_privacy(intake, monkeypatch, cap
         assert [args[0] for method, args in requests if method == 'run'] == ['d' * 32]
         assert [args[0] for method, args in requests if method == 'kpis'] == ['d' * 32, 'a' * 32]
         assert 'imported=1 indexed=0' in output
+        for run_path in path.parent.glob('results/*/run.yaml'):
+            forge = yaml.safe_load(run_path.read_text())['forge']
+            assert forge['mlflow_workspace'] == workspace
+            assert f'workspace={workspace}' in forge['mlflow_run_url']
+        for receipt_path in path.parent.glob('results/*/forge-import.json'):
+            assert json.loads(receipt_path.read_text())['workspace'] == workspace
 
 
 def test_v1_run_and_result_remain_compatible():
