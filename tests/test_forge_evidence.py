@@ -785,6 +785,67 @@ def test_attribution_failure_does_not_write(intake, failure):
     assert not (path.parent / 'results').exists()
 
 
+@pytest.fixture
+def legacy_presentation_intake(intake):
+    repo, path, _, client, parent, values = intake
+    model_path = repo / 'models/test/model.yaml'
+    model_path.write_text('presentation:\n  provider: Example\n')
+    commit_evidence(repo)
+    revision = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    next(tag for tag in parent['data']['tags'] if tag['key'] == 'playbooks.tested_revision')['value'] = revision
+    model_path.write_text('{}\n')
+    commit_evidence(repo)
+    return repo, path, revision, client, parent, values
+
+
+def test_removed_legacy_model_presentation_allows_import_and_local_admission(legacy_presentation_intake):
+    repo, path, revision, client, parent, values = legacy_presentation_intake
+    import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
+    commit_evidence(repo)
+    for method in ('run', 'children', 'kpis', 'request'):
+        setattr(client, method, lambda *args, **kwargs: pytest.fail('admitted execution must stay local'))
+    assert admitted_execution(repo, load_admissions(repo), client, 'd' * 32, revision, 34, {})
+    (repo / 'models/test/model.yaml').write_text('presentation:\n  provider: Dirty\n')
+    with pytest.raises(ValueError, match='dirty Forge deployment input'):
+        admitted_execution(repo, load_admissions(repo), client, 'd' * 32, revision, 34, {})
+
+
+@pytest.mark.parametrize('change', [
+    {'huggingface_id': 'different/model'}, {'quantizations': [{'name': 'INT4'}]},
+    {'model_type': 'different'}, {'architectures': ['DifferentArchitecture']},
+    {'source': 'huggingface'}, {'future_field': 'must still match'},
+])
+def test_legacy_presentation_does_not_hide_other_model_changes(legacy_presentation_intake, change):
+    repo, path, revision, client, parent, values = legacy_presentation_intake
+    (repo / 'models/test/model.yaml').write_text(yaml.safe_dump(change))
+    with pytest.raises(ValueError, match='merged deployment inputs differ'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('failure', ['override', 'config', 'recipe', 'duplicate-model-key',
+                                    'model-symlink', 'model-mode'])
+def test_legacy_model_exception_preserves_other_input_checks(legacy_presentation_intake, failure):
+    repo, path, revision, client, parent, values = legacy_presentation_intake
+    if failure == 'duplicate-model-key':
+        (repo / 'models/test/model.yaml').write_text('presentation: {}\npresentation: {}\n')
+    elif failure == 'model-symlink':
+        target = repo / 'models/test/model.yaml'
+        target.unlink()
+        target.symlink_to('recipes/test-recipe/platforms/vllm.yaml')
+    elif failure == 'model-mode':
+        (repo / 'models/test/model.yaml').chmod(0o755)
+    elif failure == 'recipe':
+        path.write_text(path.read_text() + 'presentation: {}\n')
+    else:
+        target = path.parent / ('platforms/vllm.yaml' if failure == 'override' else 'config/patch.yaml')
+        target.write_text('presentation: {}\n')
+    with pytest.raises((ValueError, yaml.YAMLError)):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert not (path.parent / 'results').exists()
+
+
 def test_unavailable_and_redirect_rejected(intake):
     repo, path, revision, client, parent, values = intake
     def unavailable(_):

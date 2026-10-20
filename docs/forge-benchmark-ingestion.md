@@ -144,8 +144,12 @@ model/vLLM platform.
 
 Recipe, model, profile, overrides, pinned manifests, and config inputs must
 match the tested Git snapshot. Only additions to `benchmark_runs` are ignored
-for replay/idempotence. Updating an existing immutable run with different
-content is rejected. Distinct workloads within one harness artifact are
+for recipe replay/idempotence. Model comparisons ignore the retired top-level
+`presentation` metadata in historical snapshots; this does not restore a current
+model field. Every other model field must match, including unknown fields.
+Other deployment inputs retain exact Git comparisons, and receipt admission
+still requires clean, committed inputs. Updating an existing immutable run with
+different content is rejected. Distinct workloads within one harness artifact are
 rejected rather than merged; use separate benchmark runs/artifacts.
 
 ## Runner and secrets

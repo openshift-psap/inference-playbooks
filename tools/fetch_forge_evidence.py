@@ -428,7 +428,8 @@ def tested_inputs(repo, relative, expected_revision, require_clean=None):
         data.pop('benchmark_runs', None)
     if tested != current:
         raise ValueError('merged recipe differs from tested revision')
-    inputs = [recipe['hardware_profile'], str(path.parent.parent.parent.relative_to(repo) / 'model.yaml')]
+    model_relative = str(path.parent.parent.parent.relative_to(repo) / 'model.yaml')
+    inputs = [recipe['hardware_profile'], model_relative]
     inputs.extend(str((path.parent / p['overrides']).relative_to(repo)) for p in recipe['platforms'])
     inputs.extend(str((path.parent / p['pinned_manifest']).relative_to(repo))
                   for p in recipe['platforms'] if p.get('pinned_manifest'))
@@ -437,10 +438,25 @@ def tested_inputs(repo, relative, expected_revision, require_clean=None):
     if require_clean is not None:
         for input_path in [*inputs, str(path.parent.relative_to(repo) / 'config')]:
             require_clean(input_path)
-    diff = subprocess.run(['git', '-C', str(repo), 'diff', expected_revision, '--', *inputs,
+    diff = subprocess.run(['git', '-C', str(repo), 'diff', '--name-only', expected_revision, '--', *inputs,
                            str(path.parent.relative_to(repo) / 'config')], check=True, capture_output=True, text=True)
     if diff.stdout:
-        raise ValueError('merged deployment inputs differ from tested revision')
+        if diff.stdout.splitlines() != [model_relative]:
+            raise ValueError('merged deployment inputs differ from tested revision')
+        summary = subprocess.run(['git', '-C', str(repo), 'diff', '--summary', expected_revision,
+                                  '--', model_relative], check=True, capture_output=True, text=True)
+        if summary.stdout:
+            raise ValueError('merged deployment inputs differ from tested revision')
+        current_model = load_unique_yaml(checked_path(repo, model_relative).read_text())
+        tested_model = load_unique_yaml(subprocess.run(
+            ['git', '-C', str(repo), 'show', f'{expected_revision}:{model_relative}'],
+            check=True, capture_output=True, text=True).stdout)
+        # Retired catalog-only metadata may occur in tested historical snapshots.
+        # All remaining model fields, including unknown future fields, must agree.
+        for model in (tested_model, current_model):
+            model.pop('presentation', None)
+        if tested_model != current_model:
+            raise ValueError('merged deployment inputs differ from tested revision')
     untracked = subprocess.run(['git', '-C', str(repo), 'ls-files', '--others', '--', *inputs,
                                 str(path.parent.relative_to(repo) / 'config')],
                                check=True, capture_output=True, text=True)
