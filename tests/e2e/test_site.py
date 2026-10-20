@@ -20,7 +20,12 @@ def test_all_recipe_platform_entries_reachable(page, served):
         for artifact in entry['artifacts']:
             expect(page.locator('pre').filter(has_text=artifact['body']).first).to_be_visible()
         page.get_by_role('button', name='Benchmark', exact=True).click()
-        expect(page.locator('.panel')).to_contain_text('No committed benchmark evidence for this recipe')
+        if entry['evidence']:
+            for item in entry['evidence']:
+                expect(page.get_by_text(f"Run: {item['run']['run_id']}", exact=True)).to_be_visible()
+            expect(page.locator('.panel')).not_to_contain_text('No committed benchmark evidence for this recipe')
+        else:
+            expect(page.locator('.panel')).to_contain_text('No committed benchmark evidence for this recipe')
 
 
 def test_invalid_urls_model_switch_and_ambiguity(page, served):

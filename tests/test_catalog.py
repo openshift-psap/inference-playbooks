@@ -50,7 +50,15 @@ def test_current_entries_follow_repository_inputs():
     recipes = [yaml.safe_load(path.read_text()) for path in REPO.glob('models/*/recipes/*/recipe.yaml')]
     assert len(result['entries']) == sum(len(recipe['platforms']) for recipe in recipes)
     assert {model['id'] for model in result['models']} == {recipe['model_id'] for recipe in recipes}
-    assert all(entry['evidence'] == [] and entry['validation']['state'] == 'none' for entry in result['entries'])
+    for entry in result['entries']:
+        path = REPO / entry['source']['path']
+        recipe = yaml.safe_load(path.read_text())
+        expected = [str((path.parent / reference).relative_to(REPO))
+                    for reference in recipe.get('benchmark_runs', [])]
+        assert [evidence['source']['path'] for evidence in entry['evidence']] == expected
+        assert entry['maturity'] == recipe['maturity']
+        if recipe['maturity'] not in ('validated', 'production'):
+            assert entry['validation']['state'] == 'none'
     assert len({entry['id'] for entry in result['entries']}) == len(result['entries'])
 
 
@@ -170,10 +178,14 @@ def test_stdout_is_json_and_does_not_modify_tracked_catalog(tmp_path):
     assert all((entry['source']['url'] is None) == dirty for entry in json.loads(result.stdout)['entries'])
 
 
-def test_old_snapshot_claims_do_not_become_current_evidence():
+def test_old_snapshot_claims_do_not_become_current_evidence(repo):
     original = json.loads((REPO / 'tests/fixtures/pr17-original-catalog.json').read_text())
     assert original['models'][0]['validated'] is True
-    assert all(entry['validation']['state'] == 'none' and not entry['evidence'] for entry in catalog()['entries'])
+    for path in repo.glob('models/*/recipes/*/recipe.yaml'):
+        recipe = yaml.safe_load(path.read_text())
+        recipe.pop('benchmark_runs', None)
+        path.write_text(yaml.safe_dump(recipe))
+    assert all(entry['validation']['state'] == 'none' and not entry['evidence'] for entry in catalog(repo)['entries'])
 
 
 def attach_synthetic_run(repo):

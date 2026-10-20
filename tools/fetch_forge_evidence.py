@@ -533,10 +533,6 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         safe_artifact(document)
         model = load_unique_yaml((path.parent.parent.parent / 'model.yaml').read_text())
         validate_model_identity(document, recipe, model)
-        if manifest_bound and any(test.get('labels', {}).get('served_model',
-                test.get('labels', {}).get('model_name')) != recipe['serving']['model']
-                for test in document['tests']):
-            raise ValueError('manifest-bound evidence requires exact checkpoint model labels')
         for test in document['tests']:
             labels = test.get('labels', {})
             # Forge 768a2858 takes product_version from platforms[0], not the

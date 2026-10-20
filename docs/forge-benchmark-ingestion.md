@@ -91,8 +91,12 @@ rewrites currently fail rather than being guessed. Declared manifests also
 participate in local receipt-input checks.
 
 Model identity and load location are separate: an HF checkpoint, filesystem
-path, and API alias need not be equal. Manifest-bound parent evidence requires
-exact checkpoint model labels; aliases cannot authorize another PVC/path.
+path, and API alias need not be equal. Any supplied model identity labels must
+match the checkpoint declaration; aliases cannot authorize another PVC/path.
+Harnesses need not duplicate those labels: for example, current AIPerf output
+can contain only phase/tool/concurrency labels. Such records retain tested
+execution/manifest attribution without synthesized model labels or normalized
+`model_identity`. Missing labels are not independent proof of weight identity.
 LWS runtime model arguments must agree with the tested launch. LLMInferenceService
 controller-generated local paths must resolve to its declared PVC/mount/subpath,
 not a hardcoded `/mnt/models` exception.
