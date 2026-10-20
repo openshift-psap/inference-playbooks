@@ -89,6 +89,7 @@ spec:
             capabilities:
               drop:
               - ALL
+            runAsUser: 1000770000
           startupProbe:
             failureThreshold: 720
             httpGet:
@@ -181,6 +182,7 @@ spec:
             capabilities:
               drop:
               - ALL
+            runAsUser: 1000770000
           volumeMounts:
           - mountPath: /dev/shm
             name: dshm

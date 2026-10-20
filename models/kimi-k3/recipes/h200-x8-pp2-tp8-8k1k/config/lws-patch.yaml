@@ -1,4 +1,4 @@
-# Pin a non-root UID because the image defaults to root.
+# Keep the namespace UID at both scopes; Forge strips the pod-level value.
 - op: add
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/serviceAccountName
   value: default
@@ -16,11 +16,17 @@
 - op: replace
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsUser
   value: 1000770000
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/securityContext/runAsUser
+  value: 1000770000
 - op: replace
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsNonRoot
   value: true
 - op: replace
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsUser
+  value: 1000770000
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/securityContext/runAsUser
   value: 1000770000
 # Local model staging does not require the template's HF_TOKEN secret.
 - op: remove
