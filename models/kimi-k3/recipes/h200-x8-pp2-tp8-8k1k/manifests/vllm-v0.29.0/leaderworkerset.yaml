@@ -106,6 +106,7 @@ spec:
             name: model
         securityContext:
           runAsNonRoot: true
+          runAsUser: 1000770000
         serviceAccountName: default
         volumes:
         - emptyDir:
@@ -191,6 +192,7 @@ spec:
             name: model
         securityContext:
           runAsNonRoot: true
+          runAsUser: 1000770000
         serviceAccountName: default
         volumes:
         - emptyDir:
