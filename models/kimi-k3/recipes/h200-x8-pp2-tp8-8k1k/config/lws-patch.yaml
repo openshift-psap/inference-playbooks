@@ -1,29 +1,25 @@
-# Root execution needs the namespace's anyuid-authorized service account. The
-# upstream image needs no site-packages patch.
+# Use the default service account; restricted SCC assigns its namespace UID.
 - op: add
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/serviceAccountName
   value: default
 - op: add
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/serviceAccountName
   value: default
-# LWS mirrors this pod profile into legacy seccomp annotations, which Janus's
-# anyuid SCC rejects. Leave the profile to the cluster's runtime default.
+# LWS mirrors this profile into legacy seccomp annotations rejected by Janus.
 - op: remove
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/seccompProfile
 - op: remove
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/seccompProfile
 - op: replace
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsNonRoot
-  value: false
-- op: replace
+  value: true
+- op: remove
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsUser
-  value: 0
 - op: replace
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsNonRoot
-  value: false
-- op: replace
+  value: true
+- op: remove
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsUser
-  value: 0
 # Local model staging does not require the template's HF_TOKEN secret.
 - op: remove
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/env/0

@@ -76,7 +76,7 @@ deployment:
       size: 2Ti
       access_modes: [ReadWriteMany]
       storage_class: nfs
-    why: Use the pre-populated shared NFS model cache; the PVC is provisioned outside this recipe.
+    why: Use the external shared NFS claim; verify existing contents or populate a new, empty claim with the model-ops Job before serving.
   manifests:
     - {path: manifests/vllm-v0.29.0/leaderworkerset.yaml, kind: LeaderWorkerSet, generated: true}
 notes: guides/notes.yaml

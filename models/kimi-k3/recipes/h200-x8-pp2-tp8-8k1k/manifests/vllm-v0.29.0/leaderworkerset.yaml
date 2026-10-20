@@ -105,8 +105,7 @@ spec:
           - mountPath: /models
             name: model
         securityContext:
-          runAsNonRoot: false
-          runAsUser: 0
+          runAsNonRoot: true
         serviceAccountName: default
         volumes:
         - emptyDir:
@@ -191,8 +190,7 @@ spec:
           - mountPath: /models
             name: model
         securityContext:
-          runAsNonRoot: false
-          runAsUser: 0
+          runAsNonRoot: true
         serviceAccountName: default
         volumes:
         - emptyDir:

@@ -39,12 +39,12 @@ known_issues:
   - issue: The serving image uses a versioned tag rather than an immutable digest.
     impact: Tag changes or different node caches can select different executable images across roles or restarts.
     mitigation: Resolve and pin the image digest before deployment and record it with benchmark evidence.
-  - issue: Root execution requires an anyuid-authorized service account.
-    impact: A restricted SCC can reject the pod even though the model PVC is read-only and no hostPath is used.
-    mitigation: Verify the serving service account can use anyuid in the target namespace; see guides/storage.md.
-  - issue: The shared NFS model claim is an external, pre-populated dependency.
+  - issue: The selected image's startup with the namespace-assigned non-root UID needs confirmation.
+    impact: A process that assumes root or cannot write to its configured cache can fail during startup.
+    mitigation: Run both LWS roles with OpenShift-assigned non-root UIDs, keep writable caches on emptyDir, and verify model startup; do not grant anyuid unless runtime evidence shows it is required.
+  - issue: The shared NFS claim must be provisioned and its checkpoint verified before serving.
     impact: A missing claim, unexpected checkpoint layout, insufficient permissions, or low aggregate NFS throughput prevents or slows model loading on both nodes.
-    mitigation: Ensure the configured RWX claim is Bound and exposes /models/Kimi-K3 read-only; verify checkpoint integrity and concurrent read throughput. See guides/storage.md.
+    mitigation: Provision the RWX claim. Verify existing contents against the pinned revision; use the model-ops Job only for a new, empty claim. Confirm permissions and concurrent read throughput; do not run the downloader over an existing checkpoint. See guides/storage.md.
   - issue: The 8192-token total context limit is smaller than an 8K-input plus 1K-output request.
     impact: The server can reject requests from the selected guidellm-8k1k workload.
     mitigation: Confirm the workload's exact token counts and increase the context budget to accommodate the complete request; rerender and benchmark the matching configuration.
@@ -52,7 +52,13 @@ known_issues:
     impact: The source sweep's input distribution does not represent the selected workload.
     mitigation: Run the target workload and commit its exact harness configuration, prompt provenance, raw output, and normalized results.
 quickstart:
-  - {step: Prepare, detail: "Install the LeaderWorkerSet controller and composite DRA GPU/NIC-pair driver; verify the pre-populated RWX model claim, image availability, and anyuid authorization for the default service account."}
+  - step: Prepare
+    detail: >-
+      Install the LeaderWorkerSet controller and composite DRA GPU/NIC-pair
+      driver; verify the RWX model claim, checkpoint contents, and image
+      availability. Populate only a new, empty claim with the model-ops Job
+      before deploying. The serving overlay runs both roles as non-root; verify
+      that each process can use its writable cache with the assigned SCC.
   - {step: Network, detail: Verify target-cluster HCA and GID settings symmetrically; see recipe.yaml and the referenced hardware profile.}
   - {step: Render, detail: Run tools/render.py for this recipe; config/ is an overlay and must not be applied directly.}
   - {step: Deploy, detail: "Apply manifests/vllm-v0.29.0/leaderworkerset.yaml, which contains both the LeaderWorkerSet and leader-only Service."}
