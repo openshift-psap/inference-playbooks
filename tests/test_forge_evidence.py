@@ -1543,6 +1543,35 @@ def test_ingestion_workflow_is_standalone():
     assert "github.ref == 'refs/heads/main'" in text
 
 
+def test_ingestion_uses_repo_scoped_app_token_and_bot_identity():
+    text = (REPO / '.github/workflows/benchmark-ingest.yml').read_text()
+    job = yaml.safe_load(text)['jobs']['ingest']
+    assert job['permissions'] == {'contents': 'read', 'pull-requests': 'read'}
+    assert job['environment'] == 'forge-evidence'
+    steps = job['steps']
+    mint = next(step for step in steps if step.get('id') == 'app-token')
+    assert mint['uses'] == 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510'
+    assert mint['with'] == {
+        'client-id': '${{ vars.FORGE_INGEST_APP_CLIENT_ID }}',
+        'private-key': '${{ secrets.FORGE_INGEST_APP_PRIVATE_KEY }}',
+        'owner': '${{ github.repository_owner }}',
+        'repositories': '${{ github.event.repository.name }}',
+        'permission-contents': 'write',
+        'permission-pull-requests': 'write',
+    }
+    publish = next(step for step in steps if step.get('name') == 'Open evidence import PR')
+    assert publish['with']['token'] == '${{ steps.app-token.outputs.token }}'
+    assert publish['with']['author'] == '${{ steps.bot-identity.outputs.author }}'
+    assert publish['with']['committer'] == publish['with']['author']
+    identity = next(step for step in steps if step.get('id') == 'bot-identity')
+    assert identity['env']['GH_TOKEN'] == '${{ steps.app-token.outputs.token }}'
+    assert 'gh api "users/$bot_login"' in identity['run']
+    fetch = next(step for step in steps if step.get('name') == 'Fetch and normalize attributed evidence')
+    assert fetch['env']['GH_TOKEN'] == '${{ github.token }}'
+    assert steps.index(mint) < steps.index(publish)
+    assert 'FORGE_INGEST_GITHUB_TOKEN' not in text
+
+
 def test_attribution_cannot_remove_tested_evidence_references(intake, monkeypatch):
     repo, path, revision, client, parent, values = intake
     original_run = subprocess.run
