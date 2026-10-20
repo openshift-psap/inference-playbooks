@@ -20,6 +20,7 @@ import yaml
 
 from normalize_kpis import normalize
 from forge_model_identity import validate_model_identity
+from forge_serving_contract import model_mount_matches, validate_launch
 from recipe_evidence import load_unique_yaml
 
 
@@ -181,7 +182,9 @@ def serving_arguments(container):
         tokens = expanded
         start = next((i for i in range(len(tokens) - 1)
                       if tokens[i:i + 2] == ['vllm', 'serve']), None)
-        tokens = tokens[start + 2:] if start is not None else args
+        forwarded = any(re.fullmatch(r'\s*(?:exec\s+)?vllm\s+serve\s+["\']?\$@["\']?\s*', part)
+                        for part in command)
+        tokens = args if forwarded else (tokens[start + 2:] if start is not None else args)
         additional = [entry for entry in container.get('env', []) if entry.get('name') == 'VLLM_ADDITIONAL_ARGS']
         if len(additional) > 1 or any('value' not in entry for entry in additional):
             raise ValueError('unresolved serving arguments')
@@ -189,7 +192,8 @@ def serving_arguments(container):
             tokens = [*tokens, *shlex.split(entry['value'])]
     except (TypeError, ValueError):
         raise ValueError('unsupported or unresolved serving arguments') from None
-    model = tokens[0] if start is not None and tokens and not tokens[0].startswith('-') else None
+    positional = forwarded or start is not None or not command
+    model = tokens[0] if positional and tokens and not tokens[0].startswith('-') else None
     revisions = []
     for i, token in enumerate(tokens):
         if token in ('--revision', '--model'):
@@ -258,14 +262,12 @@ def distributed_serving_values(manifest, pods, checkpoint):
             # invocation is a serving container for LLMInferenceService.
             if kind == 'LLMInferenceService' and model is None:
                 continue
-            if model is not None and model != checkpoint:
-                if kind != 'LLMInferenceService' or model != '/mnt/models':
-                    raise ValueError('execution served checkpoint disagrees with recipe')
+            if kind == 'LLMInferenceService' and not model_mount_matches(pod, container, uri, model):
+                raise ValueError('runtime model path disagrees with declared model storage')
             for i in matches:
                 declared_model, declared_revision = serving_arguments(servers[i])
-                allowed_models = {checkpoint, '/mnt/models'} if kind == 'LLMInferenceService' else {checkpoint}
-                if declared_model is not None and declared_model not in allowed_models:
-                    raise ValueError('execution served checkpoint disagrees with recipe')
+                if declared_model is not None and model != declared_model:
+                    raise ValueError('runtime model argument disagrees with tested launch')
                 if declared_revision is not None and revision != declared_revision:
                     raise ValueError('runtime serving revision disagrees with role configuration')
             status = [s for s in statuses if s.get('name') == container['name'] and s.get('ready') is True]
@@ -324,6 +326,10 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number):
     if len(platforms) != 1:
         raise ValueError('execution platform is missing or ambiguous')
     platform = platforms[0]
+    declared_manifests = recipe.get('deployment', {}).get('manifests', [])
+    if declared_manifests and manifest_path not in {
+            str(path.parent.relative_to(repo) / item['path']) for item in declared_manifests}:
+        raise ValueError('execution manifest is not declared by the tested recipe')
     profile = load_unique_yaml(checked_path(repo, recipe['hardware_profile']).read_text())
     source = '01__test/001__inference_playbooks_test_dir/src'
     listing = client.request('/api/2.0/mlflow/artifacts/list?' + urlencode({'run_id': parent_id, 'path': source}))
@@ -342,6 +348,7 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number):
         raise ValueError('unsupported execution serving manifest')
     if (kind == 'LLMInferenceService') != (platform['stack'] == 'rhoai'):
         raise ValueError('execution serving kind disagrees with selected platform')
+    validate_launch(repo, manifest_path, expected_revision, deployment)
     log = artifact('01__test/run.log')
     if kind != 'Deployment':
         capture_name = 'lws' if kind == 'LeaderWorkerSet' else 'llmisvc'
@@ -359,7 +366,7 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number):
                   'platform_stack': platform['stack'], 'platform_version': platform['version'],
                   'model_revision': model_revision, 'image_digest': image_digest}
     else:
-        values = deployment_serving_values(deployment, log, recipe['serving']['model'])
+        values = deployment_serving_values(deployment, log)
         values.update({'recipe_path': relative, 'tested_revision': revision, 'pr_number': str(pr_number),
                        'hardware_profile': recipe['hardware_profile'], 'hardware_profile_revision': str(profile['profile_revision']),
                        'platform_stack': platform['stack'], 'platform_version': platform['version']})
@@ -376,26 +383,16 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number):
     return {'playbooks.' + key: value for key, value in values.items()}
 
 
-def deployment_serving_values(deployment, log, checkpoint):
+def deployment_serving_values(deployment, log):
     """Preserve the existing Deployment capture format embedded in run.log."""
     containers = deployment['spec']['template']['spec']['containers']
     servers = [container for container in containers if container.get('name') == 'vllm']
     if len(servers) != 1:
         raise ValueError('execution serving container is missing or ambiguous')
     server = servers[0]
-    args = server.get('args', [])
-    if not args or args[0] != checkpoint:
-        raise ValueError('execution served checkpoint disagrees with recipe')
-    revisions = []
-    for i, arg in enumerate(args):
-        if arg == '--revision':
-            if i + 1 == len(args):
-                raise ValueError('execution model revision is missing')
-            revisions.append(args[i + 1])
-        elif arg.startswith('--revision='):
-            revisions.append(arg.partition('=')[2])
-    if len(revisions) > 1:
-        raise ValueError('execution model revision is ambiguous')
+    model, revision = serving_arguments(server)
+    if model is None:
+        raise ValueError('execution model argument is missing or unsupported')
     plain = re.sub(r'(?m)^\| ?', '', log)
     digests = set()
     for block in re.split(r'(?m)^\s*containerID:', plain)[1:]:
@@ -407,7 +404,7 @@ def deployment_serving_values(deployment, log, checkpoint):
             digests.add(image_id[1])
     if len(digests) != 1:
         raise ValueError('ready serving container image digest is missing or ambiguous')
-    return {'model_revision': revisions[0] if revisions else 'main', 'image_digest': digests.pop()}
+    return {'model_revision': revision or 'main', 'image_digest': digests.pop()}
 
 
 def tested_inputs(repo, relative, expected_revision, require_clean=None):
@@ -430,6 +427,8 @@ def tested_inputs(repo, relative, expected_revision, require_clean=None):
         raise ValueError('merged recipe differs from tested revision')
     model_relative = str(path.parent.parent.parent.relative_to(repo) / 'model.yaml')
     inputs = [recipe['hardware_profile'], model_relative]
+    inputs.extend(str((path.parent / manifest['path']).relative_to(repo))
+                  for manifest in recipe.get('deployment', {}).get('manifests', []))
     inputs.extend(str((path.parent / p['overrides']).relative_to(repo)) for p in recipe['platforms'])
     inputs.extend(str((path.parent / p['pinned_manifest']).relative_to(repo))
                   for p in recipe['platforms'] if p.get('pinned_manifest'))
@@ -519,6 +518,7 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
             continue
         artifact_count += 1
         values = {**tags(parent), **tags(child)}
+        manifest_bound = False
         required = ('recipe_path', 'tested_revision', 'hardware_profile', 'hardware_profile_revision',
                     'model_revision', 'image_digest', 'platform_stack', 'platform_version', 'pr_number', 'command')
         if current_parent and any(not values.get('playbooks.' + key) for key in required):
@@ -526,15 +526,23 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
             if any(key in values and values[key] != value for key, value in recorded.items()):
                 raise ValueError('Forge attribution tags disagree with recorded execution')
             values = {**values, **recorded}
+            manifest_bound = True
         path, recipe, profile, platform = attribution(repo, values, expected_revision, pr_number)
         artifact_path, raw = artifact
         document = json.loads(raw)
         safe_artifact(document)
         model = load_unique_yaml((path.parent.parent.parent / 'model.yaml').read_text())
         validate_model_identity(document, recipe, model)
+        if manifest_bound and any(test.get('labels', {}).get('served_model',
+                test.get('labels', {}).get('model_name')) != recipe['serving']['model']
+                for test in document['tests']):
+            raise ValueError('manifest-bound evidence requires exact checkpoint model labels')
         for test in document['tests']:
             labels = test.get('labels', {})
-            if platform['stack'] == 'vllm' and labels.get('product_version') and labels['product_version'].lstrip('v') != platform['version'].lstrip('v'):
+            # Forge 768a2858 takes product_version from platforms[0], not the
+            # selected manifest. Once launch-bound, it is descriptive raw metadata;
+            # platform attribution comes from that exact tested manifest instead.
+            if not manifest_bound and platform['stack'] == 'vllm' and labels.get('product_version') and labels['product_version'].lstrip('v') != platform['version'].lstrip('v'):
                 raise ValueError('KPI platform version disagrees with run attribution')
         results = normalize(document, run_id=f'forge-{child_id}', deployment_scope=recipe['deployment']['scope'],
                             accelerator_key=profile['accelerator_key'],

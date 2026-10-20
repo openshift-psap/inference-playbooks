@@ -81,6 +81,22 @@ names and capture ordinals. There is no recursive runtime-artifact search or
 alternate digest-source fallback. LWS selects `vllm`, `vllm-leader`, or
 `vllm-worker` containers from its role templates. LLMInferenceService selects
 the `main` container running vLLM, not router, sidecar, or init containers.
+The captured launch spec must match the selected committed manifest at the
+tested recipe SHA, including platform overrides and Kustomize patches already
+materialized there. Historical renderers/PR code are never executed. Only the
+audited Forge additions are normalized: run labels/selectors, pod-level UID
+removal, and absent HOME/USER defaults. Other environment/security/storage/
+argument/resource changes fail. Undeclared HF-to-PVC rewrites and RDMA resource
+rewrites currently fail rather than being guessed. Declared manifests also
+participate in local receipt-input checks.
+
+Model identity and load location are separate: an HF checkpoint, filesystem
+path, and API alias need not be equal. Manifest-bound parent evidence requires
+exact checkpoint model labels; aliases cannot authorize another PVC/path.
+LWS runtime model arguments must agree with the tested launch. LLMInferenceService
+controller-generated local paths must resolve to its declared PVC/mount/subpath,
+not a hardcoded `/mnt/models` exception.
+
 Declared revisions come from serving arguments or `VLLM_ADDITIONAL_ARGS`;
 omission uses the accepted `main` default. Model-less LWS workers share the
 leader's model load. LLMInferenceService supports HF and PVC model URIs; PVC
@@ -100,6 +116,11 @@ parent MLflow URL, while raw KPIs and their existing checksum remain unchanged.
 The existing model identity checks are unchanged: new KPI `served_model` labels
 identify the exact served checkpoint, alongside declared base model/quantization.
 Historical base-only labels do not establish a different quantized checkpoint.
+For manifest-bound parent imports, legacy `product_version` is preserved as raw
+descriptive metadata, not compared with an engine version. Forge PR #322 at
+`768a2858` derives that label from the first recipe platform even when another
+platform manifest is selected. The selected tested manifest determines run
+platform attribution; unbound legacy tagged imports retain their version check.
 
 ### Existing tagged execution contract
 

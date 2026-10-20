@@ -14,7 +14,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tools'))
-from fetch_forge_evidence import Client, NoKpiArtifactsError, NoRedirect, append_reference, import_parent, safe_artifact
+from fetch_forge_evidence import Client, NoKpiArtifactsError, NoRedirect, append_reference, import_parent, safe_artifact, serving_arguments
 from forge_model_identity import validate_model_identity
 from ingest_forge import selected_run
 from forge_admission import admitted_execution, load_admissions
@@ -302,7 +302,29 @@ def parent_intake(variant_intake, kpis):
     client.request = request
     client.kpis = lambda run_id: ('01__test/002__postprocessing/kpis/kpis.json', raw)
     client.children = lambda parent: pytest.fail('current parent KPIs must not enumerate children')
+    revision = record_launch(repo, artifacts, source)
     return repo, path, revision, client, parent, artifacts, raw
+
+
+def record_launch(repo, artifacts, source):
+    """Commit the selected effective manifest as a producer would consume it."""
+    config = yaml.safe_load(artifacts['01__test/001__inference_playbooks_test_dir/config.yaml'])
+    manifest = repo / config['inference_playbooks']['manifest_path']
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(artifacts[source])
+    recipe_path = manifest.parents[2] / 'recipe.yaml'
+    recipe = yaml.safe_load(recipe_path.read_text())
+    recipe['deployment']['manifests'] = [{'path': str(manifest.relative_to(recipe_path.parent)),
+                                         'kind': yaml.safe_load(artifacts[source])['kind'], 'generated': True}]
+    recipe_path.write_text(yaml.safe_dump(recipe, sort_keys=False))
+    commit_evidence(repo)
+    revision = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    fjob_path = '01__test/000__ci_metadata/fournos_fjob.yaml'
+    fjob = yaml.safe_load(artifacts[fjob_path])
+    fjob['spec']['env']['FORGE_FOREIGN_TESTING_PULL_PULL_SHA'] = revision
+    artifacts[fjob_path] = yaml.safe_dump(fjob)
+    return revision
 
 
 def test_tagless_parent_two_harnesses_replay_and_receipt(parent_intake, monkeypatch):
@@ -375,10 +397,116 @@ def test_tagless_parent_explicit_model_revision(parent_intake):
     deployment = yaml.safe_load(artifacts[source])
     deployment['spec']['template']['spec']['containers'][0]['args'].append('--revision=release/model-v2')
     artifacts[source] = yaml.safe_dump(deployment)
+    revision = record_launch(repo, artifacts, source)
     import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
     for reference in yaml.safe_load(path.read_text())['benchmark_runs']:
         run = yaml.safe_load((path.parent / reference).read_text())
         assert run['environment']['model_revision'] == 'release/model-v2'
+
+
+@pytest.mark.parametrize('container', [
+    {'args': ['/weights/checkpoint', '--revision=release/v2']},
+    {'command': ['vllm', 'serve'], 'args': ['/weights/checkpoint', '--revision', 'release/v2']},
+    {'command': ['bash', '-c', 'vllm serve "$@"', '--'],
+     'args': ['/weights/checkpoint', '--revision=release/v2']},
+    {'command': ['python', '-m', 'vllm.entrypoints.openai.api_server'],
+     'args': ['--model=/weights/checkpoint', '--revision=release/v2']},
+])
+def test_equivalent_model_argument_forms(container):
+    assert serving_arguments(container) == ('/weights/checkpoint', 'release/v2')
+
+
+@pytest.fixture
+def pvc_parent_intake(parent_intake):
+    repo, path, _, client, parent, artifacts, raw = parent_intake
+    source = next(key for key in artifacts if key.endswith('-deployment.yaml'))
+    deployment = yaml.safe_load(artifacts[source])
+    deployment['metadata'] = {'name': 'server'}
+    deployment['spec']['selector'] = {'matchLabels': {'app': 'server'}}
+    deployment['spec']['template']['metadata'] = {'labels': {'app': 'server'}}
+    pod = deployment['spec']['template']['spec']
+    pod['securityContext'] = {'runAsUser': 65534, 'runAsNonRoot': True}
+    pod['volumes'] = [{'name': 'weights', 'persistentVolumeClaim': {'claimName': 'prepared-model'}}]
+    server = pod['containers'][0]
+    server['command'] = ['/bin/bash', '-c', 'vllm serve "$@"', '--']
+    server['args'] = ['/weights/checkpoint', '--served-model-name=request-alias']
+    server['volumeMounts'] = [{'name': 'weights', 'mountPath': '/weights/checkpoint', 'readOnly': True}]
+    artifacts[source] = yaml.safe_dump(deployment)
+    revision = record_launch(repo, artifacts, source)
+    return repo, path, revision, client, parent, artifacts, raw, source
+
+
+def test_pvc_launch_uses_tested_manifest_not_hf_id(pvc_parent_intake):
+    repo, path, revision, client, _, artifacts, _, source = pvc_parent_intake
+    deployment = yaml.safe_load(artifacts[source])
+    deployment['metadata'].update(name='server-abc01234', namespace='test-namespace')
+    run_label = {'forge.openshift.io/run': 'server-abc01234'}
+    deployment['spec']['selector']['matchLabels'].update(run_label)
+    deployment['spec']['template']['metadata']['labels'].update(run_label)
+    pod = deployment['spec']['template']['spec']
+    del pod['securityContext']['runAsUser']
+    pod['containers'][0]['env'] = [{'name': 'HOME', 'value': '/tmp'}, {'name': 'USER', 'value': 'nobody'}]
+    artifacts[source] = yaml.safe_dump(deployment)
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert len(yaml.safe_load(path.read_text())['benchmark_runs']) == 2
+
+
+def test_receipt_rechecks_committed_manifest_after_initial_binding(pvc_parent_intake):
+    repo, path, revision, client, _, _, _, _ = pvc_parent_intake
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    commit_evidence(repo)
+    manifest = path.parent / 'manifests/vllm-0.24.0/deployment.yaml'
+    manifest.write_text(manifest.read_text().replace('/weights/checkpoint', '/other/weights'))
+    commit_evidence(repo)
+    with pytest.raises(ValueError, match='merged deployment inputs differ'):
+        admitted_execution(repo, load_admissions(repo), client, 'd' * 32, revision, 34, {})
+
+
+@pytest.mark.parametrize('failure', ['path', 'claim', 'mount', 'alias', 'image', 'env', 'security',
+                                    'manifest-drift', 'missing-identity'])
+def test_pvc_launch_drift_never_authorized_by_alias(pvc_parent_intake, failure):
+    repo, path, revision, client, _, artifacts, raw, source = pvc_parent_intake
+    deployment = yaml.safe_load(artifacts[source])
+    pod = deployment['spec']['template']['spec']
+    server = pod['containers'][0]
+    if failure == 'path':
+        server['args'][0] = '/other/weights'
+    elif failure == 'claim':
+        pod['volumes'][0]['persistentVolumeClaim']['claimName'] = 'wrong-model'
+    elif failure == 'mount':
+        server['volumeMounts'][0]['readOnly'] = False
+    elif failure == 'alias':
+        server['args'][1] = '--served-model-name=other-alias'
+    elif failure == 'image':
+        server['image'] = 'docker.io/vllm/vllm-openai:other'
+    elif failure == 'env':
+        server['env'] = [{'name': 'HOME', 'value': '/unexpected'}]
+    elif failure == 'security':
+        pod['securityContext']['runAsNonRoot'] = False
+    elif failure == 'manifest-drift':
+        (path.parent / 'manifests/vllm-0.24.0/deployment.yaml').write_text('kind: Other\n')
+    else:
+        document = json.loads(raw)
+        for test in document['tests']:
+            test['labels'] = {'benchmark_tool': test['labels']['benchmark_tool']}
+        client.kpis = lambda _: ('01__test/002__postprocessing/kpis/kpis.json', json.dumps(document).encode())
+    artifacts[source] = yaml.safe_dump(deployment)
+    with pytest.raises(ValueError):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert not (path.parent / 'results').exists()
+
+
+def test_manifest_bound_product_version_is_not_engine_version(parent_intake):
+    repo, path, revision, client, _, _, raw = parent_intake
+    document = json.loads(raw)
+    for test in document['tests']:
+        test['labels']['product_version'] = '3.5'
+    client.kpis = lambda _: ('01__test/002__postprocessing/kpis/kpis.json', json.dumps(document).encode())
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    for reference in yaml.safe_load(path.read_text())['benchmark_runs']:
+        run = yaml.safe_load((path.parent / reference).read_text())
+        assert run['platform'] == {'stack': 'vllm', 'version': '0.24.0'}
+        assert all(labels['product_version'] == '3.5' for labels in run['workload']['tests'])
 
 
 @pytest.fixture(params=['LeaderWorkerSet', 'LLMInferenceService'])
@@ -424,7 +552,8 @@ def distributed_intake(parent_intake, request):
         manifest = {'kind': kind, 'spec': {'model': {'uri': 'pvc://existing-weights', 'name': 'request-alias'},
             'template': {'containers': [copy.deepcopy(override)]}, 'worker': {'containers': [copy.deepcopy(override)]}}}
         leader = {**copy.deepcopy(override), 'image': image, 'command': ['/bin/bash', '-c',
-            'eval "exec vllm serve /mnt/models --served-model-name request-alias ${VLLM_ADDITIONAL_ARGS} $@"', '--']}
+            'eval "exec vllm serve /weights/checkpoint --served-model-name request-alias ${VLLM_ADDITIONAL_ARGS} $@"', '--'],
+            'volumeMounts': [{'name': 'weights', 'mountPath': '/weights/checkpoint', 'readOnly': True}]}
         worker = copy.deepcopy(leader)
         source = test_dir + '/src/server-12345678.yaml'
         capture = test_dir + '/003__capture_llmisvc_state'
@@ -437,6 +566,8 @@ def distributed_intake(parent_intake, request):
                 {'name': container['name'], 'ready': True, 'imageID': image.split(':')[0] + '@sha256:' + 'c' * 64},
                 {'name': 'sidecar', 'ready': True, 'imageID': 'sha256:' + 'd' * 64}],
             'initContainerStatuses': [{'name': 'init', 'ready': True, 'imageID': 'sha256:' + 'e' * 64}]}})
+        if kind == 'LLMInferenceService':
+            pods[-1]['spec']['volumes'] = [{'name': 'weights', 'persistentVolumeClaim': {'claimName': 'existing-weights'}}]
     if kind == 'LLMInferenceService':
         pods.append({'kind': 'Pod', 'spec': {'containers': [{'name': 'main', 'image': 'registry.example/router:1',
             'command': ['router']}]}, 'status': {'containerStatuses': [{'name': 'main', 'ready': True,
@@ -456,6 +587,7 @@ def distributed_intake(parent_intake, request):
             'files': [{'path': capture, 'is_dir': True}]}
 
     client.request = call
+    revision = record_launch(repo, artifacts, source)
     return repo, path, revision, client, parent, artifacts, raw, kind, source, pod_path
 
 
@@ -478,6 +610,7 @@ def test_distributed_parent_import_replay_and_receipt(distributed_intake, declar
                 container['env'][0]['value'] += ' --revision ' + declared_revision
         artifacts[source] = yaml.safe_dump(manifest)
         artifacts[pod_path] = yaml.safe_dump(pods)
+        revision = record_launch(repo, artifacts, source)
     import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
     references = yaml.safe_load(path.read_text())['benchmark_runs']
     assert len(references) == 2
@@ -510,7 +643,7 @@ def test_distributed_parent_failure_does_not_write(distributed_intake, failure):
     elif failure == 'wrong-model':
         container = pods['items'][0]['spec']['containers'][0]
         key = 'args' if kind == 'LeaderWorkerSet' else 'command'
-        container[key] = [arg.replace('example/base-FP8', 'example/wrong').replace('/mnt/models', 'example/wrong')
+        container[key] = [arg.replace('example/base-FP8', 'example/wrong').replace('/weights/checkpoint', 'example/wrong')
                           for arg in container[key]]
     elif failure == 'wrong-kind':
         manifest = yaml.safe_load(artifacts[source])
@@ -538,8 +671,30 @@ def test_lws_worker_can_omit_model(distributed_intake):
     pods = yaml.safe_load(artifacts[pod_path])
     pods['items'][1]['spec']['containers'][0] = copy.deepcopy(worker)
     artifacts[source], artifacts[pod_path] = yaml.safe_dump(manifest), yaml.safe_dump(pods)
+    revision = record_launch(repo, artifacts, source)
     import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
     assert len(yaml.safe_load(path.read_text())['benchmark_runs']) == 2
+
+
+def test_lws_local_path_is_bound_to_tested_manifest(distributed_intake):
+    repo, path, _, client, _, artifacts, _, kind, source, pod_path = distributed_intake
+    if kind != 'LeaderWorkerSet':
+        pytest.skip('LWS launch contract')
+    artifacts[source] = artifacts[source].replace('example/base-FP8', '/weights/checkpoint')
+    artifacts[pod_path] = artifacts[pod_path].replace('example/base-FP8', '/weights/checkpoint')
+    revision = record_launch(repo, artifacts, source)
+    import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert len(yaml.safe_load(path.read_text())['benchmark_runs']) == 2
+
+
+def test_llmisvc_local_path_must_use_declared_pvc(distributed_intake):
+    repo, path, revision, client, _, artifacts, _, kind, _, pod_path = distributed_intake
+    if kind != 'LLMInferenceService':
+        pytest.skip('LLMInferenceService PVC binding')
+    artifacts[pod_path] = artifacts[pod_path].replace('existing-weights', 'wrong-weights')
+    with pytest.raises(ValueError, match='model path disagrees'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert not (path.parent / 'results').exists()
 
 
 def test_llmisvc_unsupported_model_uri(distributed_intake):
@@ -549,7 +704,7 @@ def test_llmisvc_unsupported_model_uri(distributed_intake):
     manifest = yaml.safe_load(artifacts[source])
     manifest['spec']['model']['uri'] = 's3://unknown/weights'
     artifacts[source] = yaml.safe_dump(manifest)
-    with pytest.raises(ValueError, match='unsupported LLMInferenceService model URI'):
+    with pytest.raises(ValueError, match='configuration differs from tested manifest'):
         import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
 
 
