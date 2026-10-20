@@ -1,4 +1,4 @@
-# Use the default service account; restricted SCC assigns its namespace UID.
+# Pin a non-root UID because the image defaults to root.
 - op: add
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/serviceAccountName
   value: default
@@ -13,13 +13,15 @@
 - op: replace
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsNonRoot
   value: true
-- op: remove
+- op: replace
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsUser
+  value: 1000770000
 - op: replace
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsNonRoot
   value: true
-- op: remove
+- op: replace
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsUser
+  value: 1000770000
 # Local model staging does not require the template's HF_TOKEN secret.
 - op: remove
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/env/0
