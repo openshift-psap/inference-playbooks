@@ -59,6 +59,10 @@ spec:
             value: "3"
           - name: NCCL_DMABUF_ENABLE
             value: "0"
+          - name: NCCL_IB_DISABLE
+            value: "1"
+          - name: NCCL_DEBUG
+            value: INFO
           - name: VLLM_USE_RUST_FRONTEND
             value: "0"
           - name: VLLM_USE_V2_MODEL_RUNNER
@@ -160,6 +164,10 @@ spec:
             value: "3"
           - name: NCCL_DMABUF_ENABLE
             value: "0"
+          - name: NCCL_IB_DISABLE
+            value: "1"
+          - name: NCCL_DEBUG
+            value: INFO
           - name: VLLM_USE_RUST_FRONTEND
             value: "0"
           - name: VLLM_USE_V2_MODEL_RUNNER
