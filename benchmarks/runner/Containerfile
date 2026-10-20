@@ -1,0 +1,52 @@
+# Build from repository root. Publish separately, then prepare packages using its digest.
+FROM docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+
+LABEL org.opencontainers.image.source="https://github.com/openshift-psap/inference-playbooks" \
+      org.opencontainers.image.description="Standalone contributor Forge runner; no artifact uploads" \
+      dev.inference-playbooks.forge-revision="768a285851ade70d0d5737f9bd90564350410469"
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp USER=contributor \
+    PYTHONPATH=/opt/forge:/opt/playbooks/tools PATH=/opt/forge/bin:$PATH
+
+COPY benchmarks/runner/requirements.lock /opt/requirements.lock
+RUN python -m pip install --no-cache-dir --require-hashes -r /opt/requirements.lock
+
+# Both downloaded archives are fixed and verified before extraction. No moving refs.
+RUN python - <<'PY'
+import hashlib, io, pathlib, tarfile, urllib.request
+revision = '768a285851ade70d0d5737f9bd90564350410469'
+sources = [
+    ('https://codeload.github.com/openshift-psap/forge/tar.gz/' + revision,
+     '16ed49b104a50141a6342e84a4b161b9524f38acb50bdcda9a774dc908650c45', '/opt/forge'),
+    ('https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.19.0/openshift-client-linux-4.19.0.tar.gz',
+     'c90254d7ededb6da4f6d3911fbe6d7d2e35654a480d684f5d2e502e8be7cd6fd', None),
+]
+for url, expected, destination in sources:
+    with urllib.request.urlopen(url, timeout=120) as response:
+        data = response.read()
+    assert hashlib.sha256(data).hexdigest() == expected, 'archive checksum mismatch'
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+        if destination:
+            for member in archive:
+                parts = pathlib.PurePosixPath(member.name).parts[1:]
+                if not member.isfile() or not parts:
+                    continue
+                assert '..' not in parts
+                path = pathlib.Path(destination).joinpath(*parts)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(archive.extractfile(member).read())
+        else:
+            path = pathlib.Path('/usr/local/bin/oc')
+            path.write_bytes(archive.extractfile('oc').read())
+            path.chmod(0o755)
+pathlib.Path('/opt/forge/REVISION').write_text(revision + '\n')
+pathlib.Path('/opt/forge/bin/caliper').chmod(0o755)
+PY
+
+COPY tools/ /opt/playbooks/tools/
+RUN python /opt/forge/projects/inference_playbooks/orchestration/cli.py --help && \
+    python /opt/playbooks/tools/run_contributor.py --help && oc version --client
+
+WORKDIR /tmp
+USER 65532:65532
+ENTRYPOINT ["python", "/opt/playbooks/tools/run_contributor.py"]

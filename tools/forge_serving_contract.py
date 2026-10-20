@@ -68,7 +68,7 @@ def _pod(actual, expected):
             container.pop('env')
 
 
-def validate_launch(repo, manifest_path, revision, captured):
+def validate_launch(repo, manifest_path, revision, captured, *, require_current=True):
     """Compare data only; never run historical renderers or arbitrary PR code."""
     source = subprocess.run(['git', '-C', str(repo), 'show', f'{revision}:{manifest_path}'],
                             check=True, capture_output=True, text=True).stdout
@@ -78,10 +78,11 @@ def validate_launch(repo, manifest_path, revision, captured):
     if len(documents) != 1 or documents[0].get('kind') != captured.get('kind'):
         raise ValueError('tested manifest serving kind is missing or ambiguous')
     expected = documents[0]
-    drift = subprocess.run(['git', '-C', str(repo), 'diff', '--name-only', revision, '--', manifest_path],
-                           check=True, capture_output=True, text=True).stdout
-    if drift:
-        raise ValueError('selected manifest differs from tested revision')
+    if require_current:
+        drift = subprocess.run(['git', '-C', str(repo), 'diff', '--name-only', revision, '--', manifest_path],
+                                check=True, capture_output=True, text=True).stdout
+        if drift:
+            raise ValueError('selected manifest differs from tested revision')
     if expected.get('apiVersion') != captured.get('apiVersion'):
         raise ValueError('captured launch API version differs from tested manifest')
     actual_spec, expected_spec = copy.deepcopy(captured['spec']), copy.deepcopy(expected['spec'])
