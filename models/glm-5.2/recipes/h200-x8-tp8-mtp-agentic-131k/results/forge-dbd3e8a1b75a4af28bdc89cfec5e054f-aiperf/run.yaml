@@ -1,0 +1,40 @@
+schema_version: 2
+evidence_source: forge-kpis
+run_id: forge-dbd3e8a1b75a4af28bdc89cfec5e054f-aiperf
+recipe_id: glm-5.2-fp8_h200_agentic
+deployment_scope: single-node
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+hardware_profile_revision: 1
+platform: &id001
+  stack: vllm
+  version: v0.24.0
+harness: aiperf
+result: result.json
+forge:
+  mlflow_tracking_uri: https://mlflow.apps.psap-automation.ibm.rhperfscale.org
+  mlflow_workspace: forge-inference-playbooks
+  mlflow_experiment_id: '495'
+  mlflow_parent_run_id: dbd3e8a1b75a4af28bdc89cfec5e054f
+  mlflow_benchmark_run_id: dbd3e8a1b75a4af28bdc89cfec5e054f
+  mlflow_run_url: https://mlflow.apps.psap-automation.ibm.rhperfscale.org/#/experiments/495/runs/dbd3e8a1b75a4af28bdc89cfec5e054f?workspace=forge-inference-playbooks
+  pr_number: 10
+  tested_revision: 5dd89405f1a5603c9bf4804d30fc5062eb79870e
+  kpis_artifact_path: 01__test/002__postprocessing/kpis/kpis.json
+  kpis_checksum: sha256:0b12890d63b0c8ee81f8189e6dbd0112f656ec750d0072c481b8e645a68ed8b9
+  completeness: smoke
+  pr_comment_id: 6280569540
+command: /usr/bin/python3 /app/forge/projects/inference_playbooks/orchestration/ci.py
+  test
+environment:
+  model_revision: main
+  image_digest: sha256:251eba5cc7c12fed0b75da22a9240e582b1c9e39f6fbc064f86781b963bd814f
+  platform: *id001
+workload:
+  tests:
+  - phase: benchmark
+    benchmark_tool: aiperf
+    concurrency: '32'
+artifacts:
+- type: raw-output
+  path: kpis.json
+  checksum: sha256:0b12890d63b0c8ee81f8189e6dbd0112f656ec750d0072c481b8e645a68ed8b9

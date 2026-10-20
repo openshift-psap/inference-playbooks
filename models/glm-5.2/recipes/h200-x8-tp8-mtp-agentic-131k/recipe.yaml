@@ -122,3 +122,6 @@ deployment:
       generated: true
 
 notes: guides/notes.yaml
+benchmark_runs:
+- results/forge-dbd3e8a1b75a4af28bdc89cfec5e054f-guidellm/run.yaml
+- results/forge-dbd3e8a1b75a4af28bdc89cfec5e054f-aiperf/run.yaml

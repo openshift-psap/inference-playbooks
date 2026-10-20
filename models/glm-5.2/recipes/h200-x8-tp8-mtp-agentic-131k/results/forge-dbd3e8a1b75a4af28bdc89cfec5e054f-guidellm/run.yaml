@@ -1,0 +1,62 @@
+schema_version: 2
+evidence_source: forge-kpis
+run_id: forge-dbd3e8a1b75a4af28bdc89cfec5e054f-guidellm
+recipe_id: glm-5.2-fp8_h200_agentic
+deployment_scope: single-node
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+hardware_profile_revision: 1
+platform: &id001
+  stack: vllm
+  version: v0.24.0
+harness: guidellm
+result: result.json
+forge:
+  mlflow_tracking_uri: https://mlflow.apps.psap-automation.ibm.rhperfscale.org
+  mlflow_workspace: forge-inference-playbooks
+  mlflow_experiment_id: '495'
+  mlflow_parent_run_id: dbd3e8a1b75a4af28bdc89cfec5e054f
+  mlflow_benchmark_run_id: dbd3e8a1b75a4af28bdc89cfec5e054f
+  mlflow_run_url: https://mlflow.apps.psap-automation.ibm.rhperfscale.org/#/experiments/495/runs/dbd3e8a1b75a4af28bdc89cfec5e054f?workspace=forge-inference-playbooks
+  pr_number: 10
+  tested_revision: 5dd89405f1a5603c9bf4804d30fc5062eb79870e
+  kpis_artifact_path: 01__test/002__postprocessing/kpis/kpis.json
+  kpis_checksum: sha256:0b12890d63b0c8ee81f8189e6dbd0112f656ec750d0072c481b8e645a68ed8b9
+  completeness: partial
+  pr_comment_id: 6280569540
+command: /usr/bin/python3 /app/forge/projects/inference_playbooks/orchestration/ci.py
+  test
+environment:
+  model_revision: main
+  image_digest: sha256:251eba5cc7c12fed0b75da22a9240e582b1c9e39f6fbc064f86781b963bd814f
+  platform: *id001
+workload:
+  tests:
+  - phase: benchmark
+    model_name: zai-org/GLM-5.2
+    product_version: '3.5'
+    deployment_profile: tp8-mtp
+    guidellm_loadshape: IP-8k/1k
+    gpu_type: NVIDIA-H200
+    platform: OCP
+    test_harness: forge-inference-playbooks
+    benchmark_key: IP-8k/1k
+    benchmark_tool: guidellm
+    served_model: zai-org/GLM-5.2-FP8
+    quantization: FP8
+    cluster: janus
+    guidellm_version: 0.7.4
+    prompt_toks: '8000'
+    output_toks: '1000'
+    turns: '1'
+    prefix_tokens: ''
+    prefix_count: ''
+    request_type: /v1/chat/completions
+    guidellm_start_time_ms: '1792451496767'
+    guidellm_end_time_ms: '1792453315441'
+    runtime_args: ''
+    mlflow_run_id: ''
+    mlflow_experiment_id: ''
+artifacts:
+- type: raw-output
+  path: kpis.json
+  checksum: sha256:0b12890d63b0c8ee81f8189e6dbd0112f656ec750d0072c481b8e645a68ed8b9
