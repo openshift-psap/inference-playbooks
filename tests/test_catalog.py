@@ -57,6 +57,7 @@ def test_current_entries_follow_repository_inputs():
                     for reference in recipe.get('benchmark_runs', [])]
         assert [evidence['source']['path'] for evidence in entry['evidence']] == expected
         assert entry['maturity'] == recipe['maturity']
+        assert entry['quantization'] == recipe.get('quantization')
         if recipe['maturity'] not in ('validated', 'production'):
             assert entry['validation']['state'] == 'none'
     assert len({entry['id'] for entry in result['entries']}) == len(result['entries'])
@@ -71,6 +72,47 @@ def test_deterministic_exact_artifacts_and_allocation():
     gemma = next(entry for entry in catalog()['entries'] if entry['model_id'] == 'gemma-4')
     assert gemma['hardware']['data']['accelerators']['count_per_node'] == 8
     assert gemma['gpu_allocation']['declared_gpus_per_replica'] == 1
+
+
+@pytest.mark.parametrize('quantization', [None, 'FP8'])
+def test_quantization_is_explicit_not_inferred_from_checkpoint(repo, quantization):
+    path = gemma_path(repo)
+    recipe = yaml.safe_load(path.read_text())
+    recipe['serving']['model'] = 'synthetic/checkpoint-FP8'
+    if quantization:
+        recipe['quantization'] = quantization
+    else:
+        recipe.pop('quantization', None)
+    path.write_text(yaml.safe_dump(recipe))
+    render_recipe(repo, path)
+    entry = next(entry for entry in catalog(repo)['entries'] if entry['recipe_id'] == recipe['recipe_id'])
+    assert entry['quantization'] == quantization
+
+
+def test_quickstart_commands_and_expected_results_retain_source(repo):
+    path = gemma_path(repo)
+    recipe = yaml.safe_load(path.read_text())
+    notes_path = path.parent / recipe['notes']
+    notes = yaml.safe_load(notes_path.read_text())
+    notes['quickstart'] = [
+        {'step': 'Existing prose', 'detail': 'Review the source manifests.'},
+        {'step': 'Inspect', 'commands': 'oc get pods\noc get services', 'expected': 'Inspect the status.'},
+    ]
+    notes_path.write_text(yaml.safe_dump(notes))
+    entry = next(entry for entry in catalog(repo)['entries'] if entry['recipe_id'] == recipe['recipe_id'])
+    assert entry['notes']['quickstart'] == notes['quickstart']
+
+
+@pytest.mark.parametrize('field, value', [('commands', ''), ('expected', ''), ('commands', ['oc get pods']), ('expected', 42)])
+def test_invalid_quickstart_fields_fail_validation(repo, field, value):
+    path = gemma_path(repo)
+    recipe = yaml.safe_load(path.read_text())
+    notes_path = path.parent / recipe['notes']
+    notes = yaml.safe_load(notes_path.read_text())
+    notes['quickstart'] = [{'step': 'Inspect', field: value}]
+    notes_path.write_text(yaml.safe_dump(notes))
+    with pytest.raises(ValueError):
+        catalog(repo)
 
 
 def test_platform_versions_and_colliding_filter_dimensions(repo):

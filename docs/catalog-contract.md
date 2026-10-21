@@ -53,12 +53,15 @@ opaque labels use a deterministic fallback. Display ordering is not evidence
 of engine compatibility. The read-only setup tab is titled Configuration.
 
 The catalog uses the available viewport width, with Scope and Workload grouped
-side by side on desktop. Provider, recipe maturity, and engine provenance are
-presented compactly without hiding validation attribution. Quick start is
-always visible: sourced steps are shown when supplied; otherwise a neutral
-placeholder identifies documentation still needed for storage access mode,
-model preparation and runtime prerequisites. The UI never infers RWX/RWO or
-pre-download requirements merely from deployment scope.
+side by side on desktop. HF organization, recipe maturity, and engine provenance
+are presented compactly without hiding validation attribution. Scope and
+maturity appear as text badges; declared maturity does not establish applicable
+benchmark evidence. Quick start is always visible: sourced steps are shown when
+supplied; otherwise a neutral placeholder points to Configuration and identifies
+the missing setup and verification walkthrough. Optional `quickstart[].commands`
+blocks are copyable inert text, and `quickstart[].expected` describes what to
+check. Existing step/detail notes remain supported. The page never executes
+commands or infers RWX/RWO or pre-download requirements from deployment scope.
 Platform families with no entries for the selected model remain visible but
 are disabled and greyed out. Availability does not depend on other filters;
 All remains enabled, and explicitly blocked entries stay inspectable.
@@ -75,6 +78,15 @@ engine resolution, optional notes, and source references. Accelerator grouping
 does not erase host/network/profile distinctions. Inventory is per host;
 declared GPU allocation is TP × PP × DP per replica, not an inferred cluster
 total. A pinned manifest remains authoritative when metadata is incomplete.
+
+Configuration places manifests first in visual and reading order. At viewport
+widths of 1200px and above, configuration details appear beside the manifests;
+narrower screens stack them below. The summary uses the effective checkpoint,
+explicit recipe `quantization` (or Not specified), hardware inventory, platform,
+scope, workload, and readable TP/PP/DP settings. Precision is never inferred from
+a checkpoint name. Hardware profile/revision, image, declared allocation,
+optimization intent, source specs, and artifact-equivalence caveats remain in
+the collapsed technical details.
 
 Final generated/pinned/overlaid artifacts contain exact UTF-8 source content,
 SHA-256, actual Kubernetes kinds, container settings and storage bindings.
