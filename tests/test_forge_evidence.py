@@ -1129,7 +1129,7 @@ def test_merged_pr_discovery_intake(monkeypatch, tmp_path, capsys, failure, work
     assert len(calls) == 1
     assert calls[0][0][0].headers['X-MLflow-Workspace'] == workspace
     assert calls[0][0][1:] == (tmp_path, 'd' * 32, 'b' * 40, 34, 123)
-    assert calls[0][1] == {'require_parent': True, 'admissions': {}}
+    assert calls[0][1] == {'require_parent': True, 'admissions': {}, 'pr_head_revision': 'b' * 40}
     assert 'skipping' not in capsys.readouterr().out
     calls.clear()
     comments.clear()
@@ -1167,7 +1167,7 @@ def test_push_routes_each_pr_to_its_report_workspace(monkeypatch, tmp_path):
     monkeypatch.setattr(ingest_forge, 'load_admissions', load)
     calls = []
     def import_run(client, repo, parent_id, revision, number, comment_id, **kwargs):
-        assert kwargs == {'require_parent': True, 'admissions': admissions}
+        assert kwargs == {'require_parent': True, 'admissions': admissions, 'pr_head_revision': 'b' * 40}
         calls.append((number, client.headers['X-MLflow-Workspace'], parent_id))
     monkeypatch.setattr(ingest_forge, 'import_parent', import_run)
     monkeypatch.setattr(sys, 'argv', ['ingest_forge.py', '--before', 'a' * 40,
@@ -1175,6 +1175,131 @@ def test_push_routes_each_pr_to_its_report_workspace(monkeypatch, tmp_path):
     ingest_forge.main()
     assert calls == [(number, workspace, 'd' * 32) for number, workspace in workspaces.items()]
     assert scans == [tmp_path]
+
+
+@pytest.fixture(params=['intake', 'parent_intake'])
+def merged_revision_intake(request, monkeypatch):
+    import ingest_forge
+    fixture = request.getfixturevalue(request.param)
+    repo, path, tested, client, parent, metadata = fixture[:6]
+    # Reproduce a PR updated by merging main after a successful benchmark.
+    original_git = subprocess.run
+    def git(*args):
+        return original_git(['git', '-C', str(repo), *args], check=True,
+                            capture_output=True, text=True).stdout.strip()
+    git('checkout', '-b', 'updated-main')
+    (repo / 'README.md').write_text('Unrelated main change\n')
+    commit_evidence(repo)
+    git('checkout', '-b', 'recipe-branch', tested)
+    git('-c', 'user.email=test@example.org', '-c', 'user.name=Test',
+        'merge', '--no-ff', 'updated-main', '-m', 'Merge main')
+    head = git('rev-parse', 'HEAD')
+    pr = {'merged_at': '2026-10-21', 'base': {'ref': 'main'},
+          'head': {'sha': head, 'ref': 'recipe-branch'}}
+    monkeypatch.setenv('GITHUB_REPOSITORY', 'org/repo')
+    for key, value in {'MLFLOW_TRACKING_URI': client.uri, 'MLFLOW_WORKSPACE': 'forge-sandbox',
+                       'MLFLOW_USERNAME': 'user', 'MLFLOW_PASSWORD': 'password'}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(ingest_forge, 'Client', lambda *args: client)
+    monkeypatch.setattr(ingest_forge, 'github', lambda endpoint, *args:
+                        [forge_report()] if endpoint.endswith('/comments') else pr)
+    def run(command, **kwargs):
+        if command[:2] == ['git', 'fetch']:
+            return subprocess.CompletedProcess(command, 0)
+        return original_git(command, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', run)
+    monkeypatch.setattr(sys, 'argv', ['ingest_forge.py', '--pr-number', '34', '--repo', str(repo)])
+    return repo, path, tested, head, client, parent, metadata, git
+
+
+def test_merged_pr_preserves_historical_tested_revision_and_local_receipt(merged_revision_intake, capsys):
+    import ingest_forge
+    repo, path, tested, head, client, _, _, _ = merged_revision_intake
+    assert tested != head
+    ingest_forge.main()
+    assert 'imported=1 indexed=0' in capsys.readouterr().out
+    for reference in yaml.safe_load(path.read_text())['benchmark_runs']:
+        run = yaml.safe_load((path.parent / reference).read_text())
+        assert run['forge']['tested_revision'] == tested
+        assert validate_benchmark_run(repo, path.parent / reference, run)[0] == []
+    for receipt in path.parent.glob('results/*/forge-import.json'):
+        assert json.loads(receipt.read_text())['tested_revision'] == tested
+    commit_evidence(repo)
+    before = {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
+    client.request = client.run = client.kpis = lambda *a, **kw: pytest.fail('receipt hit contacted MLflow')
+    ingest_forge.main()
+    assert 'imported=0 indexed=1' in capsys.readouterr().out
+    assert before == {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
+
+
+def test_direct_fetch_keeps_explicit_revision_strict(merged_revision_intake):
+    repo, path, _, head, client, _, _, _ = merged_revision_intake
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='revision mismatch|mismatched tested recipe revision'):
+        import_parent(client, repo, 'd' * 32, head, 34, require_parent=True)
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('failure', ['unrelated', 'malformed', 'unknown', 'pr'])
+def test_merged_pr_rejects_unrelated_or_invalid_tested_context(merged_revision_intake, failure):
+    import ingest_forge
+    repo, path, _, _, _, parent, metadata, git = merged_revision_intake
+    revision = {'malformed': 'main', 'unknown': 'f' * 40}.get(failure)
+    if failure == 'unrelated':
+        revision = git('-c', 'user.email=test@example.org', '-c', 'user.name=Test',
+                       'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'Not tested on this PR')
+    if parent['data']['tags']:
+        key, value = ('pr_number', '35') if failure == 'pr' else ('tested_revision', revision)
+        next(tag for tag in parent['data']['tags'] if tag['key'] == 'playbooks.' + key)['value'] = value
+    else:
+        fjob_path = '01__test/000__ci_metadata/fournos_fjob.yaml'
+        fjob = yaml.safe_load(metadata[fjob_path])
+        key, value = ('FORGE_FOREIGN_TESTING_PULL_NUMBER', '35') if failure == 'pr' else (
+            'FORGE_FOREIGN_TESTING_PULL_PULL_SHA', revision)
+        fjob['spec']['env'][key] = value
+        metadata[fjob_path] = yaml.safe_dump(fjob)
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        ingest_forge.main()
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('changed', ['recipe', 'model', 'profile', 'override', 'config', 'manifest'])
+@pytest.mark.parametrize('indexed', [False, True])
+def test_merged_pr_historical_revision_does_not_allow_deployment_drift(merged_revision_intake, changed, indexed):
+    import ingest_forge
+    repo, path, _, _, client, parent, _, _ = merged_revision_intake
+    if changed == 'manifest' and parent['data']['tags']:
+        pytest.skip('legacy tagged fixture has no selected manifest')
+    if indexed:
+        ingest_forge.main()
+        commit_evidence(repo)
+        client.request = client.run = client.kpis = lambda *a, **kw: pytest.fail('receipt hit contacted MLflow')
+    recipe = yaml.safe_load(path.read_text())
+    if changed == 'recipe':
+        recipe['serving']['model'] = 'example/changed'
+        path.write_text(yaml.safe_dump(recipe))
+    else:
+        target = {'model': repo / 'models/test/model.yaml',
+                  'profile': repo / recipe['hardware_profile'],
+                  'override': path.parent / recipe['platforms'][0]['overrides'],
+                  'config': path.parent / 'config/patch.yaml',
+                  'manifest': path.parent / recipe.get('deployment', {}).get(
+                      'manifests', [{'path': 'manifests/vllm-0.24.0/deployment.yaml'}])[0]['path']}[changed]
+        document = yaml.safe_load(target.read_text())
+        document['changed'] = True
+        target.write_text(yaml.safe_dump(document))
+    commit_evidence(repo)
+    before = path.read_bytes()
+    results_before = {p: p.read_bytes() for p in (path.parent / 'results').rglob('*') if p.is_file()}
+    with pytest.raises(ValueError, match='differs from tested|inputs differ'):
+        ingest_forge.main()
+    assert path.read_bytes() == before
+    assert results_before == {p: p.read_bytes() for p in (path.parent / 'results').rglob('*') if p.is_file()}
+    if not indexed:
+        assert not (path.parent / 'results').exists()
 
 
 def test_replay_rejects_raw_checksum_and_completeness_drift(intake):
