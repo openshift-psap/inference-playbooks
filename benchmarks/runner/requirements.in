@@ -1,0 +1,12 @@
+# Minimal local Forge CLI + Caliper parse/KPI path. No AWS/MLflow/agentic dependencies.
+click==8.1.8
+Jinja2==3.1.6
+jsonpath-ng==1.7.0
+jsonschema==4.25.1
+Markdown==3.8.2
+pydantic==2.11.7
+PyYAML==6.0.2
+requests==2.32.5
+# Forge imports notification types eagerly even with notifications disabled.
+slack-sdk==3.35.0
+PyJWT==2.10.1

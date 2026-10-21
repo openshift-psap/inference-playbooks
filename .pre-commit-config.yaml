@@ -1,6 +1,17 @@
 repos:
   - repo: local
     hooks:
+      - id: contributor-bundles
+        name: test portable contributor evidence and maintainer import
+        entry: python3 -m pytest tests/test_contributor.py -q
+        language: python
+        additional_dependencies:
+          - pytest==8.3.4
+          - PyYAML==6.0.2
+          - jsonschema==4.25.1
+          - Jinja2==3.1.6
+        pass_filenames: false
+        files: ^(tools/|tests/test_contributor.py|schema/|benchmarks/runner/)
       - id: hardware-profiles
         name: validate schemas and hardware-profile corrections
         entry: python3 tools/validate.py --base HEAD --cached

@@ -223,6 +223,11 @@ layout. The renderer generates manifests from the serving block.
 
 ### 6. Add benchmark evidence when available
 
+For hardware maintainers cannot access directly, use the
+[portable contributor runner and maintainer import workflow](docs/contributor-benchmarks.md).
+Contributors return a local evidence bundle; maintainers review/import it and
+handle any storage uploads. Import alone never promotes recipe maturity.
+
 Put harness inputs and trace provenance in `benchmarks/`, commit
 `results/<run-id>/run.yaml` and `result.json`. Link from `benchmark_runs`.
 Use `maturity: day-zero` for initial configs with minimal confidence, or

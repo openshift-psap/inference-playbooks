@@ -9,7 +9,19 @@
   ],
   "properties": {
     "schema_version": {"enum": [1, 2]},
-    "evidence_source": {"enum": ["forge-kpis", "local-guidellm", "local-aiperf"]},
+    "evidence_source": {"enum": ["forge-kpis", "contributor-forge", "local-guidellm", "local-aiperf"]},
+    "contributor": {
+      "type": "object",
+      "description": "Contributor bundle integrity, not independent execution attestation. Replay inputs live in request.json and runtime.json.",
+      "required": ["bundle_checksum", "request_checksum", "runtime_checksum", "kpis_checksum"],
+      "properties": {
+        "bundle_checksum": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "request_checksum": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "runtime_checksum": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "kpis_checksum": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+      },
+      "additionalProperties": false
+    },
     "forge": {"$ref": "#/$defs/forge"},
     "platform": {
       "type": "object",
@@ -37,6 +49,13 @@
     }
   },
   "allOf": [
+    {"if": {"properties": {"evidence_source": {"const": "contributor-forge"}}, "required": ["evidence_source"]},
+     "then": {"required": ["contributor", "platform", "environment", "workload", "command"],
+              "properties": {"schema_version": {"const": 2},
+                "environment": {"required": ["model_revision", "image_digest", "validation_origin"],
+                  "properties": {"validation_origin": {"const": "contributor"},
+                    "image_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}}}}},
+     "else": {"properties": {"contributor": false}}},
     {"if": {"properties": {"schema_version": {"const": 2}}, "required": ["schema_version"]},
      "then": {"required": ["evidence_source"]}},
     {"if": {"properties": {"evidence_source": {"const": "forge-kpis"}}, "required": ["evidence_source"]},
