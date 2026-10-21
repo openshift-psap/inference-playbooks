@@ -1,0 +1,35 @@
+schema_version: 1
+profile:
+  label: GLM-5.2 NVFP4-FP8 aggregated B200
+  sub: RHOAI 3.5 rendered manifest and RHOAI 3.4 pinned manifest
+  specs:
+    - label: Checkpoint
+      source: recipe.yaml#/serving/model
+    - label: Tensor parallelism
+      source: recipe.yaml#/serving/parallelism/tp
+    - label: Hardware
+      source: recipe.yaml#/hardware_profile
+decisions:
+  - subjects: [platforms, serving.config_overrides]
+    why: RHOAI 3.5 uses a platform overlay for controller-specific settings. RHOAI 3.4 uses a version-specific pinned manifest.
+  - subjects: [workload_profile, maturity, deployment.status]
+    why: GuideLLM 8K/1K is the planned benchmark workload. Neither platform has independently verified benchmark or accuracy results.
+    status:
+      state: needs-verification
+      note: Verify serving, gateway routing and benchmark results independently before calling the recipe validated.
+known_issues:
+  - issue: InstantTensor is installed from PyPI on every new pod.
+    impact: Startup requires external package access; this is neither a disconnected deployment nor a product-native RHOAI runtime.
+    mitigation: Validate an approved image with the loader included before recommending this to customers.
+  - issue: The pinned 3.4 command serves HTTP regardless of controller TLS configuration.
+    impact: TLS-enabled inherited probes or gateway upstream settings may be incompatible.
+    mitigation: Inspect the installed configs and resolved pod; a serving smoke check does not establish gateway compatibility.
+  - issue: The 3.4 pin inherits its startup-probe budget from installed configs.
+    impact: Cold model download or JIT can exceed the base config's approximately ten-minute allowance.
+    mitigation: Confirm cold-start duration and the resolved probe budget before deploying the pin.
+  - issue: The 3.5 launch adapter splits generated argument values on whitespace.
+    impact: Values containing spaces are not supported by this recipe's adapter; compact speculative JSON is preserved.
+    mitigation: Keep values whitespace-free or revise and reverify the adapter before adding such flags.
+  - issue: Current templates cannot express every Kubernetes setting in the serving block.
+    impact: Images, TLS/probes, cache volumes and initialization are explicit overlay inputs; image references must remain aligned with recipe metadata.
+    mitigation: Run renderer, drift and configuration-parity checks after changing either input.
