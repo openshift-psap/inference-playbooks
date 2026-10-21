@@ -19,6 +19,10 @@
 - op: add
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/securityContext/runAsUser
   value: 1000770000
+# Give slow shared-NFS and distributed startup up to four hours before restarting the leader.
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/startupProbe/failureThreshold
+  value: 1440
 - op: replace
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsNonRoot
   value: true

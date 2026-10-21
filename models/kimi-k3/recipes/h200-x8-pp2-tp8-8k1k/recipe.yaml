@@ -50,6 +50,9 @@ serving:
     - {name: NCCL_IB_HCA, value: mlx5_5}
     - {name: NCCL_IB_GID_INDEX, value: "3"}
     - {name: NCCL_DMABUF_ENABLE, value: "0"}
+    - {name: NCCL_IB_DISABLE, value: "1"}
+    - {name: NCCL_SOCKET_IFNAME, value: eth0}
+    - {name: NCCL_DEBUG, value: INFO}
     - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
     - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
     - {name: HF_HOME, value: /home/nobody/.cache}
@@ -63,6 +66,8 @@ serving:
     - {flag: --max-num-batched-tokens, value: "4096", required: true, why: Sets the per-iteration token budget.}
     - {flag: --disable-custom-all-reduce, required: true, why: Disables the custom all-reduce implementation.}
     - {flag: --no-enable-flashinfer-autotune, required: true, why: Disables FlashInfer autotuning.}
+    - {flag: --distributed-timeout-seconds, value: "10800", required: true, why: Allows up to three hours for multi-node NCCL initialization.}
+    - {flag: --cpu-distributed-timeout-seconds, value: "10800", required: true, why: Allows up to three hours for multi-node Gloo initialization during model loading.}
     - {flag: --enable-auto-tool-choice, required: true, why: Enables automatic tool selection.}
     - {flag: --tool-call-parser, value: kimi_k3, required: true, why: Selects the Kimi K3 tool-call parser.}
     - {flag: --reasoning-parser, value: kimi_k3, required: true, why: Selects the Kimi K3 reasoning parser.}
