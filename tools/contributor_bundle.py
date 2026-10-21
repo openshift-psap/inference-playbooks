@@ -232,11 +232,13 @@ def replay(request: dict, files: dict[str, bytes]) -> dict:
 def runtime_identity(runtime: dict, request: dict) -> tuple[str, str]:
     """Require ready matching serving roles both before and after the workload."""
     from fetch_forge_evidence import distributed_serving_values, serving_arguments
+    from contributor_security import check_runtime_uids, runtime_mounts
     launch = runtime['launch']
     recipe = runtime.get('_recipe')
     identities = []
     for key in ('pods_before', 'pods_after'):
         pods = runtime[key]
+        check_runtime_uids(pods, runtime['uid_admission'])
         replicas = launch['spec'].get('replicas', 1)
         if launch['kind'] != 'Deployment':
             size = (launch['spec']['leaderWorkerTemplate']['size'] if launch['kind'] == 'LeaderWorkerSet'
@@ -257,9 +259,11 @@ def runtime_identity(runtime: dict, request: dict) -> tuple[str, str]:
                 raise ValueError('runtime serving image differs from launch')
             if serving_arguments(matches[0]) != (expected_model, expected_revision):
                 raise ValueError('runtime model/revision differs from launch')
-            for field in ('command', 'args', 'env', 'resources', 'volumeMounts'):
+            for field in ('command', 'args', 'env', 'resources'):
                 if matches[0].get(field, []) != server.get(field, []):
                     raise ValueError('runtime serving configuration differs from launch')
+            if runtime_mounts(pod['spec'], matches[0], launch['spec']['template']['spec']) != server.get('volumeMounts', []):
+                raise ValueError('runtime serving configuration differs from launch')
             statuses = [s for s in pod['status']['containerStatuses'] if s['name'] == server['name'] and s.get('ready') is True]
             if len(statuses) != 1:
                 raise ValueError('ready serving container evidence missing')

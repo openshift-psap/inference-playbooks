@@ -13,7 +13,6 @@ import yaml
 
 sys.path.insert(0, '/opt/playbooks/tools')
 sys.path.insert(0, '/opt/forge/projects/inference_playbooks/orchestration')
-import test_phase as phase
 import run_contributor as runner
 from contributor_bundle import FORGE_REVISION, checksum, json_bytes, read_archive
 
@@ -32,7 +31,8 @@ with tempfile.TemporaryDirectory() as tmp:
               'serving': {'model': 'example/model', 'parallelism': {'mode': 'tp', 'tp': 1}}}
     manifest = {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': {'name': 'test'},
                 'spec': {'selector': {'matchLabels': {'app': 'test'}}, 'template': {
-                    'metadata': {'labels': {'app': 'test'}}, 'spec': {'containers': [
+                    'metadata': {'labels': {'app': 'test'}}, 'spec': {
+                        'securityContext': {'runAsUser': 65534, 'runAsNonRoot': True}, 'containers': [
                         {'name': 'vllm', 'image': 'docker.io/example/model@sha256:' + 'c' * 64,
                          'command': ['vllm', 'serve'], 'args': ['example/model'],
                          'ports': [{'containerPort': 8000}]}]}}}}
@@ -56,6 +56,7 @@ with tempfile.TemporaryDirectory() as tmp:
         if args[0] == 'apply':
             doc = yaml.safe_load(Path(args[2]).read_text())
             if doc['kind'] == 'Deployment':
+                assert doc['spec']['template']['spec']['securityContext']['runAsUser'] == 65534
                 state['deployment'] = doc
         return SimpleNamespace(returncode=0, stdout='', stderr='')
     def runtime_oc(*args):
@@ -65,6 +66,11 @@ with tempfile.TemporaryDirectory() as tmp:
     def benchmark(**kwargs):
         assert kwargs['image'] == request['harness_image']
         from projects.core.library import env
+        from projects.core.dsl.script_manager import get_script_manager
+        # Keep registration real: imports must happen at FORGE_HOME, not /tmp.
+        # Replacing the benchmark entrypoint alone previously hid this live failure.
+        module_path = f'projects/{tool}/toolbox/run_{tool}_benchmark/main.py'
+        assert get_script_manager().get_tasks_from_file(module_path), 'Forge DSL tasks registered under wrong working directory'
         if tool == 'aiperf':
             target = env.ARTIFACT_DIR / '001__run_aiperf_benchmark/artifacts/aiperf/profile_export_aiperf.json'
             target.parent.mkdir(parents=True)
@@ -82,7 +88,8 @@ with tempfile.TemporaryDirectory() as tmp:
         target.parent.mkdir(parents=True)
         records = []
         for concurrency in (1, 5):
-            records.append({'config': {'strategy': {'streams': concurrency}, 'run_id': 'fixture'},
+            records.append({'config': {'strategy': {'streams': concurrency}, 'run_id': 'fixture',
+                                       'backend': {'api_key': None}},
                             'metrics': {'requests_per_second': {'successful': {'mean': 2.5}},
                                 'output_tokens_per_second': {'successful': {'mean': 100.0}},
                                 'tokens_per_second': {'successful': {'mean': 120.0}},
@@ -92,11 +99,16 @@ with tempfile.TemporaryDirectory() as tmp:
                             'scheduler_metrics': {'start_time': 1000.0, 'end_time': 1060.0}})
         target.write_bytes(json_bytes({'benchmarks': records, 'metadata': {'guidellm_version': '0.7.4'},
                                        'args': {'data': [{'prompt_tokens': 1000, 'output_tokens': 1000}]}}))
-    phase.oc = forge_oc
-    phase.run_guidellm_benchmark.run = benchmark
-    from projects.aiperf.toolbox.run_aiperf_benchmark import main as aiperf
-    aiperf.run = benchmark
+    original_instrument = runner.instrument
+    def instrument(phase, *args):
+        phase.oc = forge_oc
+        phase.run_guidellm_benchmark.run = benchmark
+        from projects.aiperf.toolbox.run_aiperf_benchmark import main as aiperf
+        aiperf.run = benchmark
+        original_instrument(phase, *args)
+    runner.instrument = instrument
     runner.oc = runtime_oc
+    runner.admission_probe = lambda pod: pod
     runner.preflight = lambda *args: {'synthetic_fixture': True}
     os.environ['KUBECONFIG'] = str(root / 'nonexistent-test-kubeconfig')
     output = root / 'outputs'

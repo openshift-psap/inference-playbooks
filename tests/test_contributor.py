@@ -16,6 +16,7 @@ sys.path.insert(0, str(REPO / 'tools'))
 
 from contributor_bundle import (MAX_FILE, checksum, json_bytes, json_load, read_archive,
                                 relative, replay, shareable, write_archive)
+from contributor_security import UIDAdmissionRejected, admit_manifest, check_runtime_uids, effective_uids
 from import_contributor import import_bundle, upload_archive
 from prepare_contributor import prepare
 from run_contributor import standalone_overrides
@@ -54,7 +55,8 @@ def source(tmp_path):
               'resources': {'limits': {'nvidia.com/gpu': '1'}}}
     deployment = {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': {'name': 'test'},
                   'spec': {'replicas': 1, 'selector': {'matchLabels': {'app': 'test'}},
-                           'template': {'metadata': {'labels': {'app': 'test'}}, 'spec': {'containers': [server]}}}}
+                           'template': {'metadata': {'labels': {'app': 'test'}}, 'spec': {
+                               'securityContext': {'runAsUser': 65534, 'runAsNonRoot': True}, 'containers': [server]}}}}
     manifest = root / 'manifests/vllm-v0.24.0/deployment.yaml'
     manifest.parent.mkdir(parents=True)
     manifest.write_text(yaml.safe_dump(deployment))
@@ -78,10 +80,12 @@ def evidence(source, tmp_path):
     files['kpis.json'] = json_bytes(kpis)
     launch = copy.deepcopy(deployment)
     launch['metadata']['name'] = 'test-run'
+    decisions = admit_manifest(launch, 'benchmark', copy.deepcopy)
     pods = {'kind': 'List', 'items': [{'kind': 'Pod', 'spec': copy.deepcopy(launch['spec']['template']['spec']),
             'status': {'containerStatuses': [{'name': 'vllm', 'ready': True, 'imageID': 'sha256:' + 'c' * 64}]}}]}
     files['runtime.json'] = json_bytes({'launch': launch, 'pods_before': pods, 'pods_after': pods,
-                                      'harness_invocation': {'image': request['harness_image']}})
+                                      'harness_invocation': {'image': request['harness_image']},
+                                      'uid_admission': decisions})
     files['result.json'] = json_bytes(replay(request, files))
     files['raw/harness-0.json'] = json_bytes({'synthetic_fixture': True, 'metrics': {'requests': 100}})
     runtime = json_load(files['runtime.json'])
@@ -300,6 +304,22 @@ def test_source_side_redaction_preserves_metrics_and_records_paths():
     shareable(exported)
 
 
+@pytest.mark.parametrize('api_key', [None, '', 'synthetic-secret-never-share'])
+def test_native_guidellm_api_key_is_removed_not_allowlisted(api_key):
+    from run_contributor import export_native
+    value = {'config': {'backend': {'api_key': api_key}},
+             'metrics': {'output_tokens': 1234, 'ttft_ms': 1.25}}
+    before = copy.deepcopy(value)
+    paths = []
+    exported = export_native(value, [], paths)
+    assert exported == {'config': {'backend': {}}, 'metrics': value['metrics']}
+    assert paths == ['/config/backend/api_key']
+    assert value == before
+    shareable(exported)
+    with pytest.raises(ValueError, match='sensitive evidence field'):
+        shareable(value)
+
+
 def test_input_closure_cannot_drop_an_override(evidence, tmp_path):
     repo, root, request, files, _, _ = evidence
     key = next(name for name in request['inputs'] if '/platforms/' in name)
@@ -356,3 +376,151 @@ def test_historical_replay_does_not_block_later_assessment_or_relabel_evidence(e
     assert run['environment']['image_digest'] == 'sha256:' + 'c' * 64
     with pytest.raises(ValueError):
         import_bundle(repo, bundle, digest)
+
+
+def test_admission_preserves_authored_uid_and_does_not_persist_probe(source):
+    _, _, manifest = source
+    before = copy.deepcopy(manifest)
+    calls = []
+    def probe(pod):
+        calls.append(copy.deepcopy(pod))
+        assert pod['kind'] == 'Pod'
+        assert pod['metadata']['namespace'] == 'benchmark'
+        return copy.deepcopy(pod)
+    decisions = admit_manifest(manifest, 'benchmark', probe)
+    assert manifest == before
+    assert len(calls) == 1
+    assert decisions[0]['mode'] == 'preserve'
+    assert decisions[0]['admitted_uids'] == {'vllm': 65534}
+
+
+def test_admission_omits_uid_only_when_api_demonstrates_nonroot_assignment(source):
+    _, _, manifest = source
+    calls = []
+    def probe(pod):
+        calls.append(copy.deepcopy(pod))
+        if 'runAsUser' in pod['spec']['securityContext']:
+            raise UIDAdmissionRejected('runAsUser outside namespace range')
+        admitted = copy.deepcopy(pod)
+        admitted['spec']['securityContext']['runAsUser'] = 1000720000
+        return admitted
+    decisions = admit_manifest(manifest, 'benchmark', probe)
+    assert len(calls) == 2
+    assert 'runAsUser' not in manifest['spec']['template']['spec']['securityContext']
+    assert manifest['spec']['template']['spec']['securityContext']['runAsNonRoot'] is True
+    assert decisions[0]['mode'] == 'platform-assigned'
+    assert decisions[0]['admitted_uids'] == {'vllm': 1000720000}
+    actual = {'items': [{'spec': {**manifest['spec']['template']['spec'],
+                                 'securityContext': {'runAsUser': 1000720000, 'runAsNonRoot': True}}}]}
+    check_runtime_uids(actual, decisions)
+
+
+@pytest.mark.parametrize('injected_uid', [None, 0, -1, True, '65534'])
+def test_admission_refuses_unknown_or_root_fallback(source, injected_uid):
+    _, _, manifest = source
+    before = copy.deepcopy(manifest)
+    def probe(pod):
+        if 'runAsUser' in pod['spec']['securityContext']:
+            raise UIDAdmissionRejected('runAsUser rejected')
+        admitted = copy.deepcopy(pod)
+        if injected_uid is not None:
+            admitted['spec']['securityContext']['runAsUser'] = injected_uid
+        return admitted
+    with pytest.raises(ValueError, match='concrete non-root UID'):
+        admit_manifest(manifest, 'benchmark', probe)
+    assert manifest == before
+
+
+def test_admission_does_not_fallback_on_auth_or_network_error(source):
+    _, _, manifest = source
+    calls = []
+    def probe(pod):
+        calls.append(pod)
+        raise ValueError('permission denied or network unavailable')
+    with pytest.raises(ValueError, match='permission denied'):
+        admit_manifest(manifest, 'benchmark', probe)
+    assert len(calls) == 1
+
+
+def test_container_uid_overrides_pod_uid_and_root_is_rejected(source):
+    _, _, manifest = source
+    spec = manifest['spec']['template']['spec']
+    spec['containers'][0]['securityContext'] = {'runAsUser': 12345, 'runAsNonRoot': True}
+    assert effective_uids(spec) == {'vllm': 12345}
+    spec['containers'][0]['securityContext']['runAsUser'] = 0
+    with pytest.raises(ValueError, match='concrete non-root UID'):
+        admit_manifest(manifest, 'benchmark', copy.deepcopy)
+
+
+@pytest.mark.parametrize('change', ['root', 'different-uid', 'different-account', 'missing-uid'])
+def test_actual_admitted_uid_must_match_probe_before_benchmark(source, change):
+    _, _, manifest = source
+    decisions = admit_manifest(manifest, 'benchmark', copy.deepcopy)
+    pod = {'spec': copy.deepcopy(manifest['spec']['template']['spec'])}
+    if change == 'root':
+        pod['spec']['securityContext']['runAsUser'] = 0
+    elif change == 'different-uid':
+        pod['spec']['securityContext']['runAsUser'] = 12345
+    elif change == 'different-account':
+        pod['spec']['serviceAccountName'] = 'different'
+    else:
+        del pod['spec']['securityContext']['runAsUser']
+    with pytest.raises(ValueError):
+        check_runtime_uids({'items': [pod]}, decisions)
+
+
+def test_import_rejects_missing_or_tampered_uid_evidence(evidence, tmp_path):
+    repo, _, request, files, _, _ = evidence
+    runtime = json_load(files['runtime.json'])
+    runtime['uid_admission'][0]['authored_uid'] = 12345
+    files['runtime.json'] = json_bytes(runtime)
+    path = tmp_path / 'bad-uid.tar.gz'
+    digest = write_archive(path, request, 'succeeded', files)
+    with pytest.raises(ValueError, match='UID admission decision'):
+        import_bundle(repo, path, digest)
+
+
+@pytest.mark.parametrize('decisions', [None, {}, []])
+def test_import_requires_uid_decisions(evidence, tmp_path, decisions):
+    repo, _, request, files, _, _ = evidence
+    runtime = json_load(files['runtime.json'])
+    runtime['uid_admission'] = decisions
+    files['runtime.json'] = json_bytes(runtime)
+    path = tmp_path / 'missing-uid.tar.gz'
+    digest = write_archive(path, request, 'succeeded', files)
+    with pytest.raises(ValueError, match='UID admission decisions'):
+        import_bundle(repo, path, digest)
+
+
+@pytest.mark.parametrize('change', [None, 'secret', 'root-ca', 'writable', 'mount-path', 'extra-source'])
+def test_import_allows_only_standard_injected_service_account_mount(evidence, tmp_path, change):
+    repo, _, request, files, _, _ = evidence
+    runtime = json_load(files['runtime.json'])
+    volume = {'name': 'kube-api-access-test', 'projected': {'defaultMode': 420, 'sources': [
+        {'serviceAccountToken': {'expirationSeconds': 3607, 'path': 'token'}},
+        {'configMap': {'name': 'kube-root-ca.crt', 'items': [{'key': 'ca.crt', 'path': 'ca.crt'}]}},
+        {'downwardAPI': {'items': [{'fieldRef': {'apiVersion': 'v1', 'fieldPath': 'metadata.namespace'},
+                                   'path': 'namespace'}]}}]}}
+    mount = {'name': volume['name'], 'mountPath': '/var/run/secrets/kubernetes.io/serviceaccount', 'readOnly': True}
+    if change == 'secret':
+        volume['projected']['sources'][0] = {'secret': {'name': 'unexpected'}}
+    elif change == 'root-ca':
+        volume['projected']['sources'][1]['configMap']['name'] = 'unexpected'
+    elif change == 'writable':
+        mount['readOnly'] = False
+    elif change == 'mount-path':
+        mount['mountPath'] = '/model'
+    elif change == 'extra-source':
+        volume['projected']['sources'].append({'secret': {'name': 'unexpected'}})
+    for key in ('pods_before', 'pods_after'):
+        for pod in runtime[key]['items']:
+            pod['spec']['volumes'] = [volume]
+            pod['spec']['containers'][0]['volumeMounts'] = [mount]
+    files['runtime.json'] = json_bytes(runtime)
+    path = tmp_path / 'admitted-mount.tar.gz'
+    digest = write_archive(path, request, 'succeeded', files)
+    if change is None:
+        assert import_bundle(repo, path, digest)['applied'] is False
+    else:
+        with pytest.raises(ValueError, match='runtime serving configuration differs'):
+            import_bundle(repo, path, digest)

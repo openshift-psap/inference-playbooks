@@ -43,8 +43,10 @@ def validate_evidence(repo: Path, request: dict, files: dict, *, historical=Fals
         raise ValueError('executed harness image differs from request pin')
     if (runtime['launch']['kind'] == 'LLMInferenceService') != (request['platform']['stack'] == 'rhoai'):
         raise ValueError('serving kind differs from selected platform')
+    if not isinstance(runtime['uid_admission'], list):
+        raise ValueError('UID admission decisions must be a list')
     validate_launch(repo, request['manifest_path'], request['tested_revision'], runtime['launch'],
-                    require_current=not historical)
+                    require_current=not historical, uid_admission=runtime['uid_admission'])
     revision, image_digest = runtime_identity({**runtime, '_recipe': recipe}, request)
     result = replay(request, files)
     if json_load(files['result.json']) != result:

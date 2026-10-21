@@ -115,9 +115,37 @@ context/namespace; it does not edit the original. It preflights permissions and
 required PVC/Secret references, invokes Forge's existing deployment/workload/
 finalizer flow, and captures serving configuration/readiness/image identity
 before and after the workload. The default overall deadline is six hours.
+Forge imports and execution use its installation directory, matching its native
+launcher so DSL task registration and lookup agree regardless of contributor cwd.
 Cleanup targets Forge-created names, not existing model PVCs or secrets. An
 uncatchable kill/host failure can still leave resources; inspect local diagnostics
 and reconcile only the recorded run-owned resources, without force-deletion.
+
+### Non-root UID admission
+
+For complete Deployment/LWS Pod templates, the runner performs a **Pod**
+server-side dry run in the target namespace with the declared service account.
+It first preserves the authored UID. Only an explicit `runAsUser` admission
+rejection permits a second, UID-omitted candidate, and that candidate must retain
+`runAsNonRoot: true` and receive a concrete positive UID. Authentication/network
+errors, missing assignments, and root/container-level overrides fail closed.
+The runner never infers UID assignment from the presence of OpenShift APIs,
+copies unrelated admission mutations, grants SCC permissions, or allows root.
+
+Dry runs use the caller's identity, which can differ from a workload controller's
+identity. They are preflight evidence, not a controller-admission guarantee.
+The real serving Pod's effective UID (container setting overrides Pod setting)
+and service account are checked against the probe **before** benchmarking and
+again afterward. `runtime.json` records the decision and admitted security
+contexts, and offline import verifies the exact UID transformation. Native
+hosted-Forge historical evidence retains its existing validation behavior.
+Deployment runtime comparison permits Kubernetes' standard read-only
+`kube-api-access-*` mount only after checking its exact projected token,
+`kube-root-ca.crt`, and namespace sources. Authored mounts and other additions
+still require an exact match; a familiar mount name alone is insufficient.
+LLMInferenceService controller-expanded templates are not guessed into complete
+Pods; their authored policy remains unchanged and actual serving Pods must show
+concrete non-root UIDs before benchmarking.
 
 The output contains:
 
@@ -140,7 +168,8 @@ redacted field paths; these exports are explicitly sanitized, not described as
 byte-identical native originals. Unknown sensitive content blocks collection
 instead of being silently published. Review remains necessary.
 
-Two bounded adapters address PR-322's local path: AIPerf declaration labels are
+Bounded adapters address PR-322's local path: admission-aware UID handling above;
+AIPerf declaration labels are
 also written to its parser's source metadata, and benchmark Jobs may reuse the
 serving manifest's unambiguous `HF_TOKEN` Secret reference (key `HF_TOKEN`) for
 gated tokenizer access. Only the reference is passed; no Secret contents are read

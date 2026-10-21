@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from contextlib import chdir
 import importlib.util
 import json
 import os
@@ -21,11 +22,23 @@ import yaml
 from contributor_bundle import (FORGE_REVISION, WORKLOADS, checksum, json_bytes, json_load, relative,
                                 replay, shareable, validate_request, write_archive)
 from recipe_evidence import load_unique_yaml, load_unique_yaml_all
+from contributor_security import UIDAdmissionRejected, admit_manifest, check_runtime_uids
 
 
 def oc(*args):
     # Credentials/cluster responses are never logged or added to the shareable bundle.
     return subprocess.run(['oc', *args], check=True, capture_output=True, timeout=60).stdout
+
+
+def admission_probe(pod):
+    result = subprocess.run(['oc', 'create', '--dry-run=server', '-n', pod['metadata']['namespace'],
+                             '-f', '-', '-o', 'json'], input=json_bytes(pod), capture_output=True, timeout=60)
+    if result.returncode:
+        message = result.stderr.decode(errors='replace')
+        if 'runAsUser' in message and re.search(r'Forbidden|Invalid|denied', message):
+            raise UIDAdmissionRejected(message)
+        raise ValueError('Pod server-side admission probe failed: ' + message)
+    return json_load(result.stdout)
 
 
 def standalone_overrides(request, namespace):
@@ -127,6 +140,19 @@ def instrument(phase, request, private: Path, runtime: dict):
     """Observe the existing Forge flow; retain its deployment/benchmark/finalizers."""
     original_write, original_workload = phase._write_launch_manifest, phase._run_workload
     original_metadata = phase.create_test_metadata
+    original_strip = phase._strip_hardcoded_uid
+
+    def preserve_uid(spec):
+        # Keep Forge's HOME/USER compatibility handling, not its unconditional UID removal.
+        context = spec.get('securityContext', {})
+        missing = object()
+        uid = context.pop('runAsUser', missing)
+        try:
+            original_strip(spec)
+        finally:
+            if uid is not missing:
+                context['runAsUser'] = uid
+    phase._strip_hardcoded_uid = preserve_uid
 
     def metadata(directory, labels, **kwargs):
         # PR-322's AIPerf parser consumes labels, not kpi_labels. Preserve its
@@ -181,6 +207,7 @@ def instrument(phase, request, private: Path, runtime: dict):
 
     def write(name, manifest):
         if manifest['kind'] in {'Deployment', 'LeaderWorkerSet', 'LLMInferenceService'}:
+            runtime['uid_admission'] = admit_manifest(manifest, manifest['metadata']['namespace'], admission_probe)
             runtime['launch'] = copy.deepcopy(manifest)
             # Namespaces and provider/controller metadata do not prove performance.
             runtime['launch']['metadata'] = {'name': manifest['metadata']['name']}
@@ -196,7 +223,9 @@ def instrument(phase, request, private: Path, runtime: dict):
             containers = [c for c in pod['spec']['containers'] if c['name'] in {'vllm', 'vllm-leader', 'vllm-worker', 'main'}]
             names = {c['name'] for c in containers}
             sanitized.append({'kind': 'Pod', 'spec': {'containers': containers,
-                               'volumes': pod['spec'].get('volumes', [])},
+                               'volumes': pod['spec'].get('volumes', []),
+                               'securityContext': pod['spec'].get('securityContext', {}),
+                               'serviceAccountName': pod['spec'].get('serviceAccountName', 'default')},
                               'status': {'containerStatuses': [
                                   {k: s[k] for k in ('name', 'ready', 'imageID') if k in s}
                                   for s in pod.get('status', {}).get('containerStatuses', []) if s['name'] in names]}})
@@ -207,8 +236,10 @@ def instrument(phase, request, private: Path, runtime: dict):
         endpoint = args[0] if args else kwargs['endpoint_url']
         runtime['_private_endpoints'] = [endpoint, urlparse(endpoint).hostname]
         runtime['pods_before'] = snapshot(namespace)
+        check_runtime_uids(runtime['pods_before'], runtime['uid_admission'])
         original_workload(*args, **kwargs)
         runtime['pods_after'] = snapshot(namespace)
+        check_runtime_uids(runtime['pods_after'], runtime['uid_admission'])
 
     phase._write_launch_manifest, phase._run_workload = write, workload
     workload = WORKLOADS[request['workload']]
@@ -234,7 +265,9 @@ def export_native(value, endpoints, paths=None, prefix=''):
         result = {}
         for key, item in value.items():
             path = prefix + '/' + key
-            if key in {'hostname', 'ip_address', 'nodeName'}:
+            # GuideLLM emits backend.api_key even when unset. Never export it,
+            # including null/empty values; keep the privacy guard unchanged.
+            if key in {'hostname', 'ip_address', 'nodeName', 'api_key'}:
                 paths.append(path)
                 continue
             result[key] = export_native(item, endpoints, paths, path)
@@ -272,23 +305,26 @@ def execute(request, inputs: Path, output: Path, namespace: str, context: str, f
             (metadata / 'variable_overrides.yaml').write_text(yaml.safe_dump(overrides))
             os.environ.update(ARTIFACT_DIR=str(artifacts), FORGE_FOREIGN_TESTING_REPO_PATH=str(inputs),
                               PYTHONPATH=str(forge), CLUSTERLESS_MODE='false')
-            sys.path.insert(0, str(forge))
-            sys.path.insert(0, str(forge / 'projects/inference_playbooks/orchestration'))
-            spec = importlib.util.spec_from_file_location('portable_forge_cli', forge / 'projects/inference_playbooks/orchestration/cli.py')
-            cli = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cli)
-            instrument(cli.test_phase, request, private, runtime)
-            def deadline(_signal, _frame):
-                raise TimeoutError('benchmark attempt deadline exceeded')
-            signal.signal(signal.SIGALRM, deadline)
-            signal.alarm(timeout)
-            try:
-                cli.main.main(args=['test'], standalone_mode=False)
-                outcome = 'succeeded'
-            except SystemExit as error:
-                if error.code not in (None, 0):
-                    raise
-                outcome = 'succeeded'
+            # Forge registers DSL tasks relative to cwd but looks them up relative
+            # to FORGE_HOME. Match its launcher before importing any toolbox.
+            with chdir(forge):
+                sys.path.insert(0, str(forge))
+                sys.path.insert(0, str(forge / 'projects/inference_playbooks/orchestration'))
+                spec = importlib.util.spec_from_file_location('portable_forge_cli', forge / 'projects/inference_playbooks/orchestration/cli.py')
+                cli = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cli)
+                instrument(cli.test_phase, request, private, runtime)
+                def deadline(_signal, _frame):
+                    raise TimeoutError('benchmark attempt deadline exceeded')
+                signal.signal(signal.SIGALRM, deadline)
+                signal.alarm(timeout)
+                try:
+                    cli.main.main(args=['test'], standalone_mode=False)
+                    outcome = 'succeeded'
+                except SystemExit as error:
+                    if error.code not in (None, 0):
+                        raise
+                    outcome = 'succeeded'
         except KeyboardInterrupt:
             outcome = 'interrupted'
         except SystemExit as error:

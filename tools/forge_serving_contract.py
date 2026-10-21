@@ -51,10 +51,10 @@ def _labels(actual, expected, additions):
         actual.pop('metadata', None)
 
 
-def _pod(actual, expected):
+def _pod(actual, expected, allow_uid_removal=True):
     # Forge's _strip_hardcoded_uid removes only the pod-level UID and appends
     # HOME=/tmp, USER=nobody when absent. No other security/env drift is ignored.
-    if ('runAsUser' not in actual.get('securityContext', {}) and
+    if (allow_uid_removal and 'runAsUser' not in actual.get('securityContext', {}) and
             'runAsUser' in expected.get('securityContext', {})):
         del expected['securityContext']['runAsUser']
     baseline = {container['name']: container for container in expected.get('containers', [])}
@@ -68,7 +68,7 @@ def _pod(actual, expected):
             container.pop('env')
 
 
-def validate_launch(repo, manifest_path, revision, captured, *, require_current=True):
+def validate_launch(repo, manifest_path, revision, captured, *, require_current=True, uid_admission=None):
     """Compare data only; never run historical renderers or arbitrary PR code."""
     source = subprocess.run(['git', '-C', str(repo), 'show', f'{revision}:{manifest_path}'],
                             check=True, capture_output=True, text=True).stdout
@@ -88,10 +88,19 @@ def validate_launch(repo, manifest_path, revision, captured, *, require_current=
     actual_spec, expected_spec = copy.deepcopy(captured['spec']), copy.deepcopy(expected['spec'])
     run = captured.get('metadata', {}).get('name')
     additions = {'forge.openshift.io/run': run}
+    decisions = {}
+    if uid_admission is not None:
+        from contributor_security import allow_uid_removal, pod_templates
+        decisions = {d['role']: d for d in uid_admission}
+        if len(decisions) != len(uid_admission) or set(decisions) != set(pod_templates(expected)):
+            raise ValueError('missing or duplicate UID admission decisions')
+    def uid_policy(role, actual, baseline):
+        return True if uid_admission is None else allow_uid_removal(decisions[role], actual, baseline)
     if captured['kind'] == 'Deployment':
         actual_template, expected_template = actual_spec['template'], expected_spec['template']
         _labels(actual_template, expected_template, additions)
-        _pod(actual_template['spec'], expected_template['spec'])
+        _pod(actual_template['spec'], expected_template['spec'],
+             uid_policy('template', actual_template['spec'], expected_template['spec']))
         selector = actual_spec.get('selector', {}).get('matchLabels', {})
         if 'forge.openshift.io/run' not in expected_spec.get('selector', {}).get('matchLabels', {}):
             if 'forge.openshift.io/run' in selector:
@@ -104,7 +113,7 @@ def validate_launch(repo, manifest_path, revision, captured, *, require_current=
             labels = {**additions, **({'forge.openshift.io/endpoint': 'leader'}
                                      if role == 'leaderTemplate' else {})}
             _labels(actual, baseline, labels)
-            _pod(actual['spec'], baseline['spec'])
+            _pod(actual['spec'], baseline['spec'], uid_policy(role, actual['spec'], baseline['spec']))
     if actual_spec != expected_spec:
         raise ValueError('captured launch configuration differs from tested manifest')
     return expected
