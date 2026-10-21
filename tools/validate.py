@@ -17,6 +17,7 @@ from constraints import load_constraints, validate_recipe_against_constraints
 from recipe_evidence import check_hardware_profiles, load_unique_yaml, load_unique_yaml_all
 from engine_versions import baseline_images, engine_errors, load_engine_index, resolve_engine
 from jsonschema.exceptions import ValidationError
+from file_flow import introduced_file_warnings, report_file_warning
 
 
 SCHEMAS = {
@@ -614,6 +615,8 @@ def main() -> int:
     if not arguments.current:
         base = arguments.base or "HEAD"
         head = arguments.head or "HEAD"
+        for path, message in introduced_file_warnings(repo, base, head, arguments.cached):
+            report_file_warning(path, message)
         errors.extend(
             [] if check_hardware_profiles(repo, base, head, arguments.cached) == 0
             else ["hardware profile correction validation failed"]

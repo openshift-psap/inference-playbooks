@@ -19,9 +19,11 @@ Current Forge executions publish consolidated KPIs on the selected parent at
 `01__test/<ordinal>__postprocessing/kpis/kpis.json`. Import these without
 enumerating children; ignore `historical_data` archives, never substitute them.
 Legacy executions without consolidated parent KPIs retain direct-child intake.
-The selected execution must match the final recipe PR head. For tagless current
-executions, use recorded `FORGE_FOREIGN_TESTING_PULL_PULL_SHA`, not the Forge
-checkout's `PULL_PULL_SHA`. This is the CI-requested/tested recipe context, not
+The selected execution's tested revision must be the final recipe PR head or
+an ancestor of it, with unchanged recipe and deployment inputs. Evidence and
+receipts retain the actual tested SHA, not the final head or squash-merge SHA.
+For tagless current executions, use recorded `FORGE_FOREIGN_TESTING_PULL_PULL_SHA`,
+not the Forge checkout's `PULL_PULL_SHA`. This is the CI-requested/tested recipe context, not
 an independent attestation of the actual checkout. A missing/malformed primary link,
 empty execution, attribution mismatch, unsupported/malformed artifact, or
 permission/network error fails ingestion. **There is no fallback to older
@@ -44,7 +46,8 @@ output and attest a completed discovery snapshot, not future server immutability
 Legacy evidence without a receipt requires normal selected-execution discovery
 and validation once before admission; immutable evidence and original comment
 provenance are preserved. Direct `fetch_forge_evidence.py` still accepts child
-links but does not create ingestion receipts.
+links but does not create ingestion receipts; its explicit `--tested-revision`
+must still match the recorded revision exactly.
 
 The standalone ingestion change (PR1) adds the evidence tools, schemas,
 offline validator replay, tests, and workflow without depending on site/catalog
@@ -62,7 +65,7 @@ tags are incomplete, intake reads existing parent artifacts to populate the
 unchanged benchmark-run fields:
 
 - `01__test/000__ci_metadata/fournos_fjob.yaml`: foreign recipe PR number and
-  requested/tested recipe SHA from `spec.env`, checked against the final PR SHA.
+  requested/tested recipe SHA from `spec.env`, checked against the final PR history.
 - `01__test/001__inference_playbooks_test_dir/config.yaml`: explicit recipe and
   manifest selection, matched to the tested recipe, model, profile, and platform.
 - `01__test/run.log`: the recorded common Forge test invocation. It is not
