@@ -47,22 +47,22 @@ serving:
     worker_args:
       - {flag: --port, value: "8000", required: true, why: Sets the worker command's port.}
   env:
-    - {name: NCCL_IB_HCA, value: mlx5_5}
     - {name: NCCL_IB_GID_INDEX, value: "3"}
     - {name: NCCL_DMABUF_ENABLE, value: "0"}
-    - {name: NCCL_IB_DISABLE, value: "1"}
-    - {name: NCCL_SOCKET_IFNAME, value: eth0}
     - {name: NCCL_DEBUG, value: INFO}
     - {name: VLLM_USE_RUST_FRONTEND, value: "0"}
     - {name: VLLM_USE_V2_MODEL_RUNNER, value: "1"}
     - {name: HF_HOME, value: /home/nobody/.cache}
+    - {name: HOME, value: /tmp}
+    - {name: XDG_CACHE_HOME, value: /home/nobody/.cache}
   args:
+    - {flag: --load-format, value: dummy, required: true, why: Uses dummy weights for launch-only testing; remove before checkpoint or inference validation.}
     - {flag: --trust-remote-code, required: true, why: Allows loading model-provided code.}
     - {flag: --attention-backend, value: FLASHMLA, required: true, why: Selects FlashMLA for MLA attention.}
     - {flag: --moe-backend, value: humming, required: true, why: Selects Humming for MoE execution.}
     - {flag: --gpu-memory-utilization, value: "0.90", required: true, why: Sets the GPU memory budget.}
     - {flag: --max-num-seqs, value: "256", required: true, why: Sets the scheduler sequence budget.}
-    - {flag: --max-model-len, value: "8192", required: true, why: Sets the total prompt-plus-output context budget.}
+    - {flag: --max-model-len, value: "131072", required: true, why: Sets the total prompt-plus-output context budget.}
     - {flag: --max-num-batched-tokens, value: "4096", required: true, why: Sets the per-iteration token budget.}
     - {flag: --disable-custom-all-reduce, required: true, why: Disables the custom all-reduce implementation.}
     - {flag: --no-enable-flashinfer-autotune, required: true, why: Disables FlashInfer autotuning.}

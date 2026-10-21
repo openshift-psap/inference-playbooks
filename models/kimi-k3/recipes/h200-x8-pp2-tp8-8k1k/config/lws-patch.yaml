@@ -96,4 +96,4 @@
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/readinessProbe/initialDelaySeconds
 - op: add
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/readinessProbe/timeoutSeconds
-  value: 5
+  value: 7200
