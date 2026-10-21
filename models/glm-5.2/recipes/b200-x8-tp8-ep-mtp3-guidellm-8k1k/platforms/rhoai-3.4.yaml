@@ -1,3 +1,0 @@
-# Metadata inherits the shared image/engine declaration.
-# Deployment bytes come only from pinned_manifest, not these overrides.
-{}
