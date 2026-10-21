@@ -1,0 +1,12 @@
+# Janus lab claim for the GLM-5.2 FP8 checkpoint; apply in kserve-e2e-perf.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: glm52-weights
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 1Ti

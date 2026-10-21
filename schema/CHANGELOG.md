@@ -1,5 +1,12 @@
 # Schema changelog
 
+## Actionable reader quickstarts
+
+- Optional `quickstart[].commands` holds a copyable command block and
+  `quickstart[].expected` describes the result to check before continuing.
+- Existing `step` / `detail` notes remain valid. Reader views display commands
+  as inert text; they never execute shell commands or render source HTML.
+
 ## Forge base and served model identity
 
 - Results optionally retain explicit `model_name`, `served_model`, and

@@ -1,0 +1,10 @@
+schema_version: 1
+recipes:
+  - id: b200-x8-tp8-ep-mtp3-guidellm-8k1k
+    manifest: >-
+      models/glm-5.2/recipes/b200-x8-tp8-ep-mtp3-guidellm-8k1k/manifests/rhoai-3.5/forge/llminferenceservice.yaml
+    model_source:
+      source_uri: hf://RedHatAI/GLM-5.2-NVFP4-FP8
+      storage: prepopulated-pvc
+      preparation_guide: >-
+        models/glm-5.2/recipes/b200-x8-tp8-ep-mtp3-guidellm-8k1k/guides/README.md

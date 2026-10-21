@@ -14,10 +14,16 @@ def test_workflow_separates_unprivileged_pr_and_main_deployment():
     events = workflow.get('on', workflow.get(True))  # YAML 1.1 treats on as boolean.
     assert 'pull_request' in events and 'pull_request_target' not in events
     assert events['push']['branches'] == ['main']
+    assert events['workflow_run'] == {'workflows': ['Staging catalog'], 'branches': ['staging/all-pr-manifests'], 'types': ['completed']}
+    assert workflow['name'] not in events['workflow_run']['workflows']
     assert workflow['permissions'] == {'contents': 'read'}
     build = workflow['jobs']['build']; deploy = workflow['jobs']['deploy']
     assert 'pull_request' in build['if'] and "refs/heads/main" in build['if']
     assert 'refs/heads/main' in deploy['if'] and "!= 'pull_request'" in deploy['if']
+    assert 'staging/all-pr-manifests' not in deploy['if']
+    assert "github.event.workflow_run.conclusion == 'success'" in build['if']
+    assert 'github.event.workflow_run.head_repository.full_name == github.repository' in build['if']
+    assert "github.event.workflow_run.event != 'pull_request'" in build['if']
     assert deploy['needs'] == 'build'
     assert deploy['permissions'] == {'contents': 'read', 'pages': 'write', 'id-token': 'write'}
     assert deploy['environment']['name'] == 'github-pages'
@@ -29,12 +35,47 @@ def test_workflow_separates_unprivileged_pr_and_main_deployment():
     for job in workflow['jobs'].values():
         for step in job['steps']:
             if 'uses' in step: assert re.search(r'@[a-f0-9]{40}$', step['uses'])
-    assert 'commits/main' in deploy['steps'][0]['run'] and '$GITHUB_SHA' in deploy['steps'][0]['run']
+    assert 'commits/main' in deploy['steps'][0]['run'] and '$PRODUCTION_SHA' in deploy['steps'][0]['run']
+    assert 'git/ref/heads/staging/all-pr-manifests' in deploy['steps'][0]['run']
+    assert '$STAGING_SHA' in deploy['steps'][0]['run']
+    assert deploy['steps'][0]['env']['PRODUCTION_SHA'] == '${{ needs.build.outputs.production_sha }}'
+    assert deploy['steps'][0]['env']['STAGING_SHA'] == '${{ needs.build.outputs.staging_sha }}'
     assert 'secrets.' not in (REPO / '.github/workflows/pages.yml').read_text()
     uploads = [step for step in build['steps'] if 'upload-' in step.get('uses', '')]
-    assert len(uploads) == 2 and all(step['with']['path'] == '.build/site' for step in uploads)
+    assert len(uploads) == 2
+    assert uploads[0]['with']['path'] == '.build/site'
+    assert uploads[1]['with']['path'] == '.build/pages'
     assert 'pull_request' in uploads[0]['if']
     assert 'refs/heads/main' in uploads[1]['if']
+    staging_checkout = next(step for step in build['steps'] if step.get('name') == 'Checkout staging without credentials')
+    assert staging_checkout['with']['persist-credentials'] is False
+    assert staging_checkout['with']['ref'] == '${{ steps.staging.outputs.sha }}'
+    assembly = next(step for step in build['steps'] if step.get('name') == 'Build staging and assemble both sites')
+    assert '--require-clean --source-sha "$STAGING_SHA"' in assembly['run']
+    assert '--production .build/site --staging .build/staging-source/.build/site --out .build/pages' in assembly['run']
+
+
+def test_staging_validation_is_separate_read_only_and_triggers_main_publisher():
+    staging = yaml.safe_load((REPO / '.github/workflows/staging-pages.yml').read_text())
+    pages = yaml.safe_load((REPO / '.github/workflows/pages.yml').read_text())
+    events = staging.get('on', staging.get(True))
+    pages_events = pages.get('on', pages.get(True))
+    assert staging['name'] != pages['name']
+    assert pages_events['workflow_run']['workflows'] == [staging['name']]
+    assert events['push']['branches'] == ['staging/all-pr-manifests']
+    assert 'workflow_run' not in events and 'pull_request_target' not in events
+    assert staging['permissions'] == {'contents': 'read'}
+    assert set(staging['jobs']) == {'check'}
+    check = staging['jobs']['check']
+    assert check['if'] == "${{ github.ref == 'refs/heads/staging/all-pr-manifests' }}"
+    assert 'permissions' not in check and 'environment' not in check
+    assert check['steps'][0]['with']['persist-credentials'] is False
+    assert any('--require-clean --source-sha "$GITHUB_SHA"' in step.get('run', '') for step in check['steps'])
+    assert any('pytest tests -q' in step.get('run', '') for step in check['steps'])
+    for step in check['steps']:
+        if 'uses' in step:
+            assert re.search(r'@[a-f0-9]{40}$', step['uses'])
+            assert 'deploy' not in step['uses'] and 'upload-pages-artifact' not in step['uses']
 
 
 def test_ingest_installs_same_pinned_kustomize_before_site_build():

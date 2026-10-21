@@ -5,20 +5,31 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_run:
+    workflows: [Staging catalog]
+    branches: [staging/all-pr-manifests]
+    types: [completed]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('catalog-pr-{0}', github.event.pull_request.number) || 'catalog-main-build' }}
+  group: ${{ github.event_name == 'pull_request' && format('catalog-pr-{0}', github.event.pull_request.number) || (github.ref == 'refs/heads/staging/all-pr-manifests' && 'catalog-staging-build' || 'catalog-main-build') }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
-    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
+    if: >-
+      ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') &&
+      (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event != 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository)) }}
     runs-on: ubuntu-latest
+    outputs:
+      production_sha: ${{ steps.source.outputs.commit }}
+      staging_sha: ${{ steps.staging.outputs.sha }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -49,11 +60,32 @@ jobs:
           path: .build/site
           retention-days: 14
           if-no-files-found: error
-      - name: Upload same-run main Pages artifact
+      - name: Resolve exact staging revision
+        id: staging
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/staging/all-pr-manifests" --jq .object.sha)" >> "$GITHUB_OUTPUT"
+      - name: Checkout staging without credentials
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.staging.outputs.sha }}
+          path: .build/staging-source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build staging and assemble both sites
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        env:
+          STAGING_SHA: ${{ steps.staging.outputs.sha }}
+        run: |
+          python3 .build/staging-source/tools/build-site.py --repo .build/staging-source --out .build/staging-source/.build/site --require-clean --source-sha "$STAGING_SHA"
+          python3 tools/assemble_pages.py --production .build/site --staging .build/staging-source/.build/site --out .build/pages
+      - name: Upload same-run combined Pages artifact
         if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
-          path: .build/site
+          path: .build/pages
 
   deploy:
     needs: build
@@ -73,6 +105,10 @@ jobs:
       - name: Refuse stale main publication
         env:
           GH_TOKEN: ${{ github.token }}
-        run: test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
+          PRODUCTION_SHA: ${{ needs.build.outputs.production_sha }}
+          STAGING_SHA: ${{ needs.build.outputs.staging_sha }}
+        run: |
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$PRODUCTION_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/staging/all-pr-manifests" --jq .object.sha)" = "$STAGING_SHA"
       - id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

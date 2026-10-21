@@ -57,7 +57,7 @@ def test_mobile_long_content_wraps_and_code_scrolls_locally(page, served):
     page.evaluate('document.fonts.ready')
     assert_document_fits(page)
     assert_selectors_fit(page)
-    expect(page.locator('.rht').first).to_contain_text(long_text)
+    expect(page.locator('.recipe-technical')).to_contain_text(long_text)
     expect(page.locator('.panel')).to_contain_text(long_text + ' (local preview)')
     code = page.locator('.drawer__code').first
     assert code.evaluate('el => el.scrollWidth > el.clientWidth')

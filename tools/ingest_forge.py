@@ -21,8 +21,8 @@ def github(endpoint, paginated=False):
     return [item for page in value for item in page] if paginated else value
 
 
-def selected_run(comments, tracking_uri, workspace):
-    """Select the latest trusted success report before interpreting its primary link."""
+def selected_run(comments, tracking_uri, default_workspace):
+    """Select the latest trusted success report and its approved workspace."""
     reports = []
     for comment in comments:
         if comment.get('user', {}).get('login') != 'psap-forge-bot[bot]':
@@ -50,12 +50,15 @@ def selected_run(comments, tracking_uri, workspace):
                 parsed.path.rstrip('/') != urlparse(tracking_uri).path.rstrip('/') or not match):
             raise ValueError('latest successful Forge report has an invalid primary result link')
         query = parse_qs(parsed.fragment.partition('?')[2], keep_blank_values=True)
-        if 'workspace' in query and query['workspace'] != [workspace]:
-            raise ValueError('selected Forge report workspace disagrees with configured workspace')
-        runs.add(match[1])
+        workspaces = query.get('workspace', [default_workspace])
+        if (len(workspaces) != 1 or not workspaces[0] or
+                workspaces[0] not in {'forge-sandbox', 'forge-inference-playbooks', default_workspace}):
+            raise ValueError('selected Forge report has an invalid or unapproved workspace')
+        runs.add((match[1], workspaces[0]))
     if len(runs) != 1:
         raise ValueError('latest successful Forge report has ambiguous primary result links')
-    return runs.pop(), report['id']
+    run_id, workspace = runs.pop()
+    return run_id, report['id'], workspace
 
 
 def main():
@@ -77,8 +80,8 @@ def main():
         numbers = {p['number'] for commit in commits
                    for p in github(f'repos/{repository}/commits/{commit}/pulls', True)
                    if p.get('merged_at') and p['base']['ref'] == 'main'}
-    client = Client(os.environ['MLFLOW_TRACKING_URI'], os.environ.get('MLFLOW_WORKSPACE', 'forge-sandbox'),
-                     os.environ['MLFLOW_USERNAME'], os.environ['MLFLOW_PASSWORD'], args.insecure)
+    tracking_uri = os.environ['MLFLOW_TRACKING_URI']
+    default_workspace = os.environ.get('MLFLOW_WORKSPACE', 'forge-sandbox')
     admissions, checked_inputs = None, {}
     for number in sorted(numbers):
         pr = github(f'repos/{repository}/pulls/{number}')
@@ -88,7 +91,7 @@ def main():
         if pr['head']['ref'].startswith('automation/forge-evidence'):
             continue
         comments = github(f'repos/{repository}/issues/{number}/comments', True)
-        selected = selected_run(comments, client.uri, client.headers['X-MLflow-Workspace'])
+        selected = selected_run(comments, tracking_uri, default_workspace)
         if selected is None:
             print(f'PR {number}: no trusted successful Forge comment; no import')
             continue
@@ -97,7 +100,9 @@ def main():
         repo = args.repo.resolve()
         if admissions is None:
             admissions = load_admissions(repo)
-        run_id, comment_id = selected
+        run_id, comment_id, workspace = selected
+        client = Client(tracking_uri, workspace, os.environ['MLFLOW_USERNAME'],
+                        os.environ['MLFLOW_PASSWORD'], args.insecure)
         if admitted_execution(repo, admissions, client, run_id, revision, number, checked_inputs):
             print(f'PR {number}: selected execution already indexed; imported=0 indexed=1')
             continue

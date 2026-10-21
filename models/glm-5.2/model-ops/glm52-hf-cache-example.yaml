@@ -1,0 +1,12 @@
+# Example only. Set the storage class, access mode and capacity for the target
+# B200 cluster. Download and serving use this claim sequentially.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: glm-5-2-hf-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Ti

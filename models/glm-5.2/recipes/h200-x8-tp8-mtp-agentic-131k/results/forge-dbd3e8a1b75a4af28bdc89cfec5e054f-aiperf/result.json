@@ -1,0 +1,50 @@
+{
+  "schema_version": 2,
+  "run_id": "forge-dbd3e8a1b75a4af28bdc89cfec5e054f-aiperf",
+  "deployment_scope": "single-node",
+  "accelerator_key": "nvidia-h200-x8",
+  "harness": "aiperf",
+  "completeness": "smoke",
+  "reference_concurrency": 32,
+  "metrics": {
+    "total_requests": 202,
+    "rps": 0.11038241803166575,
+    "output_tok_s": 70.6485726735642,
+    "ttft_ms_avg": 190382.1644456287,
+    "ttft_ms_p95": 247717.97765904997,
+    "itl_ms_avg": 113.29937136402809,
+    "itl_ms_p95": 252.19247679855937,
+    "ttft_ms_p50": null,
+    "ttft_ms_p90": null,
+    "ttft_ms_p99": null,
+    "itl_ms_p50": null,
+    "itl_ms_p90": null,
+    "itl_ms_p99": null,
+    "tpot_ms_p50": null,
+    "tpot_ms_p90": null,
+    "tpot_ms_p95": null,
+    "tpot_ms_p99": null
+  },
+  "sweep": [
+    {
+      "concurrency": 32,
+      "total_requests": 202,
+      "rps": 0.11038241803166575,
+      "output_tok_s": 70.6485726735642,
+      "ttft_ms_avg": 190382.1644456287,
+      "ttft_ms_p95": 247717.97765904997,
+      "itl_ms_avg": 113.29937136402809,
+      "itl_ms_p95": 252.19247679855937,
+      "ttft_ms_p50": null,
+      "ttft_ms_p90": null,
+      "ttft_ms_p99": null,
+      "itl_ms_p50": null,
+      "itl_ms_p90": null,
+      "itl_ms_p99": null,
+      "tpot_ms_p50": null,
+      "tpot_ms_p90": null,
+      "tpot_ms_p95": null,
+      "tpot_ms_p99": null
+    }
+  ]
+}

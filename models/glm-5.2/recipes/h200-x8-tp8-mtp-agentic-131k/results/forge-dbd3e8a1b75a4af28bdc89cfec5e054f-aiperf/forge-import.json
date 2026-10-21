@@ -1,0 +1,32 @@
+{
+  "outputs": [
+    {
+      "benchmark_run_id": "dbd3e8a1b75a4af28bdc89cfec5e054f",
+      "files": {
+        "kpis.json": "63e25ff0e57306e096f8c214c7559ba62681a1e5",
+        "result.json": "08e07c588a6a7d9b85087e5cd06cb754556e8064",
+        "run.yaml": "efd2e48069ec093c58afc8c7221c94b64762264e"
+      },
+      "harness": "aiperf",
+      "recipe_path": "models/glm-5.2/recipes/h200-x8-tp8-mtp-agentic-131k/recipe.yaml",
+      "run_path": "models/glm-5.2/recipes/h200-x8-tp8-mtp-agentic-131k/results/forge-dbd3e8a1b75a4af28bdc89cfec5e054f-aiperf/run.yaml"
+    },
+    {
+      "benchmark_run_id": "dbd3e8a1b75a4af28bdc89cfec5e054f",
+      "files": {
+        "kpis.json": "63e25ff0e57306e096f8c214c7559ba62681a1e5",
+        "result.json": "5dbd3d57eb1d91c7b8a05a2b18ec6989fb9ec9d5",
+        "run.yaml": "5baf693d9e57bc69e03edf8a378486cb31f008b0"
+      },
+      "harness": "guidellm",
+      "recipe_path": "models/glm-5.2/recipes/h200-x8-tp8-mtp-agentic-131k/recipe.yaml",
+      "run_path": "models/glm-5.2/recipes/h200-x8-tp8-mtp-agentic-131k/results/forge-dbd3e8a1b75a4af28bdc89cfec5e054f-guidellm/run.yaml"
+    }
+  ],
+  "parent_run_id": "dbd3e8a1b75a4af28bdc89cfec5e054f",
+  "pr_number": 10,
+  "tested_revision": "5dd89405f1a5603c9bf4804d30fc5062eb79870e",
+  "tracking_origin": "https://mlflow.apps.psap-automation.ibm.rhperfscale.org",
+  "version": 1,
+  "workspace": "forge-inference-playbooks"
+}

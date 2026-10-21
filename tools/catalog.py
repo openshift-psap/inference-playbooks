@@ -282,6 +282,7 @@ def build_catalog(repo: Path, build: dict | None = None) -> dict:
                      "platform": {"stack": platform["stack"], "version": platform["version"]},
                      "blocked": blocked, "reason": platform.get("reason"), "maturity": recipe["maturity"],
                      "scope": recipe["deployment"]["scope"], "workload_profile": recipe["workload_profile"],
+                     "quantization": recipe.get("quantization"),
                      "optimization_intent": recipe["optimization_intent"], "deployment_mode": recipe["deployment_mode"],
                      "hardware": {"path": recipe["hardware_profile"], "revision": profile["profile_revision"],
                                   "accelerator_key": profile["accelerator_key"], "data": profile,

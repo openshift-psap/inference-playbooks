@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: download-glm52-weights
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      containers:
+        - name: download
+          image: docker.io/vllm/vllm-openai:v0.24.0
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              hf download zai-org/GLM-5.2-FP8 --local-dir /mnt/models
+              test -s /mnt/models/config.json
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+            - name: HF_HOME
+              value: /tmp/hf-home
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+          volumeMounts:
+            - name: model-weights
+              mountPath: /mnt/models
+      restartPolicy: Never
+      volumes:
+        - name: model-weights
+          persistentVolumeClaim:
+            claimName: glm52-weights

@@ -1,0 +1,9 @@
+# Image-only customization of the generated TP LLMInferenceService base.
+# This patch changes only the main container image.
+# JSON6902 avoids replacing a CRD containers list when Kustomize lacks its schema.
+- op: test
+  path: /spec/template/containers/0/name
+  value: main
+- op: add
+  path: /spec/template/containers/0/image
+  value: docker.io/vllm/vllm-openai:v0.24.0

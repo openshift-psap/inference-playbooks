@@ -20,7 +20,12 @@ def test_all_recipe_platform_entries_reachable(page, served):
         for artifact in entry['artifacts']:
             expect(page.locator('pre').filter(has_text=artifact['body']).first).to_be_visible()
         page.get_by_role('button', name='Benchmark', exact=True).click()
-        expect(page.locator('.panel')).to_contain_text('No committed benchmark evidence for this recipe')
+        if entry['evidence']:
+            for item in entry['evidence']:
+                expect(page.get_by_text(f"Run: {item['run']['run_id']}", exact=True)).to_be_visible()
+            expect(page.locator('.panel')).not_to_contain_text('No committed benchmark evidence for this recipe')
+        else:
+            expect(page.locator('.panel')).to_contain_text('No committed benchmark evidence for this recipe')
 
 
 def test_invalid_urls_model_switch_and_ambiguity(page, served):
@@ -36,8 +41,8 @@ def test_invalid_urls_model_switch_and_ambiguity(page, served):
     expect(page.locator('.model-card')).to_contain_text(entries[0]['maturity'])
     model = next(model for model in served[1]['models'] if model['id'] == 'gemma-4')
     page.get_by_role('radio', name=model['name'], exact=True).check()
-    expect(page.locator('.panel')).to_contain_text('1 GPUs')
-    expect(page.locator('.panel')).to_contain_text('8 accelerators')
+    expect(page.locator('.configuration-summary')).to_contain_text('1 GPU (no tensor sharding)')
+    expect(page.locator('.configuration-summary')).to_contain_text('8 H200 GPUs per node')
 
 
 def test_empty_catalog_and_model_without_recipes(page, served):
@@ -56,6 +61,7 @@ def test_blocked_entry_reason_not_fake_option_universe(page, served):
     intercepted(page, served, payload)
     page.locator('input[name="catalog-recipe"]').first.check()
     expect(page.locator('.banner--pending')).to_contain_text(entry['reason'])
+    expect(page.locator('.recipe-option--selected .recipe-option__badges')).to_contain_text('Blocked')
     assert page.locator('.drawer').count() == 0
 
 

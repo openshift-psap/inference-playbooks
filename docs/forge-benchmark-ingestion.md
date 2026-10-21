@@ -4,7 +4,13 @@
 one merged PR through `workflow_dispatch`. It selects only the latest explicit
 successful `psap-forge-bot[bot]` report, ordered by GitHub `created_at` then ID.
 The primary `[mlflow results]` or `[MLFlow Test Results]` link must identify a
-parent run on the configured origin/workspace. Nested run/log links are ignored.
+parent run on the configured origin. Its workspace selects the MLflow request
+header: `forge-sandbox`, `forge-inference-playbooks`, and the configured
+`MLFLOW_WORKSPACE` are approved. Links without a workspace use `MLFLOW_WORKSPACE`
+(default `forge-sandbox`). Empty, repeated, or unapproved workspace values and
+primary links disagreeing on workspace/parent are rejected. Nested run/log links
+are ignored. Each PR selects its own workspace, including in a multi-PR push;
+there is no workspace probing or retry in another workspace.
 Failed, ambiguous, stale, unavailable, or unattributed evidence fails closed.
 No cluster access is used. Imports open a separate evidence PR, never push to
 `main`, and never promote maturity or platform verification.
@@ -75,6 +81,26 @@ names and capture ordinals. There is no recursive runtime-artifact search or
 alternate digest-source fallback. LWS selects `vllm`, `vllm-leader`, or
 `vllm-worker` containers from its role templates. LLMInferenceService selects
 the `main` container running vLLM, not router, sidecar, or init containers.
+The captured launch spec must match the selected committed manifest at the
+tested recipe SHA, including platform overrides and Kustomize patches already
+materialized there. Historical renderers/PR code are never executed. Only the
+audited Forge additions are normalized: run labels/selectors, pod-level UID
+removal, and absent HOME/USER defaults. Other environment/security/storage/
+argument/resource changes fail. Undeclared HF-to-PVC rewrites and RDMA resource
+rewrites currently fail rather than being guessed. Declared manifests also
+participate in local receipt-input checks.
+
+Model identity and load location are separate: an HF checkpoint, filesystem
+path, and API alias need not be equal. Any supplied model identity labels must
+match the checkpoint declaration; aliases cannot authorize another PVC/path.
+Harnesses need not duplicate those labels: for example, current AIPerf output
+can contain only phase/tool/concurrency labels. Such records retain tested
+execution/manifest attribution without synthesized model labels or normalized
+`model_identity`. Missing labels are not independent proof of weight identity.
+LWS runtime model arguments must agree with the tested launch. LLMInferenceService
+controller-generated local paths must resolve to its declared PVC/mount/subpath,
+not a hardcoded `/mnt/models` exception.
+
 Declared revisions come from serving arguments or `VLLM_ADDITIONAL_ARGS`;
 omission uses the accepted `main` default. Model-less LWS workers share the
 leader's model load. LLMInferenceService supports HF and PVC model URIs; PVC
@@ -94,6 +120,11 @@ parent MLflow URL, while raw KPIs and their existing checksum remain unchanged.
 The existing model identity checks are unchanged: new KPI `served_model` labels
 identify the exact served checkpoint, alongside declared base model/quantization.
 Historical base-only labels do not establish a different quantized checkpoint.
+For manifest-bound parent imports, legacy `product_version` is preserved as raw
+descriptive metadata, not compared with an engine version. Forge PR #322 at
+`768a2858` derives that label from the first recipe platform even when another
+platform manifest is selected. The selected tested manifest determines run
+platform attribution; unbound legacy tagged imports retain their version check.
 
 ### Existing tagged execution contract
 
@@ -138,8 +169,12 @@ model/vLLM platform.
 
 Recipe, model, profile, overrides, pinned manifests, and config inputs must
 match the tested Git snapshot. Only additions to `benchmark_runs` are ignored
-for replay/idempotence. Updating an existing immutable run with different
-content is rejected. Distinct workloads within one harness artifact are
+for recipe replay/idempotence. Model comparisons ignore the retired top-level
+`presentation` metadata in historical snapshots; this does not restore a current
+model field. Every other model field must match, including unknown fields.
+Other deployment inputs retain exact Git comparisons, and receipt admission
+still requires clean, committed inputs. Updating an existing immutable run with
+different content is rejected. Distinct workloads within one harness artifact are
 rejected rather than merged; use separate benchmark runs/artifacts.
 
 ## Runner and secrets
@@ -147,16 +182,26 @@ rejected rather than merged; use separate benchmark runs/artifacts.
 Create protected environment `forge-evidence`, with:
 
 - Variables: `MLFLOW_TRACKING_URI`, `MLFLOW_WORKSPACE` (defaults to
-  `forge-sandbox`), optional `MLFLOW_INSECURE_TLS=true` for self-signed TLS.
+  `forge-sandbox`; a fallback for links without a workspace, not a restriction
+  to one workspace), optional `MLFLOW_INSECURE_TLS=true` for self-signed TLS.
   Prefer a trusted CA and leave insecure TLS disabled.
-- Secrets: read-only `MLFLOW_USERNAME`, `MLFLOW_PASSWORD`.
+- Secrets: read-only `MLFLOW_USERNAME`, `MLFLOW_PASSWORD`. The account needs
+  read access to each workspace used by selected reports; permission errors fail
+  ingestion without falling back to another workspace or older report.
 - Optional repository-level `FORGE_INGEST_RUNNER`: JSON runner labels with MLflow
   network access, e.g. `["self-hosted", "forge-evidence"]`. Default is `ubuntu-latest`.
   A custom runner must provide Bash, Git, and the GitHub CLI (`gh`).
-- Optional `FORGE_INGEST_GITHUB_TOKEN`: GitHub App/fine-grained token with
-  contents/PR write permission. This is needed to trigger normal PR CI from
-  the automated PR; events created with `GITHUB_TOKEN` generally do not trigger
-  other workflows. Enable repository permissions for automated PR creation.
+- Variable `FORGE_INGEST_APP_CLIENT_ID` and secret `FORGE_INGEST_APP_PRIVATE_KEY`:
+  an organization-owned GitHub App installed only on this repository, with
+  Contents and Pull requests read/write (Metadata read is implicit). No webhooks
+  or event subscriptions are needed. Restrict the `forge-evidence` environment
+  deployment branch policy to `main` before storing the App private key.
+  The workflow mints a repository-scoped installation token only for publication
+  and revokes it at job completion. Discovery uses the read-only `GITHUB_TOKEN`.
+  PR authorship and commit author/committer use the App's `[bot]` identity, not
+  the dispatching user. App-authored PRs trigger normal PR CI.
+  App credentials are required: there is no personal-token or `GITHUB_TOKEN`
+  publication fallback. The old `FORGE_INGEST_GITHUB_TOKEN` is no longer used.
 
 Dispatch the workflow from `main`; other refs are deliberately excluded.
 

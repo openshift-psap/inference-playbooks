@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: download-glm52-nvfp4-hf-cache
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      containers:
+        - name: download
+          image: docker.io/vllm/vllm-openai:v0.27.0
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              snapshot_dir="$(hf download RedHatAI/GLM-5.2-NVFP4-FP8 --cache-dir "${HF_HUB_CACHE}")"
+              test -s "${snapshot_dir}/config.json"
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: llm-d-hf-token
+                  key: HF_TOKEN
+            - name: HF_HOME
+              value: /tmp/hf-home
+            - name: HF_HUB_CACHE
+              value: /var/cache/huggingface
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /var/cache/huggingface
+      restartPolicy: Never
+      volumes:
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: glm-5-2-hf-cache
