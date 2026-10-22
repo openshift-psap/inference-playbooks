@@ -14,9 +14,10 @@ from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
 from constraints import load_constraints, validate_recipe_against_constraints
-from recipe_evidence import check_hardware_profiles, load_unique_yaml, load_unique_yaml_all
+from recipe_evidence import check_hardware_profiles, load_unique_yaml
 from engine_versions import baseline_images, engine_errors, load_engine_index, resolve_engine
 from jsonschema.exceptions import ValidationError
+from manifest_policy import load_manifest_documents, report_service_policy_errors, service_errors, validate_recipe_manifest_files
 
 
 SCHEMAS = {
@@ -114,16 +115,16 @@ def validate_raw_manifest_intake(repo: Path, recipe_schema: dict, require_conver
             manifest_count += 1
             try:
                 text = path.read_text()
+                documents = load_manifest_documents(path, text)
                 if path.suffix.lower() == ".json":
-                    documents = [json.loads(text)]
                     if not isinstance(documents[0], dict):
                         raise ValueError("JSON file must contain an object")
-                else:
-                    documents = [document for document in load_unique_yaml_all(text) if document is not None]
             except (OSError, UnicodeError, ValueError, yaml.YAMLError, json.JSONDecodeError) as error:
                 errors.append(f"{path}: cannot parse raw manifest: {error}")
                 continue
-            if not documents or any(not isinstance(document, dict) for document in documents):
+            errors.extend(service_errors(path, documents))
+            nonempty_documents = [document for document in documents if document is not None]
+            if not nonempty_documents or any(not isinstance(document, dict) for document in nonempty_documents):
                 errors.append(f"{path}: raw manifest must contain at least one YAML object document")
         if not manifest_count:
             errors.append(f"{directory}: raw-manifest needs at least one YAML or JSON file")
@@ -676,12 +677,20 @@ def main() -> int:
             models_by_id[mid] = model_data
 
     recipe_ids: dict[str, Path] = {}
-    for path in sorted(repo.glob("models/*/recipes/*/recipe.yaml")):
+    for directory in sorted(repo.glob("models/*/recipes/*")):
+        if not directory.is_dir():
+            continue
+        path = directory / "recipe.yaml"
+        if not path.is_file():
+            errors.extend(validate_recipe_manifest_files(directory, {}))
+            continue
         try:
             recipe = load_yaml(path)
         except (OSError, ValueError, yaml.YAMLError) as error:
             errors.append(f"{path}: cannot load YAML: {error}")
+            errors.extend(validate_recipe_manifest_files(directory, {}))
             continue
+        errors.extend(validate_recipe_manifest_files(directory, recipe))
         document_errors = validate_document(path, recipe, schemas["recipe"], registry)
         errors.extend(document_errors)
         if document_errors:
@@ -771,6 +780,7 @@ def main() -> int:
         elif result.get("run_id") != expected[1].get("run_id"):
             errors.append(f"{path}: run_id does not match its referencing benchmark run")
     if errors:
+        report_service_policy_errors(repo, errors)
         print("\n".join(errors), file=sys.stderr)
         return 1
     print("Validated schemas, references, and hardware-profile corrections.")

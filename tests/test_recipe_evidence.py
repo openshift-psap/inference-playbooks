@@ -350,7 +350,7 @@ correction_log:
         recipe_path.unlink()
         raw = recipe_path.parent / "raw-manifest" / "deployment.yaml"
         raw.parent.mkdir()
-        raw.write_text("kind: Deployment\nmetadata: {name: example}\n---\nkind: Service\nmetadata: {name: example}\n")
+        raw.write_text("kind: Deployment\nmetadata: {name: example}\n---\nkind: LeaderWorkerSet\nmetadata: {name: example}\n")
         result = self.run_validator(directory, "--current")
         self.assertEqual(result.returncode, 0, result.stderr)
         result = self.run_validator(directory, "--current", "--require-converted-raw")
