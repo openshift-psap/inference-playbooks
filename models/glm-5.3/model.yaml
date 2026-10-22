@@ -1,0 +1,14 @@
+schema_version: 2
+model_id: glm-5.3
+name: GLM-5.3
+family: GLM
+parameters: 753B
+huggingface_id: zai-org/GLM-5.3
+license: other
+source: huggingface
+model_type: glm_moe_dsa
+architectures:
+  - GlmMoeDsaForCausalLM
+quantizations:
+  - name: FP8
+    huggingface_id: zai-org/GLM-5.3
