@@ -1,0 +1,99 @@
+# Keep the namespace UID at both scopes; Forge strips the pod-level value.
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/serviceAccountName
+  value: default
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/serviceAccountName
+  value: default
+# LWS mirrors this profile into legacy seccomp annotations rejected by Janus.
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/seccompProfile
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/seccompProfile
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsNonRoot
+  value: true
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/securityContext/runAsUser
+  value: 1000770000
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/securityContext/runAsUser
+  value: 1000770000
+# Give slow shared-NFS and distributed startup up to four hours before restarting the leader.
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/startupProbe/failureThreshold
+  value: 1440
+- op: replace
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsNonRoot
+  value: true
+- op: replace
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/securityContext/runAsUser
+  value: 1000770000
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/securityContext/runAsUser
+  value: 1000770000
+# Local model staging does not require the template's HF_TOKEN secret.
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/env/0
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0
+# Janus allocates each GPU and its paired NIC through composite DRA, so suppress
+# the template's ordinary GPU request and request eight paired devices per pod.
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/requests/composite.dra.io~1gpu-nic-pair
+  value: "8"
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/composite.dra.io~1gpu-nic-pair
+  value: "8"
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/requests/composite.dra.io~1gpu-nic-pair
+  value: "8"
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/composite.dra.io~1gpu-nic-pair
+  value: "8"
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/requests/nvidia.com~1gpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/nvidia.com~1gpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/requests/nvidia.com~1gpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/nvidia.com~1gpu
+# Preserve the source's CPU request without the template's eight-core cap.
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/resources/limits/cpu
+- op: remove
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/resources/limits/cpu
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/imagePullPolicy
+  value: IfNotPresent
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/imagePullPolicy
+  value: IfNotPresent
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/volumeMounts/-
+  value: &model_mount {name: model, mountPath: /models}
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/volumeMounts/-
+  value: *model_mount
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/volumes/-
+  value: &model_volume
+    name: model
+    persistentVolumeClaim:
+      claimName: inference-playbooks-model-kimi-k3-9fcb53074b
+      readOnly: true
+- op: add
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
+  value: *model_volume
+- op: replace
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/volumes/0/emptyDir/sizeLimit
+  value: 16Gi
+- op: replace
+  path: /spec/leaderWorkerTemplate/workerTemplate/spec/volumes/0/emptyDir/sizeLimit
+  value: 16Gi
+- op: remove
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/readinessProbe/initialDelaySeconds
+- op: add
+  path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/readinessProbe/timeoutSeconds
+  value: 7200
