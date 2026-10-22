@@ -316,10 +316,9 @@ def execution_bundle(client, parent_id, repo, expected_revision, pr_number):
     configuration = document('01__test/001__inference_playbooks_test_dir/config.yaml')
     config = configuration.get('inference_playbooks') if isinstance(configuration, dict) else None
     locator = config.get('recipe') if isinstance(config, dict) else None
-    if not isinstance(locator, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*', locator):
-        raise ValueError('execution recipe selector must be an explicit canonical <model>/<recipe-folder> locator')
-    model, folder = locator.split('/')
-    recipe_dir = f'models/{model}/recipes/{folder}'
+    if not isinstance(locator, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]*/recipes/[a-z0-9][a-z0-9._-]*', locator):
+        raise ValueError('execution recipe selector must be an explicit canonical <model>/recipes/<recipe-folder> locator')
+    recipe_dir = f'models/{locator}'
     relative = recipe_dir + '/recipe.yaml'
     manifest_path = config.get('manifest_path') if isinstance(config, dict) else None
     if (not isinstance(manifest_path, str) or not manifest_path or

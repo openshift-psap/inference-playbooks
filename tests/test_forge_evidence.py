@@ -239,7 +239,7 @@ def intake(tmp_path, kpis):
         '01__test/000__ci_metadata/fournos_fjob.yaml': yaml.safe_dump({'spec': {'env': {
             'FORGE_FOREIGN_TESTING_PULL_PULL_SHA': revision, 'FORGE_FOREIGN_TESTING_PULL_NUMBER': '34'}}}),
         '01__test/001__inference_playbooks_test_dir/config.yaml': yaml.safe_dump({'inference_playbooks': {
-            'recipe': 'test/test-recipe', 'namespace': 'test-namespace',
+            'recipe': 'test/recipes/test-recipe', 'namespace': 'test-namespace',
             'manifest_path': str(manifest.relative_to(recipe_path.parent))}})}
     capture_bundle(tmp_path, client.artifacts, revision)
     return tmp_path, recipe_path, revision, client, parent, values
@@ -247,8 +247,7 @@ def intake(tmp_path, kpis):
 
 def fixture_selection(artifacts):
     config = yaml.safe_load(artifacts['01__test/001__inference_playbooks_test_dir/config.yaml'])['inference_playbooks']
-    model, folder = config['recipe'].split('/')
-    recipe = Path('models') / model / 'recipes' / folder / 'recipe.yaml'
+    recipe = Path('models') / config['recipe'] / 'recipe.yaml'
     return config, recipe, recipe.parent / config['manifest_path']
 
 
@@ -352,7 +351,7 @@ def parent_intake(variant_intake, kpis):
         '01__test/000__ci_metadata/fournos_fjob.yaml': yaml.safe_dump({'spec': {'env': {
             'FORGE_FOREIGN_TESTING_PULL_PULL_SHA': revision, 'FORGE_FOREIGN_TESTING_PULL_NUMBER': '34',
             'PULL_PULL_SHA': '5' * 40}}}),
-        '01__test/001__inference_playbooks_test_dir/config.yaml': yaml.safe_dump({'inference_playbooks': {'recipe': 'test/test-recipe',
+        '01__test/001__inference_playbooks_test_dir/config.yaml': yaml.safe_dump({'inference_playbooks': {'recipe': 'test/recipes/test-recipe',
             'manifest_path': 'manifests/vllm-0.24.0/deployment.yaml'}}),
         source: yaml.safe_dump({'apiVersion': 'apps/v1', 'metadata': {'name': 'server'},
             'kind': 'Deployment', 'spec': {'template': {'spec': {'containers': [
@@ -515,9 +514,11 @@ def test_direct_locator_uses_authoritative_recipe_id_without_scanning(parent_int
 
 
 @pytest.mark.parametrize('selector', ['absent', None, '', ' ', False, 0, [], {}, 'test-recipe',
-    '/test/test-recipe', '../test-recipe', 'test/../test-recipe', 'test//test-recipe',
-    'test/./test-recipe', 'test/test-recipe/', 'models/test/recipes/test-recipe',
-    'test/not-present', 'other/test-recipe', 'Test/test-recipe'])
+    'test/test-recipe', '/test/recipes/test-recipe', '../recipes/test-recipe',
+    'test/recipes/../test-recipe', 'test//recipes/test-recipe', 'test/recipes//test-recipe',
+    'test/recipes/./test-recipe', 'test/recipes/test-recipe/', 'models/test/recipes/test-recipe',
+    'test/not-recipes/test-recipe', 'test/recipes/test-recipe/extra',
+    'test/recipes/not-present', 'other/recipes/test-recipe', 'Test/recipes/test-recipe'])
 @pytest.mark.parametrize('tagged', [False, True])
 def test_recipe_selector_must_be_an_explicit_direct_locator(parent_intake, selector, tagged):
     repo, path, revision, client, parent, artifacts, _ = parent_intake
@@ -546,7 +547,7 @@ def test_direct_selection_rejects_symlink_aliases_before_reading_them(parent_int
         alias.symlink_to(path.parent, target_is_directory=True)
         key = '01__test/001__inference_playbooks_test_dir/config.yaml'
         config = yaml.safe_load(artifacts[key])
-        config['inference_playbooks']['recipe'] = 'test/alias'
+        config['inference_playbooks']['recipe'] = 'test/recipes/alias'
         artifacts[key] = yaml.safe_dump(config)
     else:
         selected = {'recipe-file': path, 'manifest-folder': path.parent / 'manifests/vllm-0.24.0',
@@ -566,7 +567,7 @@ def test_locator_does_not_authorize_foreign_metadata_or_tag_selection(parent_int
     key = '01__test/001__inference_playbooks_test_dir/src/bundle-metadata.yaml'
     metadata = yaml.safe_load(artifacts[key])
     if failure == 'metadata-id-is-locator':
-        metadata['recipe_id'] = 'test/test-recipe'
+        metadata['recipe_id'] = 'test/recipes/test-recipe'
     elif failure == 'metadata-recipe-path':
         metadata['recipe_path'] = 'models/foreign/recipes/foreign/recipe.yaml'
     elif failure == 'inventory-path':
