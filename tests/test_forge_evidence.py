@@ -14,8 +14,9 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tools'))
-from fetch_forge_evidence import Client, NoKpiArtifactsError, NoRedirect, append_reference, import_parent, safe_artifact, serving_arguments
+from fetch_forge_evidence import Client, NoKpiArtifactsError, NoRedirect, append_reference, execution_values, import_parent, safe_artifact, serving_arguments
 from forge_model_identity import validate_model_identity
+from forge_serving_contract import BUNDLE_FILES, validate_bundle
 from ingest_forge import selected_run
 from forge_admission import admitted_execution, load_admissions
 from normalize_kpis import normalize
@@ -188,7 +189,7 @@ def intake(tmp_path, kpis):
     profile_path = tmp_path / 'hardware-profiles/test.yaml'
     profile_path.parent.mkdir()
     profile_path.write_text(yaml.safe_dump({'profile_revision': 1, 'accelerator_key': 'nvidia-h200-x8'}))
-    recipe = {'recipe_id': 'test-recipe', 'hardware_profile': 'hardware-profiles/test.yaml',
+    recipe = {'schema_version': 4, 'recipe_id': 'test-recipe', 'hardware_profile': 'hardware-profiles/test.yaml',
               'deployment': {'scope': 'single-node'}, 'platforms': [
                   {'stack': 'vllm', 'version': '0.24.0', 'overrides': 'platforms/vllm.yaml'}],
               'serving': {'model': 'google/gemma-4-26B-A4B-it'}, 'benchmark_runs': []}
@@ -198,6 +199,12 @@ def intake(tmp_path, kpis):
     (recipe_path.parent / 'config').mkdir()
     (recipe_path.parent / 'config/patch.yaml').write_text('{}\n')
     (tmp_path / 'models/test/model.yaml').write_text('{}\n')
+    manifest = recipe_path.parent / 'manifests/vllm-0.24.0/deployment.yaml'
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(yaml.safe_dump({'apiVersion': 'apps/v1', 'kind': 'Deployment',
+        'metadata': {'name': 'server'}, 'spec': {'template': {'spec': {'containers': [
+            {'name': 'vllm', 'image': 'docker.io/vllm/vllm-openai:v0.24.0',
+             'args': ['google/gemma-4-26B-A4B-it']}]}}}}))
     for args in (['init'], ['add', '.'], ['-c', 'user.email=test@example.org', '-c', 'user.name=Test', 'commit', '-m', 'fixture']):
         subprocess.run(['git', '-C', str(tmp_path), *args], check=True, capture_output=True)
     revision = subprocess.run(['git', '-C', str(tmp_path), 'rev-parse', 'HEAD'], check=True,
@@ -220,8 +227,65 @@ def intake(tmp_path, kpis):
             return [child]
         def kpis(self, run_id):
             return ('kpis/kpis.json', json.dumps(kpis).encode()) if run_id == 'a' * 32 else None
+        def request(self, endpoint, body=None, raw=False):
+            query = parse_qs(urlsplit(endpoint).query)
+            if endpoint.startswith('/get-artifact?'):
+                return self.artifacts[query['path'][0]].encode()
+            return {'files': [{'path': key, 'is_dir': False} for key in self.artifacts
+                              if key.startswith(query['path'][0] + '/')]}
 
-    return tmp_path, recipe_path, revision, FakeClient(), parent, values
+    client = FakeClient()
+    client.artifacts = {
+        '01__test/000__ci_metadata/fournos_fjob.yaml': yaml.safe_dump({'spec': {'env': {
+            'FORGE_FOREIGN_TESTING_PULL_PULL_SHA': revision, 'FORGE_FOREIGN_TESTING_PULL_NUMBER': '34'}}}),
+        '01__test/001__inference_playbooks_test_dir/config.yaml': yaml.safe_dump({'inference_playbooks': {
+            'recipe': 'test/recipes/test-recipe', 'namespace': 'test-namespace',
+            'manifest_path': str(manifest.relative_to(recipe_path.parent))}})}
+    capture_bundle(tmp_path, client.artifacts, revision)
+    return tmp_path, recipe_path, revision, client, parent, values
+
+
+def fixture_selection(artifacts):
+    config = yaml.safe_load(artifacts['01__test/001__inference_playbooks_test_dir/config.yaml'])['inference_playbooks']
+    recipe = Path('models') / config['recipe'] / 'recipe.yaml'
+    return config, recipe, recipe.parent / config['manifest_path']
+
+
+def capture_bundle(repo, artifacts, revision):
+    """Synthetic producer: complete source inventory, namespace-only final payload."""
+    test_dir = '01__test/001__inference_playbooks_test_dir'
+    config, recipe_path, manifest = fixture_selection(artifacts)
+    config.setdefault('namespace', 'test-namespace')
+    artifacts[test_dir + '/config.yaml'] = yaml.safe_dump({'inference_playbooks': config})
+    folder = manifest.parent
+    recipe = yaml.safe_load((repo / recipe_path).read_text())
+    inventory, source = [], []
+    for path in sorted((repo / folder).glob('*')):
+        if path.suffix not in {'.yaml', '.yml'}:
+            continue
+        raw = subprocess.run(['git', '-C', str(repo), 'show', f'{revision}:{path.relative_to(repo)}'],
+                             check=True, capture_output=True).stdout
+        documents = [doc for doc in yaml.safe_load_all(raw) if doc is not None]
+        inventory.append({'path': str(path.relative_to(repo)), 'sha256': hashlib.sha256(raw).hexdigest(),
+                          'document_count': len(documents)})
+        source.extend(documents)
+    submitted = copy.deepcopy(source)
+    for doc in submitted:
+        doc.setdefault('metadata', {}).setdefault('namespace', config['namespace'])
+    artifacts[test_dir + '/src/source-bundle.yaml'] = yaml.safe_dump_all(source)
+    artifacts[test_dir + '/src/submitted-bundle.yaml'] = yaml.safe_dump_all(submitted)
+    artifacts[test_dir + '/src/bundle-metadata.yaml'] = yaml.safe_dump({
+        'contract_version': 1, 'recipe_id': recipe['recipe_id'],
+        'recipe_path': str(recipe_path), 'recipe_revision': revision,
+        'forge_revision': '5' * 40, 'target_namespace': config['namespace'], 'source_files': inventory,
+        'source_bundle_sha256': hashlib.sha256(artifacts[test_dir + '/src/source-bundle.yaml'].encode()).hexdigest(),
+        'submitted_bundle_sha256': hashlib.sha256(artifacts[test_dir + '/src/submitted-bundle.yaml'].encode()).hexdigest()})
+    primary = next(doc for doc in submitted if doc.get('kind') in ('Deployment', 'LeaderWorkerSet', 'LLMInferenceService'))
+    suffix = {'Deployment': '-deployment', 'LeaderWorkerSet': '-lws', 'LLMInferenceService': ''}[primary['kind']]
+    existing = [key for key in artifacts if key.startswith(test_dir + '/src/') and
+                key.rsplit('/', 1)[-1] not in BUNDLE_FILES]
+    key = existing[0] if len(existing) == 1 else test_dir + '/src/server' + suffix + '.yaml'
+    artifacts[key] = yaml.safe_dump(primary)
 
 
 @pytest.mark.parametrize('model_revision', ['main', 'v1.2.0', 'release/model-v2', 'b' * 40, 'c' * 64])
@@ -254,6 +318,8 @@ def variant_intake(intake):
     repo, path, _, client, parent, values = intake
     recipe = yaml.safe_load(path.read_text())
     recipe['serving'].update(model='example/base-FP8', served_model_name='request-alias')
+    manifest = path.parent / 'manifests/vllm-0.24.0/deployment.yaml'
+    manifest.write_text(manifest.read_text().replace('google/gemma-4-26B-A4B-it', 'example/base-FP8'))
     path.write_text(yaml.safe_dump(recipe, sort_keys=False))
     (repo / 'models/test/model.yaml').write_text(yaml.safe_dump({
         'huggingface_id': 'example/base', 'quantizations': [
@@ -265,6 +331,11 @@ def variant_intake(intake):
     revision = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], check=True,
                               capture_output=True, text=True).stdout.strip()
     next(tag for tag in parent['data']['tags'] if tag['key'] == 'playbooks.tested_revision')['value'] = revision
+    fjob_path = '01__test/000__ci_metadata/fournos_fjob.yaml'
+    fjob = yaml.safe_load(client.artifacts[fjob_path])
+    fjob['spec']['env']['FORGE_FOREIGN_TESTING_PULL_PULL_SHA'] = revision
+    client.artifacts[fjob_path] = yaml.safe_dump(fjob)
+    capture_bundle(repo, client.artifacts, revision)
     return repo, path, revision, client, parent, values
 
 
@@ -280,9 +351,10 @@ def parent_intake(variant_intake, kpis):
         '01__test/000__ci_metadata/fournos_fjob.yaml': yaml.safe_dump({'spec': {'env': {
             'FORGE_FOREIGN_TESTING_PULL_PULL_SHA': revision, 'FORGE_FOREIGN_TESTING_PULL_NUMBER': '34',
             'PULL_PULL_SHA': '5' * 40}}}),
-        '01__test/001__inference_playbooks_test_dir/config.yaml': yaml.safe_dump({'inference_playbooks': {'recipe': 'test-recipe',
-            'manifest_path': 'models/test/recipes/test-recipe/manifests/vllm-0.24.0/deployment.yaml'}}),
-        source: yaml.safe_dump({'kind': 'Deployment', 'spec': {'template': {'spec': {'containers': [
+        '01__test/001__inference_playbooks_test_dir/config.yaml': yaml.safe_dump({'inference_playbooks': {'recipe': 'test/recipes/test-recipe',
+            'manifest_path': 'manifests/vllm-0.24.0/deployment.yaml'}}),
+        source: yaml.safe_dump({'apiVersion': 'apps/v1', 'metadata': {'name': 'server'},
+            'kind': 'Deployment', 'spec': {'template': {'spec': {'containers': [
             {'name': 'vllm', 'image': 'docker.io/vllm/vllm-openai:v0.24.0', 'args': ['example/base-FP8']}]}}}}),
         '01__test/run.log': ('   Command: /usr/bin/python3 /app/forge/projects/inference_playbooks/orchestration/ci.py test\n'
             '|       containerStatuses:\n|       - allocatedResources: {}\n|         containerID: cri-o://example\n'
@@ -297,7 +369,8 @@ def parent_intake(variant_intake, kpis):
             assert raw is True
             return artifacts[query['path'][0]].encode()
         assert query['path'] == ['01__test/001__inference_playbooks_test_dir/src']
-        return {'files': [{'path': source, 'is_dir': False}]}
+        return {'files': [{'path': key, 'is_dir': False} for key in artifacts
+                          if key.startswith('01__test/001__inference_playbooks_test_dir/src/')]}
 
     client.request = request
     client.kpis = lambda run_id: ('01__test/002__postprocessing/kpis/kpis.json', raw)
@@ -308,11 +381,11 @@ def parent_intake(variant_intake, kpis):
 
 def record_launch(repo, artifacts, source):
     """Commit the selected effective manifest as a producer would consume it."""
-    config = yaml.safe_load(artifacts['01__test/001__inference_playbooks_test_dir/config.yaml'])
-    manifest = repo / config['inference_playbooks']['manifest_path']
+    _, recipe_relative, manifest_relative = fixture_selection(artifacts)
+    manifest = repo / manifest_relative
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(artifacts[source])
-    recipe_path = manifest.parents[2] / 'recipe.yaml'
+    recipe_path = repo / recipe_relative
     recipe = yaml.safe_load(recipe_path.read_text())
     recipe['deployment']['manifests'] = [{'path': str(manifest.relative_to(recipe_path.parent)),
                                          'kind': yaml.safe_load(artifacts[source])['kind'], 'generated': True}]
@@ -324,7 +397,509 @@ def record_launch(repo, artifacts, source):
     fjob = yaml.safe_load(artifacts[fjob_path])
     fjob['spec']['env']['FORGE_FOREIGN_TESTING_PULL_PULL_SHA'] = revision
     artifacts[fjob_path] = yaml.safe_dump(fjob)
+    capture_bundle(repo, artifacts, revision)
     return revision
+
+
+def check_bundle(repo, artifacts, revision):
+    test_dir = '01__test/001__inference_playbooks_test_dir'
+    config, recipe_path, manifest = fixture_selection(artifacts)
+    recipe = yaml.safe_load((repo / recipe_path).read_text())
+    return validate_bundle(repo, str(manifest), revision, recipe['recipe_id'],
+        str(recipe_path), config['namespace'],
+        *(artifacts[test_dir + '/src/' + name].encode() for name in BUNDLE_FILES))
+
+
+def replace_bundle(artifacts, name, documents):
+    """Keep hashes consistent so mutation tests exercise fidelity, not just hashes."""
+    prefix = '01__test/001__inference_playbooks_test_dir/src/'
+    artifacts[prefix + name] = yaml.safe_dump_all(documents)
+    metadata = yaml.safe_load(artifacts[prefix + 'bundle-metadata.yaml'])
+    metadata[name.removesuffix('.yaml').replace('-', '_') + '_sha256'] = hashlib.sha256(
+        artifacts[prefix + name].encode()).hexdigest()
+    artifacts[prefix + 'bundle-metadata.yaml'] = yaml.safe_dump(metadata)
+
+
+@pytest.mark.parametrize('tagged', [False, True])
+@pytest.mark.parametrize('missing', BUNDLE_FILES)
+def test_new_parent_import_requires_complete_bundle_even_with_all_tags(parent_intake, tagged, missing):
+    repo, path, revision, client, parent, artifacts, _ = parent_intake
+    if tagged:
+        parent['data']['tags'] = [{'key': key, 'value': value} for key, value in
+                                  execution_values(client, 'd' * 32, repo, revision, 34).items()]
+    del artifacts['01__test/001__inference_playbooks_test_dir/src/' + missing]
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='required Forge bundle artifact is missing'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('require_parent', [False, True])
+@pytest.mark.parametrize('missing', BUNDLE_FILES)
+def test_tagged_child_layout_cannot_bypass_bundle_proof(intake, require_parent, missing):
+    repo, path, revision, client, _, _ = intake
+    del client.artifacts['01__test/001__inference_playbooks_test_dir/src/' + missing]
+    with pytest.raises(ValueError, match='required Forge bundle artifact is missing'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=require_parent)
+    assert not (path.parent / 'results').exists()
+
+
+def set_manifest_override(artifacts, value):
+    key = '01__test/001__inference_playbooks_test_dir/config.yaml'
+    config = yaml.safe_load(artifacts[key])
+    if value == 'absent':
+        config['inference_playbooks'].pop('manifest_path', None)
+    else:
+        config['inference_playbooks']['manifest_path'] = value
+    artifacts[key] = yaml.safe_dump(config)
+
+
+@pytest.mark.parametrize('override', ['absent', None, '', ' ', False, 0, [], {},
+    '../private-do-not-echo.yaml',
+    'models/test/recipes/test-recipe/manifests/vllm-0.24.0/../private-do-not-echo.yaml',
+    'models/test/recipes/test-recipe/manifests/vllm-0.24.0/not-present.yaml',
+    'models/foreign/recipes/foreign/manifests/vllm-0.24.0/deployment.yaml',
+    '/manifests/vllm-0.24.0/deployment.yaml', './manifests/vllm-0.24.0/deployment.yaml',
+    'manifests/vllm-0.24.0/../private-do-not-echo.yaml',
+    'manifests/vllm-0.24.0/not-present.yaml', 'manifests/rhoai-3.5/deployment.yaml',
+    'raw-manifest/deployment.yaml'])
+@pytest.mark.parametrize('tagged', [False, True])
+def test_new_import_requires_explicit_valid_manifest_path_even_with_complete_bundle(parent_intake, override, tagged):
+    repo, path, revision, client, parent, artifacts, _ = parent_intake
+    if tagged:
+        parent['data']['tags'] = [{'key': key, 'value': value} for key, value in
+                                  execution_values(client, 'd' * 32, repo, revision, 34).items()]
+    set_manifest_override(artifacts, override)
+    before = path.read_bytes()
+    with pytest.raises(ValueError) as error:
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert any(word in str(error.value) for word in ('manifest', 'platform'))
+    assert 'private-do-not-echo' not in str(error.value)
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+def test_direct_locator_uses_authoritative_recipe_id_without_scanning(parent_intake, monkeypatch):
+    repo, path, _, client, _, artifacts, raw = parent_intake
+    recipe = yaml.safe_load(path.read_text())
+    recipe['recipe_id'] = 'authoritative-kpi-id'
+    path.write_text(yaml.safe_dump(recipe))
+    source = next(key for key in artifacts if key.endswith('-deployment.yaml'))
+    revision = record_launch(repo, artifacts, source)
+    kpis = json.loads(raw)
+    for test in kpis['tests']:
+        test['labels']['recipe_id'] = recipe['recipe_id']
+    client.kpis = lambda _: ('01__test/002__postprocessing/kpis/kpis.json', json.dumps(kpis).encode())
+    unrelated = repo / 'models/other/recipes/broken/recipe.yaml'
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text('invalid: [do-not-read\n')
+    glob = Path.glob
+    def selected_glob(directory, pattern):
+        assert directory == path.parent / 'manifests/vllm-0.24.0'
+        assert pattern == '*'
+        return glob(directory, pattern)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, 'glob', selected_glob)
+        scoped.setattr(Path, 'rglob', lambda *args, **kwargs: pytest.fail('recipe ID scans are forbidden'))
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    metadata = yaml.safe_load(artifacts['01__test/001__inference_playbooks_test_dir/src/bundle-metadata.yaml'])
+    assert metadata['recipe_id'] == 'authoritative-kpi-id'
+    assert metadata['recipe_path'] == 'models/test/recipes/test-recipe/recipe.yaml'
+    assert metadata['source_files'][0]['path'].startswith('models/test/recipes/test-recipe/manifests/')
+    for reference in yaml.safe_load(path.read_text())['benchmark_runs']:
+        run = yaml.safe_load((path.parent / reference).read_text())
+        assert run['recipe_id'] == 'authoritative-kpi-id'
+        assert all(test['recipe_id'] == 'authoritative-kpi-id' for test in run['workload']['tests'])
+
+
+@pytest.mark.parametrize('selector', ['absent', None, '', ' ', False, 0, [], {}, 'test-recipe',
+    'test/test-recipe', '/test/recipes/test-recipe', '../recipes/test-recipe',
+    'test/recipes/../test-recipe', 'test//recipes/test-recipe', 'test/recipes//test-recipe',
+    'test/recipes/./test-recipe', 'test/recipes/test-recipe/', 'models/test/recipes/test-recipe',
+    'test/not-recipes/test-recipe', 'test/recipes/test-recipe/extra',
+    'test/recipes/not-present', 'other/recipes/test-recipe', 'Test/recipes/test-recipe'])
+@pytest.mark.parametrize('tagged', [False, True])
+def test_recipe_selector_must_be_an_explicit_direct_locator(parent_intake, selector, tagged):
+    repo, path, revision, client, parent, artifacts, _ = parent_intake
+    if tagged:
+        parent['data']['tags'] = [{'key': key, 'value': value} for key, value in
+                                  execution_values(client, 'd' * 32, repo, revision, 34).items()]
+    key = '01__test/001__inference_playbooks_test_dir/config.yaml'
+    config = yaml.safe_load(artifacts[key])
+    if selector == 'absent':
+        config['inference_playbooks'].pop('recipe')
+    else:
+        config['inference_playbooks']['recipe'] = selector
+    artifacts[key] = yaml.safe_dump(config)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='recipe selector'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('location', ['recipe-folder', 'recipe-file', 'manifest-folder', 'manifest-file'])
+def test_direct_selection_rejects_symlink_aliases_before_reading_them(parent_intake, location):
+    repo, path, revision, client, _, artifacts, _ = parent_intake
+    if location == 'recipe-folder':
+        alias = path.parent.parent / 'alias'
+        alias.symlink_to(path.parent, target_is_directory=True)
+        key = '01__test/001__inference_playbooks_test_dir/config.yaml'
+        config = yaml.safe_load(artifacts[key])
+        config['inference_playbooks']['recipe'] = 'test/recipes/alias'
+        artifacts[key] = yaml.safe_dump(config)
+    else:
+        selected = {'recipe-file': path, 'manifest-folder': path.parent / 'manifests/vllm-0.24.0',
+                    'manifest-file': path.parent / 'manifests/vllm-0.24.0/deployment.yaml'}[location]
+        saved = repo / 'outside-selected-recipe'
+        selected.rename(saved)
+        selected.symlink_to(saved, target_is_directory=location == 'manifest-folder')
+    with pytest.raises(ValueError, match='symlink'):
+        import_parent(client, repo, 'd' * 32, revision, 34)
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('failure', ['metadata-id-is-locator', 'metadata-recipe-path', 'inventory-path',
+                                    'tag-recipe-path', 'tag-platform'])
+def test_locator_does_not_authorize_foreign_metadata_or_tag_selection(parent_intake, failure):
+    repo, path, revision, client, parent, artifacts, _ = parent_intake
+    key = '01__test/001__inference_playbooks_test_dir/src/bundle-metadata.yaml'
+    metadata = yaml.safe_load(artifacts[key])
+    if failure == 'metadata-id-is-locator':
+        metadata['recipe_id'] = 'test/recipes/test-recipe'
+    elif failure == 'metadata-recipe-path':
+        metadata['recipe_path'] = 'models/foreign/recipes/foreign/recipe.yaml'
+    elif failure == 'inventory-path':
+        metadata['source_files'][0]['path'] = metadata['source_files'][0]['path'].replace('models/test/', 'models/foreign/')
+    else:
+        recorded = execution_values(client, 'd' * 32, repo, revision, 34)
+        recorded['playbooks.recipe_path' if failure == 'tag-recipe-path' else 'playbooks.platform_stack'] = (
+            'models/foreign/recipes/foreign/recipe.yaml' if failure == 'tag-recipe-path' else 'rhoai')
+        parent['data']['tags'] = [{'key': key, 'value': value} for key, value in recorded.items()]
+    artifacts[key] = yaml.safe_dump(metadata)
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('failure', ['file-not-found', 'http-404', 'http-403'])
+def test_missing_bundle_artifact_errors_are_safe_and_do_not_hide_permission_failures(parent_intake, failure):
+    from urllib.error import HTTPError
+    repo, path, revision, client, _, _, _ = parent_intake
+    request = client.request
+    code = 403 if failure == 'http-403' else 404
+    error = (FileNotFoundError('private-do-not-echo') if failure == 'file-not-found' else
+             HTTPError('https://private-do-not-echo.example/', code, 'Forbidden' if code == 403 else 'Not Found',
+                       None, None))
+    def unavailable(endpoint, body=None, raw=False):
+        if endpoint.startswith('/get-artifact?') and parse_qs(urlsplit(endpoint).query)['path'][0].endswith('/bundle-metadata.yaml'):
+            raise error
+        return request(endpoint, body, raw)
+    client.request = unavailable
+    with pytest.raises(HTTPError if code == 403 else ValueError) as caught:
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    if code == 403:
+        assert caught.value is error
+    else:
+        assert str(caught.value) == 'required Forge bundle artifact is missing: bundle-metadata.yaml'
+        assert caught.value.__suppress_context__
+    assert 'private-do-not-echo' not in str(caught.value)
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('failure', ['rename', 'uid', 'HOME', 'USER', 'selector', 'labels', 'alias',
+                                    'command', 'args', 'image', 'resources', 'mount', 'probe',
+                                    'api', 'metadata', 'nested-namespace', 'scalar-type'])
+def test_checked_submission_rejects_all_non_namespace_mutation(pvc_parent_intake, failure):
+    repo, path, revision, client, parent, artifacts, _, source = pvc_parent_intake
+    # This deliberately supplies complete tags: tags must not authorize drift.
+    parent['data']['tags'] = [{'key': key, 'value': value} for key, value in
+                              execution_values(client, 'd' * 32, repo, revision, 34).items()]
+    doc = yaml.safe_load(artifacts[source])
+    pod = doc['spec']['template']['spec']
+    server = pod['containers'][0]
+    if failure == 'rename':
+        doc['metadata']['name'] += '-abc01234'
+    elif failure == 'uid':
+        del pod['securityContext']['runAsUser']
+    elif failure in ('HOME', 'USER'):
+        server['env'] = [{'name': failure, 'value': '/tmp' if failure == 'HOME' else 'nobody'}]
+    elif failure == 'selector':
+        doc['spec']['selector']['matchLabels']['forge.openshift.io/run'] = 'server'
+    elif failure == 'labels':
+        doc['spec']['template']['metadata']['labels']['forge.openshift.io/run'] = 'server'
+    elif failure == 'alias':
+        server['args'][1] = '--served-model-name=other-alias'
+    elif failure == 'command':
+        server['command'] = ['vllm', 'serve']
+    elif failure == 'args':
+        server['args'].append('--max-model-len=1024')
+    elif failure == 'image':
+        server['image'] = 'docker.io/vllm/vllm-openai:other'
+    elif failure == 'resources':
+        server['resources'] = {'limits': {'nvidia.com/gpu': 2}}
+    elif failure == 'mount':
+        server['volumeMounts'][0]['mountPath'] = '/other'
+    elif failure == 'probe':
+        server['readinessProbe'] = {'tcpSocket': {'port': 8000}}
+    elif failure == 'api':
+        doc['apiVersion'] = 'apps/v1beta1'
+    elif failure == 'metadata':
+        doc['metadata']['annotations'] = {'changed': 'true'}
+    elif failure == 'nested-namespace':
+        doc['spec']['template']['metadata']['namespace'] = 'test-namespace'
+    else:
+        pod['securityContext']['runAsNonRoot'] = 1  # True == 1 must not pass.
+    replace_bundle(artifacts, 'submitted-bundle.yaml', [doc])
+    artifacts[source] = yaml.safe_dump(doc)
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+    assert path.read_bytes() == before
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('source_namespace', ['absent', 'test-namespace', None, '', 'other'])
+def test_namespace_is_the_only_placement_exception(parent_intake, source_namespace):
+    repo, _, revision, _, _, artifacts, _ = parent_intake
+    source = next(key for key in artifacts if key.endswith('-deployment.yaml'))
+    doc = yaml.safe_load(artifacts[source])
+    doc['metadata'].pop('namespace')
+    if source_namespace != 'absent':
+        doc['metadata']['namespace'] = source_namespace
+    artifacts[source] = yaml.safe_dump(doc)
+    if source_namespace != 'absent':
+        revision = record_launch(repo, artifacts, source)
+    if source_namespace in ('absent', 'test-namespace'):
+        result = check_bundle(repo, artifacts, revision)
+        assert result['metadata']['namespace'] == 'test-namespace'
+        assert 'namespace' not in result['spec']['template'].get('metadata', {})
+    else:
+        with pytest.raises(ValueError, match='explicit namespace'):
+            check_bundle(repo, artifacts, revision)
+
+
+@pytest.mark.parametrize('namespace', ['absent', None, '', 'other'])
+def test_submitted_namespace_must_be_explicit_and_match_target(parent_intake, namespace):
+    repo, _, revision, _, _, artifacts, _ = parent_intake
+    doc = yaml.safe_load(artifacts['01__test/001__inference_playbooks_test_dir/src/submitted-bundle.yaml'])
+    if namespace == 'absent':
+        doc['metadata'].pop('namespace')
+    else:
+        doc['metadata']['namespace'] = namespace
+    replace_bundle(artifacts, 'submitted-bundle.yaml', [doc])
+    with pytest.raises(ValueError, match='namespace'):
+        check_bundle(repo, artifacts, revision)
+
+
+@pytest.mark.parametrize('failure', ['version', 'bool-version', 'recipe', 'path', 'recipe-sha', 'forge-sha',
+                                    'namespace', 'source-hash', 'submitted-hash', 'file-hash', 'count',
+                                    'bool-count', 'file-path', 'missing-file', 'duplicate-file', 'extra-field'])
+def test_bundle_metadata_inventory_is_independently_bound_to_git(parent_intake, failure):
+    repo, _, revision, _, _, artifacts, _ = parent_intake
+    key = '01__test/001__inference_playbooks_test_dir/src/bundle-metadata.yaml'
+    metadata = yaml.safe_load(artifacts[key])
+    if failure in ('version', 'bool-version'):
+        metadata['contract_version'] = 2 if failure == 'version' else True
+    elif failure == 'recipe':
+        metadata['recipe_id'] = 'other'
+    elif failure == 'path':
+        metadata['recipe_path'] = 'models/other/recipes/test-recipe/recipe.yaml'
+    elif failure == 'recipe-sha':
+        metadata['recipe_revision'] = 'f' * 40
+    elif failure == 'forge-sha':
+        metadata['forge_revision'] = 'main'
+    elif failure == 'namespace':
+        metadata['target_namespace'] = 'other'
+    elif failure in ('source-hash', 'submitted-hash'):
+        metadata[failure.partition('-')[0] + '_bundle_sha256'] = '0' * 64
+    elif failure == 'file-hash':
+        metadata['source_files'][0]['sha256'] = '0' * 64
+    elif failure in ('count', 'bool-count'):
+        metadata['source_files'][0]['document_count'] = 2 if failure == 'count' else True
+    elif failure == 'file-path':
+        metadata['source_files'][0]['path'] = '../deployment.yaml'
+    elif failure == 'missing-file':
+        metadata['source_files'] = []
+    elif failure == 'duplicate-file':
+        metadata['source_files'].append(copy.deepcopy(metadata['source_files'][0]))
+    else:
+        metadata['extra'] = 'not-in-contract'
+    artifacts[key] = yaml.safe_dump(metadata)
+    with pytest.raises(ValueError):
+        check_bundle(repo, artifacts, revision)
+
+
+@pytest.mark.parametrize('failure', ['changed-source', 'missing-submitted', 'extra-submitted', 'duplicate-submitted'])
+def test_bundle_object_set_is_not_a_primary_snapshot(parent_intake, failure):
+    repo, _, revision, _, _, artifacts, _ = parent_intake
+    prefix = '01__test/001__inference_playbooks_test_dir/src/'
+    documents = list(yaml.safe_load_all(artifacts[prefix + 'submitted-bundle.yaml']))
+    name = 'submitted-bundle.yaml'
+    if failure == 'changed-source':
+        name = 'source-bundle.yaml'
+        documents = list(yaml.safe_load_all(artifacts[prefix + name]))
+        documents[0]['metadata']['name'] = 'substitute'
+    elif failure == 'missing-submitted':
+        documents = []
+    else:
+        extra = copy.deepcopy(documents[0])
+        if failure == 'extra-submitted':
+            extra['metadata']['name'] = 'extra'
+        documents.append(extra)
+    replace_bundle(artifacts, name, documents)
+    with pytest.raises(ValueError):
+        check_bundle(repo, artifacts, revision)
+
+
+@pytest.mark.parametrize('kind', ['Service', 'Secret', 'List', 'PodList', 'Namespace', 'ConfigMap'])
+@pytest.mark.parametrize('split_file', [False, True])
+def test_all_source_documents_and_files_are_checked_without_companion_filtering(parent_intake, kind, split_file):
+    repo, path, _, _, _, artifacts, _ = parent_intake
+    manifest = path.parent / 'manifests/vllm-0.24.0/deployment.yaml'
+    primary = yaml.safe_load(manifest.read_text())
+    extra = {'apiVersion': 'v1', 'kind': kind, 'metadata': {'name': 'server'}}
+    if kind in ('List', 'PodList'):
+        extra['items'] = [{'apiVersion': 'v1', 'kind': 'Service', 'metadata': {'name': 'hidden'}}]
+    if split_file:
+        (manifest.parent / 'companion.yml').write_text(yaml.safe_dump(extra))
+    else:
+        manifest.write_text(yaml.safe_dump_all([primary, extra]))
+    commit_evidence(repo)
+    revision = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    capture_bundle(repo, artifacts, revision)
+    with pytest.raises(ValueError, match='unsupported Forge bundle resource kind'):
+        check_bundle(repo, artifacts, revision)
+    # Even a rehashed primary-only capture cannot hide the additional Git input.
+    replace_bundle(artifacts, 'source-bundle.yaml', [primary])
+    with pytest.raises(ValueError, match='source bundle differs'):
+        check_bundle(repo, artifacts, revision)
+
+
+@pytest.mark.parametrize('change', ['add', 'delete', 'bytes', 'symlink'])
+def test_current_customer_artifact_files_must_still_match_tested_git(parent_intake, change):
+    repo, path, revision, _, _, artifacts, _ = parent_intake
+    manifest = path.parent / 'manifests/vllm-0.24.0/deployment.yaml'
+    if change == 'add':
+        (manifest.parent / 'extra.yml').write_bytes(manifest.read_bytes())
+    elif change == 'delete':
+        manifest.unlink()
+    elif change == 'bytes':
+        manifest.write_bytes(manifest.read_bytes() + b'# changed customer bytes\n')
+    else:
+        target = repo / 'same-bytes.yaml'
+        target.write_bytes(manifest.read_bytes())
+        manifest.unlink()
+        manifest.symlink_to(target)
+    with pytest.raises(ValueError):
+        check_bundle(repo, artifacts, revision)
+
+
+@pytest.mark.parametrize('name', BUNDLE_FILES)
+def test_bundle_yaml_errors_do_not_expose_private_parser_context(parent_intake, name):
+    repo, _, revision, _, _, artifacts, _ = parent_intake
+    prefix = '01__test/001__inference_playbooks_test_dir/src/'
+    artifacts[prefix + name] = 'spec: {}\nspec: {credential: do-not-echo}\n'
+    if name != 'bundle-metadata.yaml':
+        metadata = yaml.safe_load(artifacts[prefix + 'bundle-metadata.yaml'])
+        metadata[name.removesuffix('.yaml').replace('-', '_') + '_sha256'] = hashlib.sha256(
+            artifacts[prefix + name].encode()).hexdigest()
+        artifacts[prefix + 'bundle-metadata.yaml'] = yaml.safe_dump(metadata)
+    with pytest.raises(ValueError) as error:
+        check_bundle(repo, artifacts, revision)
+    assert 'do-not-echo' not in str(error.value)
+
+
+def test_bundle_selection_matches_published_yml_files_not_other_platforms_or_nested_files(parent_intake):
+    from catalog import artifacts_for
+    repo, path, _, _, _, artifacts, _ = parent_intake
+    manifest = path.parent / 'manifests/vllm-0.24.0/deployment.yaml'
+    selected = manifest.with_suffix('.yml')
+    manifest.rename(selected)
+    for folder in (selected.parent / 'nested', selected.parent.parent / 'rhoai-3.5'):
+        folder.mkdir()
+        (folder / 'not-selected.yaml').write_text('kind: Service\n')
+    config_path = '01__test/001__inference_playbooks_test_dir/config.yaml'
+    config = yaml.safe_load(artifacts[config_path])
+    config['inference_playbooks']['manifest_path'] = str(selected.relative_to(path.parent))
+    artifacts[config_path] = yaml.safe_dump(config)
+    recipe = yaml.safe_load(path.read_text())
+    recipe['deployment']['manifests'][0]['path'] = str(selected.relative_to(path.parent))
+    path.write_text(yaml.safe_dump(recipe))
+    commit_evidence(repo)
+    revision = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    capture_bundle(repo, artifacts, revision)
+    published = artifacts_for(repo, path.parent, {'stack': 'vllm', 'version': '0.24.0'},
+                              {'source_sha': revision, 'dirty': False})
+    metadata = yaml.safe_load(artifacts['01__test/001__inference_playbooks_test_dir/src/bundle-metadata.yaml'])
+    assert [(item['source']['path'], item['sha256']) for item in published] == [
+        (item['path'], item['sha256']) for item in metadata['source_files']]
+    assert check_bundle(repo, artifacts, revision)['kind'] == 'Deployment'
+
+
+def test_bundle_mapping_order_and_serialization_are_not_mutations(parent_intake):
+    repo, _, revision, _, _, artifacts, _ = parent_intake
+    prefix = '01__test/001__inference_playbooks_test_dir/src/'
+    for name in ('source-bundle.yaml', 'submitted-bundle.yaml'):
+        doc = yaml.safe_load(artifacts[prefix + name])
+        doc = dict(reversed(list(doc.items())))
+        artifacts[prefix + name] = '# serialization-only\n' + yaml.safe_dump(doc, sort_keys=False)
+        metadata = yaml.safe_load(artifacts[prefix + 'bundle-metadata.yaml'])
+        metadata[name.removesuffix('.yaml').replace('-', '_') + '_sha256'] = hashlib.sha256(
+            artifacts[prefix + name].encode()).hexdigest()
+        artifacts[prefix + 'bundle-metadata.yaml'] = yaml.safe_dump(metadata)
+    assert check_bundle(repo, artifacts, revision)['metadata']['name'] == 'server'
+
+
+@pytest.mark.parametrize('failure', ['blocked', 'v3', 'namespace'])
+def test_bundle_execution_context_cannot_select_unpublished_or_mismatched_inputs(parent_intake, failure):
+    repo, path, _, client, _, artifacts, _ = parent_intake
+    source = next(key for key in artifacts if key.endswith('-deployment.yaml'))
+    recipe = yaml.safe_load(path.read_text())
+    if failure == 'blocked':
+        recipe['platforms'][0]['blocked'] = True
+    elif failure == 'v3':
+        recipe['schema_version'] = 3
+    path.write_text(yaml.safe_dump(recipe))
+    # Ensure even the namespace case has a real fixture commit to capture.
+    artifacts[source] += '# context fixture\n'
+    revision = record_launch(repo, artifacts, source)
+    if failure == 'namespace':
+        key = '01__test/001__inference_playbooks_test_dir/config.yaml'
+        config = yaml.safe_load(artifacts[key])
+        config['inference_playbooks']['namespace'] = 'other-target'
+        artifacts[key] = yaml.safe_dump(config)
+    with pytest.raises(ValueError):
+        import_parent(client, repo, 'd' * 32, revision, 34)
+    assert not (path.parent / 'results').exists()
+
+
+@pytest.mark.parametrize('cyclic', [False, True])
+def test_primary_artifact_discovery_is_paginated_and_rejects_token_cycles(parent_intake, cyclic):
+    repo, _, revision, client, _, artifacts, _ = parent_intake
+    request = client.request
+    pages = []
+    def paginated(endpoint, body=None, raw=False):
+        if endpoint.startswith('/get-artifact?'):
+            return request(endpoint, body, raw)
+        query = parse_qs(urlsplit(endpoint).query)
+        pages.append(query.get('page_token', [''])[0])
+        if cyclic or not pages[-1]:
+            return {'files': [], 'next_page_token': 'next'}
+        return {'files': [{'path': key, 'is_dir': False} for key in artifacts
+                          if key.startswith('01__test/001__inference_playbooks_test_dir/src/')]}
+    client.request = paginated
+    if cyclic:
+        with pytest.raises(ValueError, match='cyclic'):
+            execution_values(client, 'd' * 32, repo, revision, 34)
+    else:
+        assert execution_values(client, 'd' * 32, repo, revision, 34)['playbooks.tested_revision'] == revision
+    assert pages == ['', 'next']
 
 
 def test_tagless_parent_two_harnesses_replay_and_receipt(parent_intake, monkeypatch):
@@ -436,17 +1011,8 @@ def pvc_parent_intake(parent_intake):
     return repo, path, revision, client, parent, artifacts, raw, source
 
 
-def test_pvc_launch_uses_tested_manifest_not_hf_id(pvc_parent_intake):
+def test_pvc_launch_uses_unchanged_tested_manifest_not_hf_id(pvc_parent_intake):
     repo, path, revision, client, _, artifacts, _, source = pvc_parent_intake
-    deployment = yaml.safe_load(artifacts[source])
-    deployment['metadata'].update(name='server-abc01234', namespace='test-namespace')
-    run_label = {'forge.openshift.io/run': 'server-abc01234'}
-    deployment['spec']['selector']['matchLabels'].update(run_label)
-    deployment['spec']['template']['metadata']['labels'].update(run_label)
-    pod = deployment['spec']['template']['spec']
-    del pod['securityContext']['runAsUser']
-    pod['containers'][0]['env'] = [{'name': 'HOME', 'value': '/tmp'}, {'name': 'USER', 'value': 'nobody'}]
-    artifacts[source] = yaml.safe_dump(deployment)
     import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
     assert len(yaml.safe_load(path.read_text())['benchmark_runs']) == 2
 
@@ -556,7 +1122,7 @@ def distributed_intake(parent_intake, request):
     test_dir = '01__test/001__inference_playbooks_test_dir'
     config_path = test_dir + '/config.yaml'
     config = yaml.safe_load(artifacts[config_path])
-    config['inference_playbooks']['manifest_path'] = f'models/test/recipes/test-recipe/manifests/{stack}-{version}/serving.yaml'
+    config['inference_playbooks']['manifest_path'] = f'manifests/{stack}-{version}/serving.yaml'
     artifacts[config_path] = yaml.safe_dump(config)
     del artifacts[test_dir + '/src/server-deployment.yaml']
     # Distributed captures need no pod status in the parent log, and no PVC/HF
@@ -568,7 +1134,8 @@ def distributed_intake(parent_intake, request):
             'vllm serve example/base-FP8 \\\n  --served-model-name request-alias --nnodes 2 --node-rank 0']}
         worker = {'name': 'vllm-worker', 'image': image, 'command': ['sh', '-c'], 'args': [
             'vllm serve example/base-FP8 \\\n  --served-model-name request-alias --nnodes 2 --node-rank $(LWS_WORKER_INDEX) --headless']}
-        manifest = {'kind': kind, 'spec': {'leaderWorkerTemplate': {
+        manifest = {'apiVersion': 'leaderworkerset.x-k8s.io/v1', 'metadata': {'name': 'server'},
+            'kind': kind, 'spec': {'leaderWorkerTemplate': {
             'leaderTemplate': {'spec': {'containers': [leader]}}, 'workerTemplate': {'spec': {'containers': [worker]}}}}}
         source = test_dir + '/src/server-12345678-lws.yaml'
         capture = test_dir + '/003__capture_lws_state'
@@ -576,7 +1143,8 @@ def distributed_intake(parent_intake, request):
     else:
         image = 'registry.redhat.io/rhaiis/vllm-cuda-rhel9:3.5'
         override = {'name': 'main', 'env': [{'name': 'VLLM_ADDITIONAL_ARGS', 'value': '--kv-cache-dtype fp8'}]}
-        manifest = {'kind': kind, 'spec': {'model': {'uri': 'pvc://existing-weights', 'name': 'request-alias'},
+        manifest = {'apiVersion': 'serving.kserve.io/v1alpha2', 'metadata': {'name': 'server'},
+            'kind': kind, 'spec': {'model': {'uri': 'pvc://existing-weights', 'name': 'request-alias'},
             'template': {'containers': [copy.deepcopy(override)]}, 'worker': {'containers': [copy.deepcopy(override)]}}}
         leader = {**copy.deepcopy(override), 'image': image, 'command': ['/bin/bash', '-c',
             'eval "exec vllm serve /weights/checkpoint --served-model-name request-alias ${VLLM_ADDITIONAL_ARGS} $@"', '--'],
@@ -610,10 +1178,14 @@ def distributed_intake(parent_intake, request):
             return artifacts[query['path'][0]].encode()
         directory = query['path'][0]
         assert directory in (test_dir, test_dir + '/src')
-        return {'files': [{'path': source, 'is_dir': False}]} if directory.endswith('/src') else {
+        return {'files': [{'path': key, 'is_dir': False} for key in artifacts
+                          if key.startswith(test_dir + '/src/')]} if directory.endswith('/src') else {
             'files': [{'path': capture, 'is_dir': True}]}
 
     client.request = call
+    # This fixture replaces the original primary; leaving it in the same
+    # platform folder would correctly be a different two-resource customer bundle.
+    (path.parent / 'manifests/vllm-0.24.0/deployment.yaml').unlink()
     revision = record_launch(repo, artifacts, source)
     return repo, path, revision, client, parent, artifacts, raw, kind, source, pod_path
 
@@ -731,7 +1303,7 @@ def test_llmisvc_unsupported_model_uri(distributed_intake):
     manifest = yaml.safe_load(artifacts[source])
     manifest['spec']['model']['uri'] = 's3://unknown/weights'
     artifacts[source] = yaml.safe_dump(manifest)
-    with pytest.raises(ValueError, match='configuration differs from tested manifest'):
+    with pytest.raises(ValueError, match='captured primary differs'):
         import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
 
 
@@ -976,6 +1548,11 @@ def legacy_presentation_intake(intake):
     revision = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], check=True,
                               capture_output=True, text=True).stdout.strip()
     next(tag for tag in parent['data']['tags'] if tag['key'] == 'playbooks.tested_revision')['value'] = revision
+    fjob_path = '01__test/000__ci_metadata/fournos_fjob.yaml'
+    fjob = yaml.safe_load(client.artifacts[fjob_path])
+    fjob['spec']['env']['FORGE_FOREIGN_TESTING_PULL_PULL_SHA'] = revision
+    client.artifacts[fjob_path] = yaml.safe_dump(fjob)
+    capture_bundle(repo, client.artifacts, revision)
     model_path.write_text('{}\n')
     commit_evidence(repo)
     return repo, path, revision, client, parent, values
@@ -1499,7 +2076,7 @@ def test_latest_only_thousand_reports_scale_and_privacy(intake, monkeypatch, cap
     for receipt_path in path.parent.glob('results/*/forge-import.json'):
         receipt_text = receipt_path.read_text()
         assert 'private-user' not in receipt_text and 'private-password' not in receipt_text
-    assert sum('ls-tree' in command for command in git_calls) == 1
+    assert sum('ls-tree' in command for command in git_calls) == (1 if indexed else 2)
     assert sum('status' in command for command in git_calls) == 1
     if indexed:
         assert requests == []

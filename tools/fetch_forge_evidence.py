@@ -13,6 +13,7 @@ import ssl
 import subprocess
 import sys
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener, HTTPSHandler
 
@@ -20,7 +21,7 @@ import yaml
 
 from normalize_kpis import normalize
 from forge_model_identity import validate_model_identity
-from forge_serving_contract import model_mount_matches, validate_launch
+from forge_serving_contract import BUNDLE_FILES, model_mount_matches, same_document, validate_bundle
 from recipe_evidence import load_unique_yaml
 
 
@@ -292,8 +293,8 @@ def distributed_serving_values(manifest, pods, checkpoint):
     return revisions.pop(), digests.pop()
 
 
-def execution_values(client, parent_id, repo, expected_revision, pr_number):
-    """Read existing Forge execution metadata into the existing run contract."""
+def execution_bundle(client, parent_id, repo, expected_revision, pr_number):
+    """Strict v1 proof is mandatory for every prospective import, with or without tags."""
     def artifact(path):
         return client.request('/get-artifact?' + urlencode({'run_id': parent_id, 'path': path}), raw=True).decode()
 
@@ -312,29 +313,80 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number):
         raise ValueError('stale or mismatched tested recipe revision')
     if str(env.get('FORGE_FOREIGN_TESTING_PULL_NUMBER')) != str(pr_number):
         raise ValueError('PR attribution mismatch')
-    config = document('01__test/001__inference_playbooks_test_dir/config.yaml')['inference_playbooks']
-    manifest_path = config['manifest_path']
-    match = re.fullmatch(r'(models/[^/]+/recipes/[^/]+)/manifests/[^/]+/[^/]+\.yaml', manifest_path)
-    if not match:
-        raise ValueError('execution manifest path must identify a canonical recipe')
-    relative = match[1] + '/recipe.yaml'
-    path, recipe = tested_inputs(repo, relative, expected_revision)
-    if config['recipe'] != recipe['recipe_id']:
-        raise ValueError('execution recipe identity mismatch')
+    configuration = document('01__test/001__inference_playbooks_test_dir/config.yaml')
+    config = configuration.get('inference_playbooks') if isinstance(configuration, dict) else None
+    locator = config.get('recipe') if isinstance(config, dict) else None
+    if not isinstance(locator, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]*/recipes/[a-z0-9][a-z0-9._-]*', locator):
+        raise ValueError('execution recipe selector must be an explicit canonical <model>/recipes/<recipe-folder> locator')
+    recipe_dir = f'models/{locator}'
+    relative = recipe_dir + '/recipe.yaml'
+    manifest_path = config.get('manifest_path') if isinstance(config, dict) else None
+    if (not isinstance(manifest_path, str) or not manifest_path or
+            any(part in {'', '.', '..'} for part in manifest_path.split('/')) or
+            re.search(r'[\s\x00-\x1f\x7f]', manifest_path)):
+        raise ValueError('execution manifest path (inference_playbooks.manifest_path) must be an explicit nonempty canonical recipe-relative platform file')
+    if not re.fullmatch(r'manifests/[^/]+/[^/]+\.ya?ml', manifest_path):
+        raise ValueError('execution manifest path must be relative to the selected recipe folder under manifests/<platform>/')
+    manifest_path = recipe_dir + '/' + manifest_path
+    # Preserve lexical identity: resolving an alias first could bind a different
+    # recipe or platform. Only these selected paths are inspected, never an ID scan.
+    for selected in (relative, manifest_path):
+        component = repo
+        for part in selected.split('/'):
+            component = component / part
+            if component.is_symlink():
+                raise ValueError('selected recipe or manifest path must not traverse a symlink')
+    try:
+        path, recipe = tested_inputs(repo, relative, expected_revision)
+    except FileNotFoundError:
+        raise ValueError('execution recipe selector does not identify an available tested recipe') from None
+    if type(recipe.get('schema_version')) is not int or recipe['schema_version'] != 4:
+        raise ValueError('strict Forge bundle certification requires a v4 recipe')
     platforms = [p for p in recipe['platforms'] if manifest_path.startswith(
-        f'{match[1]}/manifests/{p["stack"]}-{p["version"]}/')]
+        f'{recipe_dir}/manifests/{p["stack"]}-{p["version"]}/')]
     if len(platforms) != 1:
         raise ValueError('execution platform is missing or ambiguous')
     platform = platforms[0]
+    if platform.get('blocked'):
+        raise ValueError('execution platform is blocked and has no published customer artifacts')
     declared_manifests = recipe.get('deployment', {}).get('manifests', [])
     if declared_manifests and manifest_path not in {
             str(path.parent.relative_to(repo) / item['path']) for item in declared_manifests}:
         raise ValueError('execution manifest is not declared by the tested recipe')
     profile = load_unique_yaml(checked_path(repo, recipe['hardware_profile']).read_text())
     source = '01__test/001__inference_playbooks_test_dir/src'
-    listing = client.request('/api/2.0/mlflow/artifacts/list?' + urlencode({'run_id': parent_id, 'path': source}))
-    paths = [item['path'] for item in listing.get('files', []) if not item.get('is_dir')
-             and re.fullmatch(re.escape(source) + r'/[^/]+\.yaml', item['path'])]
+    # Download the fixed contract artifacts directly; a primary snapshot alone
+    # cannot attest that source files or submitted documents were complete.
+    bundle = []
+    for name in BUNDLE_FILES:
+        try:
+            bundle.append(client.request('/get-artifact?' + urlencode(
+                {'run_id': parent_id, 'path': source + '/' + name}), raw=True))
+        except (KeyError, FileNotFoundError, HTTPError) as error:
+            if isinstance(error, HTTPError) and error.code != 404:
+                raise
+            raise ValueError('required Forge bundle artifact is missing: ' + name) from None
+    deployment = validate_bundle(repo, manifest_path, expected_revision, recipe['recipe_id'], relative,
+                                 config.get('namespace'), *bundle)
+    paths, token, seen, tokens = [], None, set(), set()
+    while True:
+        query = {'run_id': parent_id, 'path': source}
+        if token:
+            query['page_token'] = token
+        listing = client.request('/api/2.0/mlflow/artifacts/list?' + urlencode(query))
+        for item in listing.get('files', []):
+            if item['path'] in seen:
+                raise ValueError('duplicate Forge execution artifact listing')
+            seen.add(item['path'])
+            if (not item.get('is_dir') and re.fullmatch(re.escape(source) + r'/[^/]+\.ya?ml', item['path'])
+                    and item['path'].removeprefix(source + '/') not in BUNDLE_FILES):
+                paths.append(item['path'])
+        token = listing.get('next_page_token')
+        if not token:
+            break
+        if token in tokens or len(tokens) >= 1000:
+            raise ValueError('cyclic or oversized Forge execution artifact listing')
+        tokens.add(token)
     if platform['stack'] == 'rhoai':
         paths = [p for p in paths if not p.endswith(('-service.yaml', '-deployment.yaml', '-lws.yaml'))]
     else:
@@ -342,13 +394,30 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number):
     manifests = [document(p) for p in paths]
     if len(manifests) != 1:
         raise ValueError('execution serving manifest is missing or ambiguous')
-    deployment = manifests[0]
+    if not same_document(manifests[0], deployment):
+        raise ValueError('captured primary differs from checked submitted bundle')
     kind = deployment.get('kind')
     if kind not in ('Deployment', 'LeaderWorkerSet', 'LLMInferenceService'):
         raise ValueError('unsupported execution serving manifest')
     if (kind == 'LLMInferenceService') != (platform['stack'] == 'rhoai'):
         raise ValueError('execution serving kind disagrees with selected platform')
-    validate_launch(repo, manifest_path, expected_revision, deployment)
+    return relative, recipe, profile, platform, deployment
+
+
+def execution_values(client, parent_id, repo, expected_revision, pr_number, context=None):
+    """Read runtime observations separately from the checked pre-apply bundle."""
+    def artifact(path):
+        return client.request('/get-artifact?' + urlencode({'run_id': parent_id, 'path': path}), raw=True).decode()
+
+    def document(path):
+        try:
+            return load_unique_yaml(artifact(path))
+        except (yaml.YAMLError, ValueError):
+            raise ValueError('invalid Forge execution YAML') from None
+
+    relative, recipe, profile, platform, deployment = context or execution_bundle(
+        client, parent_id, repo, expected_revision, pr_number)
+    revision, kind = expected_revision, deployment['kind']
     log = artifact('01__test/run.log')
     if kind != 'Deployment':
         capture_name = 'lws' if kind == 'LeaderWorkerSet' else 'llmisvc'
@@ -509,6 +578,7 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         raise ValueError('selected execution has nonterminal direct children')
     prepared = []
     artifact_count = 0
+    context = None
     for child in candidates:
         if child['info']['status'] != 'FINISHED':
             continue
@@ -518,15 +588,25 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
             continue
         artifact_count += 1
         values = {**tags(parent), **tags(child)}
-        manifest_bound = False
+        runtime_recorded = False
         required = ('recipe_path', 'tested_revision', 'hardware_profile', 'hardware_profile_revision',
                     'model_revision', 'image_digest', 'platform_stack', 'platform_version', 'pr_number', 'command')
+        if context is None:
+            context = execution_bundle(client, parent_id, repo, expected_revision, pr_number)
+        relative, bound_recipe, bound_profile, bound_platform, _ = context
+        binding = {'recipe_path': relative, 'tested_revision': expected_revision, 'pr_number': str(pr_number),
+                   'hardware_profile': bound_recipe['hardware_profile'],
+                   'hardware_profile_revision': str(bound_profile['profile_revision']),
+                   'platform_stack': bound_platform['stack'], 'platform_version': bound_platform['version']}
+        if any('playbooks.' + key in values and values['playbooks.' + key] != value
+               for key, value in binding.items()):
+            raise ValueError('Forge attribution tags disagree with checked bundle')
         if current_parent and any(not values.get('playbooks.' + key) for key in required):
-            recorded = execution_values(client, parent_id, repo, expected_revision, pr_number)
+            recorded = execution_values(client, parent_id, repo, expected_revision, pr_number, context)
             if any(key in values and values[key] != value for key, value in recorded.items()):
                 raise ValueError('Forge attribution tags disagree with recorded execution')
             values = {**values, **recorded}
-            manifest_bound = True
+            runtime_recorded = True
         path, recipe, profile, platform = attribution(repo, values, expected_revision, pr_number)
         artifact_path, raw = artifact
         document = json.loads(raw)
@@ -535,10 +615,10 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         validate_model_identity(document, recipe, model)
         for test in document['tests']:
             labels = test.get('labels', {})
-            # Forge 768a2858 takes product_version from platforms[0], not the
-            # selected manifest. Once launch-bound, it is descriptive raw metadata;
-            # platform attribution comes from that exact tested manifest instead.
-            if not manifest_bound and platform['stack'] == 'vllm' and labels.get('product_version') and labels['product_version'].lstrip('v') != platform['version'].lstrip('v'):
+            # Preserve the existing tag-route version check. Reconstructed
+            # runtime attribution treats Forge's product_version (which can
+            # come from platforms[0]) as descriptive rather than engine metadata.
+            if not runtime_recorded and platform['stack'] == 'vllm' and labels.get('product_version') and labels['product_version'].lstrip('v') != platform['version'].lstrip('v'):
                 raise ValueError('KPI platform version disagrees with run attribution')
         results = normalize(document, run_id=f'forge-{child_id}', deployment_scope=recipe['deployment']['scope'],
                             accelerator_key=profile['accelerator_key'],
