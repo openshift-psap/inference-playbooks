@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: inference-playbooks
+    app.kubernetes.io/name: glm-5-3-dep8-mtp3-hisparse
+  name: glm-5-3-dep8-mtp3-hisparse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: glm-5-3-dep8-mtp3-hisparse
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: glm-5-3-dep8-mtp3-hisparse
+    spec:
+      containers:
+      - args:
+        - zai-org/GLM-5.3
+        - --served-model-name=zai-org/GLM-5.3
+        - --revision=30333038ada1f1dacb294a93270305a890b50c14
+        - --trust-remote-code
+        - --enable-expert-parallel
+        - --kv-cache-dtype=fp8_ds_mla
+        - --moe-backend=deep_gemm
+        - --kernel-config={"enable_flashinfer_autotune":false,"linear_backend":"deep_gemm"}
+        - --speculative-config={"method":"mtp","num_speculative_tokens":3}
+        - --attention-config={"hisparse_config":{}}
+        - --kv-transfer-config={"kv_connector":"MultiConnector","kv_role":"kv_both","kv_connector_extra_config":{"connectors":[{"kv_connector":"HiSparseConnector","kv_role":"kv_both","kv_connector_extra_config":{"host_pool_gib":48}},{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec","cpu_bytes_to_use":17179869184}}]}}
+        - --max-model-len=142000
+        - --max-num-seqs=64
+        - --gpu-memory-utilization=0.97
+        - --enable-auto-tool-choice
+        - --tool-call-parser=glm47
+        - --reasoning-parser=glm45
+        - --data-parallel-size=8
+        command:
+        - /bin/bash
+        - -c
+        - |
+          vllm serve "$@"
+        - --
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: HF_TOKEN
+              name: hf-token
+        - name: HOME
+          value: /tmp
+        - name: HF_HOME
+          value: /home/nobody/.cache/huggingface
+        image: docker.io/vllm/vllm-openai:v0.31.0
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 30
+          timeoutSeconds: 10
+        name: vllm
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 10
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: "128"
+            memory: 1500Gi
+            nvidia.com/gpu: "8"
+          requests:
+            cpu: "32"
+            memory: 800Gi
+            nvidia.com/gpu: "8"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          failureThreshold: 120
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 30
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /home/nobody/.cache
+          name: hf-cache
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 192Gi
+        name: dshm
+      - emptyDir: {}
+        name: hf-cache
+      - emptyDir: {}
+        name: tmp
