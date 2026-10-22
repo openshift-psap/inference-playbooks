@@ -13,6 +13,6 @@ known_issues:
     impact: Multi-node traffic may use an unintended transport.
     mitigation: Set provider-specific values symmetrically in leader and worker before deployment.
 quickstart:
-  - {step: Prepare, detail: "Install the LWS controller, stage model access, and create llm-d-hf-token."}
-  - {step: Deploy, detail: Apply config/lws.yaml and config/service.yaml together.}
-  - {step: Benchmark, detail: Run AIPerf AgentX 128K and record sanitized artifacts before claiming validated maturity.}
+  - {step: Prepare, detail: Install the LWS controller and prepare the model access and Secret references declared in the generated manifest.}
+  - {step: Deploy, detail: "Apply manifests/vllm-v0.23.0/leaderworkerset.yaml; let the LWS controller create its headless Service."}
+  - {step: Benchmark, detail: "Use the leader pod endpoint (for example via port-forward), run AIPerf AgentX 128K, and record sanitized artifacts before claiming validated maturity."}
