@@ -20,12 +20,16 @@ import yaml
 from jinja2 import TemplateError
 
 from recipe_evidence import affected_recipes, git_lines
+from manifest_policy import report_service_policy_errors, validate_recipe_manifest_files
 from render import COMPONENT_KIND, load_yaml_file, render_recipe
 
 
 def check_recipe(repo: Path, recipe_dir: Path) -> list[str]:
     """Render in isolation and byte-compare each publishable platform output."""
     recipe = load_yaml_file(recipe_dir / "recipe.yaml")
+    errors = validate_recipe_manifest_files(recipe_dir, recipe)
+    if errors:
+        return errors
     outputs = []
     pinned_sources = {Path(platform["pinned_manifest"]) for platform in recipe["platforms"] if platform.get("pinned_manifest")}
     hand_authored = {Path(item["path"]) for item in recipe.get("deployment", {}).get("manifests", []) if item.get("generated") is False}
@@ -54,7 +58,7 @@ def check_recipe(repo: Path, recipe_dir: Path) -> list[str]:
         with contextlib.redirect_stdout(io.StringIO()):
             _, errors = render_recipe(scratch, target / "recipe.yaml")
         if errors:
-            return errors
+            return [error.replace(str(scratch) + "/", str(repo) + "/") for error in errors]
         generated_names = {f"{kind.lower()}.yaml" for kind in COMPONENT_KIND.values()}
         for existing in (recipe_dir / "manifests").glob("*/*.yaml"):
             relative_output = existing.relative_to(recipe_dir)
@@ -99,6 +103,7 @@ def main() -> int:
                 selected = [repo / name for name in affected_recipes(repo, args.base, args.head, False)["recipes"]]
             errors = [error for path in selected for error in check_recipe(repo, path)]
         if errors:
+            report_service_policy_errors(repo, errors)
             print("\n".join(errors), file=sys.stderr)
             return 1
     except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError, TemplateError, subprocess.CalledProcessError) as error:
