@@ -315,25 +315,36 @@ def execution_bundle(client, parent_id, repo, expected_revision, pr_number):
         raise ValueError('PR attribution mismatch')
     configuration = document('01__test/001__inference_playbooks_test_dir/config.yaml')
     config = configuration.get('inference_playbooks') if isinstance(configuration, dict) else None
+    locator = config.get('recipe') if isinstance(config, dict) else None
+    if not isinstance(locator, str) or not re.fullmatch(r'[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*', locator):
+        raise ValueError('execution recipe selector must be an explicit canonical <model>/<recipe-folder> locator')
+    model, folder = locator.split('/')
+    recipe_dir = f'models/{model}/recipes/{folder}'
+    relative = recipe_dir + '/recipe.yaml'
     manifest_path = config.get('manifest_path') if isinstance(config, dict) else None
     if (not isinstance(manifest_path, str) or not manifest_path or
             any(part in {'', '.', '..'} for part in manifest_path.split('/')) or
             re.search(r'[\s\x00-\x1f\x7f]', manifest_path)):
-        raise ValueError('execution manifest path (inference_playbooks.manifest_path) must be an explicit nonempty canonical platform file')
-    match = re.fullmatch(r'(models/[^/]+/recipes/[^/]+)/manifests/[^/]+/[^/]+\.ya?ml', manifest_path)
-    if not match:
-        raise ValueError('execution manifest path must identify a canonical recipe')
-    relative = match[1] + '/recipe.yaml'
+        raise ValueError('execution manifest path (inference_playbooks.manifest_path) must be an explicit nonempty canonical recipe-relative platform file')
+    if not re.fullmatch(r'manifests/[^/]+/[^/]+\.ya?ml', manifest_path):
+        raise ValueError('execution manifest path must be relative to the selected recipe folder under manifests/<platform>/')
+    manifest_path = recipe_dir + '/' + manifest_path
+    # Preserve lexical identity: resolving an alias first could bind a different
+    # recipe or platform. Only these selected paths are inspected, never an ID scan.
+    for selected in (relative, manifest_path):
+        component = repo
+        for part in selected.split('/'):
+            component = component / part
+            if component.is_symlink():
+                raise ValueError('selected recipe or manifest path must not traverse a symlink')
     try:
         path, recipe = tested_inputs(repo, relative, expected_revision)
     except FileNotFoundError:
-        raise ValueError('execution manifest path does not identify an available tested recipe') from None
+        raise ValueError('execution recipe selector does not identify an available tested recipe') from None
     if type(recipe.get('schema_version')) is not int or recipe['schema_version'] != 4:
         raise ValueError('strict Forge bundle certification requires a v4 recipe')
-    if config['recipe'] != recipe['recipe_id']:
-        raise ValueError('execution recipe identity mismatch')
     platforms = [p for p in recipe['platforms'] if manifest_path.startswith(
-        f'{match[1]}/manifests/{p["stack"]}-{p["version"]}/')]
+        f'{recipe_dir}/manifests/{p["stack"]}-{p["version"]}/')]
     if len(platforms) != 1:
         raise ValueError('execution platform is missing or ambiguous')
     platform = platforms[0]
@@ -581,8 +592,6 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         runtime_recorded = False
         required = ('recipe_path', 'tested_revision', 'hardware_profile', 'hardware_profile_revision',
                     'model_revision', 'image_digest', 'platform_stack', 'platform_version', 'pr_number', 'command')
-        attributed = attribution(repo, values, expected_revision, pr_number) if all(
-            values.get('playbooks.' + key) for key in required) else None
         if context is None:
             context = execution_bundle(client, parent_id, repo, expected_revision, pr_number)
         relative, bound_recipe, bound_profile, bound_platform, _ = context
@@ -599,7 +608,7 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
                 raise ValueError('Forge attribution tags disagree with recorded execution')
             values = {**values, **recorded}
             runtime_recorded = True
-        path, recipe, profile, platform = attributed or attribution(repo, values, expected_revision, pr_number)
+        path, recipe, profile, platform = attribution(repo, values, expected_revision, pr_number)
         artifact_path, raw = artifact
         document = json.loads(raw)
         safe_artifact(document)
