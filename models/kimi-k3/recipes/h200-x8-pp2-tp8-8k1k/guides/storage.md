@@ -1,67 +1,34 @@
 # Kimi K3 model storage
 
-The [recipe](../recipe.yaml) and generated
-[LeaderWorkerSet](../manifests/vllm-v0.29.0/leaderworkerset.yaml) use the
-existing 2 TiB RWX claim
-`kserve-e2e-perf/inference-playbooks-model-kimi-k3-9fcb53074b` on Janus's
-`nfs` StorageClass. Both LWS roles mount it read-only at `/models`; the complete
-checkpoint must be at `/models/Kimi-K3`.
+The [recipe](../recipe.yaml) uses node-local NVMe storage, not the shared NFS
+PVC. The model volume's host path and read-only mount are owned by
+[config/lws-patch.yaml](../config/lws-patch.yaml); the in-container checkpoint
+path is owned by `serving.model` in the recipe. Both roles in the generated
+[LeaderWorkerSet](../manifests/vllm-v0.29.0/leaderworkerset.yaml) use that same
+layout. The hostPath uses `Directory`, not `DirectoryOrCreate`, so a missing
+cache is not silently created on the root filesystem.
 
-The separate [model-ops Job](../../../model-ops/download-kimi-k3-pvc.yaml)
-populates an empty claim from the public `moonshotai/Kimi-K3` repository at
-the pinned Hugging Face [revision
-`f831ab66814297da540d832a5235f8e904f29d06`](https://huggingface.co/moonshotai/Kimi-K3/tree/f831ab66814297da540d832a5235f8e904f29d06).
-It writes the checkpoint to the serving path and verifies config, safetensors
-index, and all 96 non-empty shards. It does not create the PVC or run as part of
-the serving deployment.
+Before deploying:
 
-On 2026-10-20, a read-only inspection on Janus confirmed the claim is `Bound`,
-contains `/models/Kimi-K3`, and has the pinned revision
-`f831ab66814297da540d832a5235f8e904f29d06`: all 119 Hugging Face metadata
-files referenced that revision, and all 96 index-referenced weight shards were
-present and non-empty. The checkpoint occupied about 1.5 TiB. Reuse this claim;
-do not run the downloader or create a duplicate claim on Janus. A temporary
-read-only inspector was removed after the check. Janus's SCC subject review
-also admitted both rendered roles with the namespace-assigned UID
-`1000770000`. The repository is public, so the downloader does not need an HF
-Secret.
+1. Verify the configured cache is on the mounted local NVMe RAID filesystem on
+   **every eligible GPU node**, including after node reboots.
+2. Prepare the same Hugging Face [revision
+   `f831ab66814297da540d832a5235f8e904f29d06`](https://huggingface.co/moonshotai/Kimi-K3/tree/f831ab66814297da540d832a5235f8e904f29d06)
+   on both nodes. Verify the completion marker, all snapshot file sizes, and the
+   config and safetensors index; all 96 referenced weight shards must be readable.
+   Publish the final checkpoint directory only after preparation succeeds.
+3. Confirm the namespace-assigned non-root UID can read the checkpoint. Keep the
+   model volume read-only and keep writable runtime caches on the overlay's
+   separate emptyDir volumes.
+4. Confirm the configured service account is admitted by an SCC allowing this
+   hostPath. Readable host files alone do not establish SCC admission; do not
+   grant `anyuid` merely to bypass a hostPath restriction.
 
-For a new environment, provision an equivalent RWX claim first, then update
-`deployment.storage.pvc.name` in the recipe, `claimName` in the model-ops Job, and
-`claimName` in [config/lws-patch.yaml](../config/lws-patch.yaml) together. Keep
-the claim writable by the preparation Job and readable by the serving pods. Do
-not add the Job to the serving Kustomize overlay.
+Preparation runs separately from serving. The older
+[PVC download Job](../../../model-ops/download-kimi-k3-pvc.yaml) does not populate
+the node-local caches and is not part of this serving deployment. The existing
+NFS checkpoint can be retained independently; this recipe does not mount it.
 
-For a new, empty claim, use the same namespace as the serving deployment. First
-change `claimName` in the Job to that claim; do not use the existing Janus claim
-until its contents are verified:
-
-~~~bash
-export NAMESPACE=kserve-e2e-perf
-export PVC_NAME=NEW_EMPTY_PVC
-oc wait -n "${NAMESPACE}" --for=jsonpath='{.status.phase}'=Bound "pvc/${PVC_NAME}" --timeout=10m
-
-# Replace NEW_EMPTY_PVC and set the Job's claimName to that same empty claim.
-oc apply -n "${NAMESPACE}" -f models/kimi-k3/model-ops/download-kimi-k3-pvc.yaml
-oc wait -n "${NAMESPACE}" --for=condition=complete job/download-kimi-k3-model --timeout=6h
-oc logs -n "${NAMESPACE}" job/download-kimi-k3-model
-~~~
-
-A completed Job is retained and applying it again does not start another
-download. Keep the PVC between serving runs. Do not clear model data during
-per-run cleanup. If a download stops partway through, inspect the claim and
-remove the incomplete `/models/Kimi-K3` directory before recreating the Job.
-
-`HF_HOME` uses the separate writable `/tmp/hf-home` directory in the Job. The
-serving overlay keeps its writable `/home/nobody/.cache` emptyDir separate from
-the read-only weights claim and sets both LWS roles to run as non-root. It uses
-the default service account and does not require `anyuid` or a `hostPath` mount.
-Janus does not authorize that service account for `anyuid`, so this overlay uses
-the namespace-assigned UID instead.
-
-Verify that the claim is Bound/RWX, has enough capacity, and exposes all
-checkpoint files with read permissions. Janus's file-content check did not test
-simultaneous reads from both nodes or measure aggregate NFS throughput and model
-loading time; verify those as part of the serving run.
-NFS availability does not establish performance equivalent to local NVMe;
-record the storage backend and observed loading behavior with benchmark evidence.
+Checkpoint availability does not establish inference or performance validation.
+Verify real-checkpoint loading and distributed startup, then record the actual
+storage backend and model-loading behavior with benchmark evidence.

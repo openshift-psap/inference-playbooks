@@ -56,7 +56,6 @@ serving:
     - {name: HOME, value: /tmp}
     - {name: XDG_CACHE_HOME, value: /home/nobody/.cache}
   args:
-    - {flag: --load-format, value: dummy, required: true, why: Uses dummy weights for launch-only testing; remove before checkpoint or inference validation.}
     - {flag: --trust-remote-code, required: true, why: Allows loading model-provided code.}
     - {flag: --attention-backend, value: FLASHMLA, required: true, why: Selects FlashMLA for MLA attention.}
     - {flag: --moe-backend, value: humming, required: true, why: Selects Humming for MoE execution.}
@@ -75,13 +74,8 @@ serving:
 deployment:
   scope: multi-node
   storage:
-    type: pvc
-    pvc:
-      name: inference-playbooks-model-kimi-k3-9fcb53074b
-      size: 2Ti
-      access_modes: [ReadWriteMany]
-      storage_class: nfs
-    why: Use the external shared NFS claim; verify existing contents or populate a new, empty claim with the model-ops Job before serving.
+    type: hostpath
+    why: Use independently prepared local NVMe checkpoints on both GPU nodes via the config/ hostPath overlay; verify matching pinned revisions and read-only non-root access before serving.
   manifests:
     - {path: manifests/vllm-v0.29.0/leaderworkerset.yaml, kind: LeaderWorkerSet, generated: true}
 notes: guides/notes.yaml

@@ -22,7 +22,6 @@ spec:
               --node-rank 0 \
               --master-addr 0.0.0.0 \
               --port 8000 \
-              --load-format=dummy \
               --trust-remote-code \
               --attention-backend=FLASHMLA \
               --moe-backend=humming \
@@ -97,6 +96,7 @@ spec:
             name: tmp
           - mountPath: /models
             name: model
+            readOnly: true
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000770000
@@ -110,10 +110,10 @@ spec:
           name: hf-cache
         - emptyDir: {}
           name: tmp
-        - name: model
-          persistentVolumeClaim:
-            claimName: inference-playbooks-model-kimi-k3-9fcb53074b
-            readOnly: true
+        - hostPath:
+            path: /var/mnt/nvme-cache/model-cache
+            type: Directory
+          name: model
     restartPolicy: RecreateGroupOnPodRestart
     size: 2
     workerTemplate:
@@ -129,7 +129,6 @@ spec:
               --node-rank $(LWS_WORKER_INDEX) \
               --master-addr $(LWS_LEADER_ADDRESS) \
               --headless \
-              --load-format=dummy \
               --trust-remote-code \
               --attention-backend=FLASHMLA \
               --moe-backend=humming \
@@ -191,6 +190,7 @@ spec:
             name: tmp
           - mountPath: /models
             name: model
+            readOnly: true
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000770000
@@ -204,8 +204,8 @@ spec:
           name: hf-cache
         - emptyDir: {}
           name: tmp
-        - name: model
-          persistentVolumeClaim:
-            claimName: inference-playbooks-model-kimi-k3-9fcb53074b
-            readOnly: true
+        - hostPath:
+            path: /var/mnt/nvme-cache/model-cache
+            type: Directory
+          name: model
   replicas: 1

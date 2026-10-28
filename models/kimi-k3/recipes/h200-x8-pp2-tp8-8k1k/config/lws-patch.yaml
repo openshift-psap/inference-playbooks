@@ -19,7 +19,7 @@
 - op: add
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/securityContext/runAsUser
   value: 1000770000
-# Give slow shared-NFS and distributed startup up to four hours before restarting the leader.
+# Keep the existing four-hour startup budget for model loading and distributed initialization.
 - op: replace
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/startupProbe/failureThreshold
   value: 1440
@@ -72,7 +72,7 @@
   value: IfNotPresent
 - op: add
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/containers/0/volumeMounts/-
-  value: &model_mount {name: model, mountPath: /models}
+  value: &model_mount {name: model, mountPath: /models, readOnly: true}
 - op: add
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/volumeMounts/-
   value: *model_mount
@@ -80,9 +80,9 @@
   path: /spec/leaderWorkerTemplate/leaderTemplate/spec/volumes/-
   value: &model_volume
     name: model
-    persistentVolumeClaim:
-      claimName: inference-playbooks-model-kimi-k3-9fcb53074b
-      readOnly: true
+    hostPath:
+      path: /var/mnt/nvme-cache/model-cache
+      type: Directory
 - op: add
   path: /spec/leaderWorkerTemplate/workerTemplate/spec/volumes/-
   value: *model_volume
