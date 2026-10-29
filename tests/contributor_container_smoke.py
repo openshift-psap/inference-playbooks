@@ -17,6 +17,9 @@ sys.path.insert(0, '/opt/forge/projects/inference_playbooks/orchestration')
 import run_contributor as runner
 from contributor_bundle import FORGE_REVISION, checksum, json_bytes, read_archive
 
+assert not list(Path('/opt/playbooks/tools').rglob('__pycache__')), 'host Python caches entered the image'
+assert not list(Path('/opt/playbooks/tools').rglob('*.pyc')), 'host bytecode entered the image'
+
 
 with tempfile.TemporaryDirectory() as tmp:
     tool = os.environ.get('SMOKE_HARNESS', 'guidellm')

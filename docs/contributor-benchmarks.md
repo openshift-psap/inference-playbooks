@@ -33,6 +33,7 @@ example uses Podman and does **not** require publishing the runner image:
 ```sh
 podman build -f benchmarks/runner/Containerfile \
   -t localhost/playbooks-contributor:reviewed .
+python3 tools/scan_runner_image.py localhost/playbooks-contributor:reviewed
 RUNNER_IMAGE=$(podman image inspect localhost/playbooks-contributor:reviewed \
   --format '{{index .RepoDigests 0}}')
 ```
@@ -329,6 +330,7 @@ Run from the repository root. These tests use synthetic data, not model evidence
 ```sh
 python3 -m pytest tests/test_contributor.py -q
 podman build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:test .
+python3 tools/scan_runner_image.py localhost/contributor-runner:test
 podman run --rm --network none --entrypoint python \
   -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,z" \
   localhost/contributor-runner:test /smoke.py
@@ -340,3 +342,33 @@ podman run --rm --network none --entrypoint python -e SMOKE_HARNESS=aiperf \
 Both smoke tests invoke the real Forge CLI and Caliper; only Kubernetes and
 benchmark Jobs are simulated. Rerun these proofs after pin/CLI/dependency changes.
 Regenerate `requirements.lock` from `requirements.in` deliberately, not at runtime.
+
+### Image secret-scan gate
+
+Before publishing a runner image, scan the same built image you intend to publish:
+
+```sh
+python3 tools/scan_runner_image.py localhost/playbooks-contributor:reviewed
+```
+
+The command selects Podman first, or Docker; `CONTAINER_ENGINE=docker` overrides
+that choice. It freezes the local image ID and scans an exported image with
+digest-pinned Trivy 0.76.1. The scanner runs without network access, telemetry,
+host credentials, or a container-engine socket. Its only writable host mount is
+an isolated temporary report directory. Scanner-image download may require network
+access before the scan. Reports and archives are temporary; matches are not
+printed or uploaded.
+
+CI runs the same command after the runner build and fails on secret findings,
+scanner errors, missing reports, or an image-identity mismatch. PR CI never
+publishes images. Do not rebuild or move a tag between successful scanning and
+publication; future publication automation must depend on this gate succeeding.
+
+Host `__pycache__`/bytecode is excluded from the build context, and the runner
+copies only `tools/*.py`. Both container smoke tests check that no host Python
+caches entered `/opt/playbooks/tools`.
+
+This gate uses Trivy's built-in secret rules and allowlists/base-layer exclusions.
+It is not an exhaustive all-layer forensic audit, vulnerability scan, or guarantee
+of credential absence. Review changes to scanner pins and build inputs before
+publication; do not add broad exclusions merely to silence a finding.

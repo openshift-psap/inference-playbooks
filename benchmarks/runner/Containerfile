@@ -43,7 +43,8 @@ pathlib.Path('/opt/forge/REVISION').write_text(revision + '\n')
 pathlib.Path('/opt/forge/bin/caliper').chmod(0o755)
 PY
 
-COPY tools/ /opt/playbooks/tools/
+# Copy source modules only, never host bytecode caches or local dotfiles.
+COPY tools/*.py /opt/playbooks/tools/
 RUN python /opt/forge/projects/inference_playbooks/orchestration/cli.py --help && \
     python /opt/playbooks/tools/run_contributor.py --help && oc version --client
 

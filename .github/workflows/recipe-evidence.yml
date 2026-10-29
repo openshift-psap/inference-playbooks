@@ -18,9 +18,13 @@ jobs:
       - name: Test portable bundle and maintainer import contract
         run: |
           python3 -m pip install -r tools/requirements.txt pytest==8.3.4
-          python3 -m pytest tests/test_contributor.py -q
+          python3 -m pytest tests/test_contributor.py tests/test_runner_image_security.py -q
       - name: Build pinned Forge runner (never publish from PR CI)
         run: docker build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:ci .
+      - name: Gate built runner on secret scanning (never upload matches)
+        env:
+          CONTAINER_ENGINE: docker
+        run: python3 tools/scan_runner_image.py localhost/contributor-runner:ci
       - name: Exercise real Forge CLI and Caliper with synthetic jobs, without network or credentials
         run: |
           for harness in guidellm aiperf; do
