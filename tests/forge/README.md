@@ -3,6 +3,54 @@
 Run inference-playbook recipes through the Forge CI framework by posting
 `/test forge` comments on pull requests.
 
+## Importing an existing PR322 run before merge
+
+Forge PR322's bundle contract uses a `<model>/recipes/<recipe-folder>` selector
+and an explicit recipe-relative `/path manifests/<stack>-<version>/<file>.yaml`.
+The opaque-ID examples below describe older Forge versions. Pin the intended
+Forge revision when testing an in-flight producer change.
+
+Once the bundle-aware importer is available, an existing successful run can be
+imported locally into the recipe branch, including after merging tooling changes
+from `main`. Supply the **original recipe SHA recorded by Forge**, not the Forge
+code SHA and not the new merge commit:
+
+```bash
+python3 tools/fetch_forge_evidence.py \
+  --repo /path/to/recipe-checkout \
+  --run-id <successful-parent-run-id> --pr-number <recipe-pr-number> \
+  --tested-revision <original-tested-recipe-sha> \
+  --workspace forge-inference-playbooks --require-parent
+python3 tools/validate.py --current
+```
+
+The importer reads `MLFLOW_TRACKING_URI`, `MLFLOW_USERNAME` and `MLFLOW_PASSWORD`
+from the environment. Review and commit the generated `results/` files and
+`benchmark_runs` references in the same recipe PR. The current automated
+`benchmark-ingest.yml` workflow still requires a merged PR; this local command
+does not. Use trusted importer code when importing another contributor's branch.
+
+Recipe, model, hardware, overrides, configuration and platform manifest inputs
+must still match the tested revision. Adding evidence references is allowed;
+changing maturity or serving configuration is not silently exempted. Bundle v1
+accepts only absent-namespace placement, not legacy serving repairs. Import
+currently supports one Deployment, LeaderWorkerSet or LLMInferenceService per
+platform bundle and one workload/sweep identity per harness. Unknown bundle
+versions, unsupported resource sets and mixed sweeps are rejected.
+
+For bundle-v1 runs, sweep completeness is derived automatically from the
+effective workload selection in the recorded execution config, the workload
+profiles at the recorded **Forge SHA**, and generated benchmark Jobs. GuideLLM
+uses the Job's effective concurrent profile (including applied argument
+overrides); AIPerf uses the selected profile's planned concurrency list and
+checks each Job against its KPI concurrency. Requested but unapplied comment
+values are not treated as effective overrides. Unknown or ambiguous execution
+settings fail rather than inventing a complete sweep from observed points.
+
+Each imported run stores a sanitized expectation snapshot, source checksums and
+artifact references. Local validation replays it without network access. Missing
+points remain incomplete, and smoke profiles retain the `smoke` classification.
+
 ## Available workload keys
 
 Workload keys are defined in RHAIIS `workloads.yaml` and selected via the
