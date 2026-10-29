@@ -33,6 +33,8 @@ spec:
             secretKeyRef:
               key: HF_TOKEN
               name: hf-token
+        - name: HOME
+          value: /tmp
         image: docker.io/vllm/vllm-openai:v0.31.0
         livenessProbe:
           failureThreshold: 5
