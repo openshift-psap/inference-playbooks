@@ -1,20 +1,77 @@
 # Portable contributor benchmarks
 
-A maintainer prepares a pinned recipe package. The contributor runs it on their
-cluster and returns **two files**: `evidence.tar.gz` and
-`evidence.tar.gz.sha256`. The maintainer reviews and imports the results.
+Contributors prepare a pinned recipe package themselves, run it on their own
+cluster, and return **two files**: `evidence.tar.gz` and
+`evidence.tar.gz.sha256`. Maintainers review and import the results; they do not
+need to prepare a package or run infrastructure for the contributor.
 
 Contributors need **no AWS, S3, MLflow, Prow/Fournos, or internal artifact access**.
 This is separate from [manually applying benchmark Jobs](../benchmarks/README.md).
 Related: [issue #62](https://github.com/openshift-psap/inference-playbooks/issues/62).
 
-## Contributor: run the package
+## Contributor: prepare, run, and return evidence
 
-### 1. Check prerequisites
+### 1. Prepare your package
 
-Ask the maintainer for the complete package directory and its cluster requirements.
-Review `request.json` and the selected manifest under `playbooks/` before running.
-Do not edit packaged inputs.
+Start from a trusted checkout of this repository. Select a recipe and platform
+whose requirements match your cluster. The selected recipe and inputs must be
+rendered, validated, committed, and clean. Preparation does not deploy anything.
+If someone has already supplied a complete package, skip to step 2.
+
+Install the preparation dependencies in a local Python environment:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r tools/requirements.txt
+python3 tools/validate.py --current
+```
+
+Use a reviewed runner image by digest, or build it yourself. This local-build
+example uses Podman and does **not** require publishing the runner image:
+
+```sh
+podman build -f benchmarks/runner/Containerfile \
+  -t localhost/playbooks-contributor:reviewed .
+RUNNER_IMAGE=$(podman image inspect localhost/playbooks-contributor:reviewed \
+  --format '{{index .RepoDigests 0}}')
+```
+
+For Docker, use a published runner by digest, or publish your build and resolve
+its registry digest. An image ID is not a substitute for a manifest digest.
+When sharing a package with another machine, use a runner reference that machine
+can pull; the local Podman image above is only available on your build host.
+
+Set `HARNESS_IMAGE` to an audited compatible GuideLLM v0.7.4 or AIPerf 0.12.0 image
+by digest. Unlike the local runner, the harness image must be pullable by your
+cluster. For the GuideLLM example, this is the Linux AMD64 v0.7.4 image used in
+the live smoke test:
+
+```sh
+HARNESS_IMAGE=ghcr.io/vllm-project/guidellm@sha256:15372f9f3f407366495470706b7a07f64addcce5d134a49cab64149b44ab1233
+PACKAGE_DIR="$HOME/playbooks-runs/gemma-package-001"
+python3 tools/prepare_contributor.py \
+  models/gemma-4/recipes/h200-x1-tp1-guidellm-8k1k/recipe.yaml \
+  --stack vllm --version v0.24.0 --workload guidellm-smoke \
+  --runner-image "$RUNNER_IMAGE" --harness-image "$HARNESS_IMAGE" \
+  --output "$PACKAGE_DIR"
+```
+
+`guidellm-smoke` selects Forge's `ci-quick` plumbing check, not performance
+validation. For the full 8K/1K sweep, prepare a separate package with
+`--workload guidellm-8k1k`. The package directory must not already exist.
+
+Keep the **complete directory**: `run.sh`, `monitor.sh`, `monitor.py`,
+`request.json`, and `playbooks/`. Preserve the shell scripts' executable bits.
+The scripts are trusted checkout code; the returned evidence archive is data only.
+The request pins the tested commit, platform, workload, Forge revision, images,
+input checksums, and unique run ID. A package contains no Git checkout, credentials,
+model weights, or existing results. One package is one attempt.
+
+### 2. Check cluster prerequisites
+
+Review `request.json` and the selected manifest under `playbooks/`. Do not edit
+the generated package; make any necessary changes in the source checkout instead.
 
 - Use a Linux AMD64 machine with Podman or Docker and access to the runner image.
 - Provide a self-contained kubeconfig with embedded credentials/certificates and
@@ -33,22 +90,25 @@ Do not edit packaged inputs.
 **Gemma example below:** the serving manifest needs one H200 GPU and a Secret
 named `hf-token` with key `HF_TOKEN`. It uses the `default` service account and
 fixed non-root UID **65534**, which must be admissible in the target namespace.
-If these requirements cannot be met, request a corrected maintainer package;
-do not edit inputs, remove the UID, or grant SCC privileges to make it run.
+If these requirements cannot be met, correct the source recipe/configuration,
+render, validate, and commit the changes, then prepare a fresh package. Keep
+`runAsNonRoot: true`; do not rewrite packaged inputs or grant SCC privileges to
+make the test run. Include your source branch/commit or PR when returning evidence
+so reviewers can obtain the exact tested revision.
 
 On SELinux hosts, use a dedicated kubeconfig directory with a container-readable
 label. The launcher does not relabel that credential directory. Its parent
 directory and kubeconfig file must be readable by your container user.
 
-### 2. Run once
+### 3. Run once
 
-Replace all four arguments with your actual paths, context, and namespace. The
-output directory must **not already exist**.
+Use the package path from step 1 (or the package you received), your kubeconfig,
+context, and namespace. The output directory must **not already exist**.
 
 ```sh
-/path/to/gemma-contributor-package/run.sh \
+"$HOME/playbooks-runs/gemma-package-001/run.sh" \
   /absolute/path/to/kubeconfig EXPLICIT_CONTEXT benchmark-namespace \
-  /absolute/path/to/NEW-output-directory
+  "$HOME/playbooks-runs/gemma-output-001"
 ```
 
 Podman is preferred when both engines exist; set `CONTAINER_ENGINE=docker` to
@@ -56,13 +116,13 @@ override. The launcher uses your UID, host networking, and inherited proxy
 variables. It does not mount your home directory or forward AWS credentials.
 The default overall deadline is six hours; actual runtime depends on the workload.
 
-### 3. Monitor from another terminal (optional)
+### 4. Monitor from another terminal (optional)
 
 The package includes a read-only monitor requiring only local **Python 3.9+**:
 
 ```sh
-/path/to/gemma-contributor-package/monitor.sh \
-  /absolute/path/to/NEW-output-directory --watch
+"$HOME/playbooks-runs/gemma-package-001/monitor.sh" \
+  "$HOME/playbooks-runs/gemma-output-001" --watch
 ```
 
 Use the same output directory you passed to `run.sh`; it is where progress is
@@ -79,10 +139,10 @@ is not a heartbeat, and no overall completion percentage is guessed. An abruptly
 killed runner can leave a stale snapshot; inspect its process/private logs then.
 A successful execution still needs separate maintainer import validation/review.
 
-### 4. Review and return the result
+### 5. Review and return the result
 
 ```text
-NEW-output-directory/
+gemma-output-001/
   evidence.tar.gz
   evidence.tar.gz.sha256
   progress.json              # local status only; do not return this file
@@ -92,58 +152,23 @@ NEW-output-directory/
 **After privacy review, share only the archive and checksum sidecar** through
 your approved delivery channel. See [privacy and review](#privacy-and-review).
 
-For `run.sh`, exit code **0** means success; **1** means an unsuccessful attempt. The printed
-JSON and bundle `outcome` distinguish `failed`, `interrupted`, and
+For `run.sh`, exit code **0** means success; **1** means an unsuccessful attempt.
+The printed JSON and bundle `outcome` distinguish `failed`, `interrupted`, and
 `collection-failed`. Inspect `private-diagnostics/` locally on failure. Failed
 bundles are diagnostic-only and cannot be imported as successful evidence.
 Very early failures or an uncatchable kill may produce no archive.
 
-**For another attempt, request a fresh package/run ID and use a new output
+**For another attempt, prepare a fresh package/run ID and use a new output
 directory.** Keep each attempt separate. After a crash, ask your administrator
 to reconcile recorded run-owned resources; never force-delete unrelated objects.
-
-## Maintainer: prepare and distribute
-
-Run commands from a trusted repository checkout. The selected recipe and inputs
-must already be rendered, validated, committed, and clean. Preparation does not
-deploy anything or execute historical repository code.
-
-```sh
-python3 -m pip install -r tools/requirements.txt
-python3 tools/validate.py --current
-podman build -f benchmarks/runner/Containerfile \
-  -t quay.io/YOUR_ORG/playbooks-contributor:reviewed .
-```
-
-Publish the reviewed image through your normal process. Set `RUNNER_IMAGE` and
-`HARNESS_IMAGE` to real, fully qualified `registry/repository@sha256:...` references.
-The harness must be an audited compatible GuideLLM v0.7.4 or AIPerf 0.12.0 image.
-Tooling and PR CI do not publish images automatically.
-
-```sh
-python3 tools/prepare_contributor.py \
-  models/gemma-4/recipes/h200-x1-tp1-guidellm-8k1k/recipe.yaml \
-  --stack vllm --version v0.24.0 --workload guidellm-8k1k \
-  --runner-image "$RUNNER_IMAGE" --harness-image "$HARNESS_IMAGE" \
-  --output /tmp/opencode/gemma-contributor-package
-```
-
-Distribute the **complete directory**, including `run.sh`, `monitor.sh`,
-`monitor.py`, `request.json`, and `playbooks/`, with this guide and the selected
-manifest's prerequisites. Preserve the executable bits on both shell scripts.
-These scripts are reviewed maintainer-supplied executable
-code; the returned evidence archive is data only.
-
-The request pins the tested commit, platform, workload, Forge revision, images,
-input checksums, and unique run ID. Packages contain no Git checkout, credentials,
-model weights, existing results, or arbitrary recipe scripts. One package is one
-attempt; do not combine attempts into a benchmark sweep.
 
 ## Maintainer: validate, review, and import
 
 Use a clean, trusted feature worktree based on `main`, with the tested commit
 available in Git. Confirm the checksum through the contributor's delivery channel;
 a supplied checksum is an integrity check, **not an execution attestation**.
+If the contributor changed the recipe, review those source changes too. New
+imports require the recipe inputs in your worktree to match the tested inputs.
 
 ```sh
 CHECKSUM=$(cat /received/evidence.tar.gz.sha256)

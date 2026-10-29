@@ -19,7 +19,7 @@ to explore deployment configurations and available benchmark evidence.
 
 ## Target Workloads
 
-For a prepared recipe package with pinned Forge execution and returnable evidence,
+To prepare and run a recipe yourself with pinned Forge and returnable evidence,
 use the [portable contributor runner guide](docs/contributor-benchmarks.md).
 The manually applied Jobs below are a separate workflow.
 

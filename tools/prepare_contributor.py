@@ -115,7 +115,7 @@ def main():
     parser.add_argument('--stack', choices=['vllm', 'rhoai'], required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--workload', choices=sorted(WORKLOADS), required=True)
-    parser.add_argument('--runner-image', required=True, help='published runner image@sha256:digest')
+    parser.add_argument('--runner-image', required=True, help='digest-pinned runner image (local or published)')
     parser.add_argument('--harness-image', required=True, help='audited GuideLLM/AIPerf image@sha256:digest')
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()

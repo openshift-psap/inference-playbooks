@@ -1,6 +1,6 @@
 # Common Benchmark Jobs
 
-Received a prepared recipe package, or need to collect importable recipe evidence?
+Want to prepare and run a pinned recipe yourself and collect importable evidence?
 Use the [portable contributor runner guide](../docs/contributor-benchmarks.md)
 instead. The manual Jobs described here have different Service, PVC, and version
 requirements; do not apply these instructions to the portable runner package.
