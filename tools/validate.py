@@ -575,6 +575,13 @@ def validate_benchmark_run(repo: Path, path: Path, run: dict) -> tuple[list[str]
             recipe = load_yaml(recipe_path)
             model = load_yaml(recipe_path.parent.parent.parent / 'model.yaml')
             validate_model_identity(document, recipe, model)
+            snapshot = run.get('workload', {}).get('expectations')
+            if snapshot is not None:
+                from forge_workload_contract import replay_expectations
+                if replay_expectations(snapshot, document) != forge.get('expected_concurrencies'):
+                    raise ValueError('Forge expected concurrencies differ from workload replay')
+                if {'type': 'profile-snapshot', **snapshot['profile_source']} not in run['artifacts']:
+                    raise ValueError('Forge workload snapshot needs its checksummed profile source')
             expected = normalize(document, run_id='forge-' + forge['mlflow_benchmark_run_id'],
                                  deployment_scope=run['deployment_scope'], accelerator_key=profile['accelerator_key'],
                                  expected_concurrencies=forge.get('expected_concurrencies'))[run['harness']]
