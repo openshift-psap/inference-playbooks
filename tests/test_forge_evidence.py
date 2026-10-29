@@ -538,8 +538,11 @@ def test_manifest_bound_product_version_is_not_engine_version(parent_intake):
 
 @pytest.fixture(params=['LeaderWorkerSet', 'LLMInferenceService'])
 def distributed_intake(parent_intake, request):
+    return distributed_fixture(parent_intake, request.param)
+
+
+def distributed_fixture(parent_intake, kind):
     repo, path, _, client, parent, artifacts, raw = parent_intake
-    kind = request.param
     recipe = yaml.safe_load(path.read_text())
     recipe['deployment']['scope'] = 'multi-node'
     stack, version = ('rhoai', '3.5') if kind == 'LLMInferenceService' else ('vllm', '0.24.0')

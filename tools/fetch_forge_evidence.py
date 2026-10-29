@@ -313,6 +313,23 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number):
     if str(env.get('FORGE_FOREIGN_TESTING_PULL_NUMBER')) != str(pr_number):
         raise ValueError('PR attribution mismatch')
     config = document('01__test/001__inference_playbooks_test_dir/config.yaml')['inference_playbooks']
+    workload_context = {}
+    if '/' in config.get('recipe', ''):
+        from forge_bundle_contract import read_bundle
+        path, recipe, platform, deployment, bundle = read_bundle(repo, config, expected_revision, artifact)
+        relative = str(path.relative_to(repo))
+        profile = load_unique_yaml(checked_path(repo, recipe['hardware_profile']).read_text())
+        workload_context = {'playbooks.forge_revision': bundle['forge_revision'],
+                            'playbooks.workload_selection': json.dumps(config.get('workload'))}
+    else:
+        path, recipe, platform, deployment, relative, profile = legacy_execution_launch(
+            client, parent_id, repo, expected_revision, config, document)
+    return {**execution_runtime_values(client, parent_id, recipe, platform, deployment, relative,
+                                      profile, revision, pr_number, artifact, document), **workload_context}
+
+
+def legacy_execution_launch(client, parent_id, repo, expected_revision, config, document):
+    """Historical Forge launch files and transformations, separate from bundle v1."""
     manifest_path = config['manifest_path']
     match = re.fullmatch(r'(models/[^/]+/recipes/[^/]+)/manifests/[^/]+/[^/]+\.yaml', manifest_path)
     if not match:
@@ -349,6 +366,12 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number):
     if (kind == 'LLMInferenceService') != (platform['stack'] == 'rhoai'):
         raise ValueError('execution serving kind disagrees with selected platform')
     validate_launch(repo, manifest_path, expected_revision, deployment)
+    return path, recipe, platform, deployment, relative, profile
+
+
+def execution_runtime_values(client, parent_id, recipe, platform, deployment, relative,
+                             profile, revision, pr_number, artifact, document):
+    kind = deployment['kind']
     log = artifact('01__test/run.log')
     if kind != 'Deployment':
         capture_name = 'lws' if kind == 'LeaderWorkerSet' else 'llmisvc'
@@ -432,6 +455,10 @@ def tested_inputs(repo, relative, expected_revision, require_clean=None):
     inputs.extend(str((path.parent / p['overrides']).relative_to(repo)) for p in recipe['platforms'])
     inputs.extend(str((path.parent / p['pinned_manifest']).relative_to(repo))
                   for p in recipe['platforms'] if p.get('pinned_manifest'))
+    # Forge bundle v1 launches the entire immediate platform directory. Check
+    # inventory additions/removals too, including on metadata-only receipt hits.
+    inputs.extend(str((path.parent / 'manifests' / f'{p["stack"]}-{p["version"]}').relative_to(repo))
+                  for p in recipe['platforms'])
     inputs.extend(str(checked_path(repo, str(path.parent.relative_to(repo) / p['config'])).relative_to(repo))
                   for p in recipe['platforms'] if p.get('config'))
     if require_clean is not None:
@@ -519,9 +546,9 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         artifact_count += 1
         values = {**tags(parent), **tags(child)}
         manifest_bound = False
-        required = ('recipe_path', 'tested_revision', 'hardware_profile', 'hardware_profile_revision',
-                    'model_revision', 'image_digest', 'platform_stack', 'platform_version', 'pr_number', 'command')
-        if current_parent and any(not values.get('playbooks.' + key) for key in required):
+        # Current executions have recorded launch evidence. Even complete tags
+        # must agree with it; tags cannot bypass the versioned bundle contract.
+        if current_parent:
             recorded = execution_values(client, parent_id, repo, expected_revision, pr_number)
             if any(key in values and values[key] != value for key, value in recorded.items()):
                 raise ValueError('Forge attribution tags disagree with recorded execution')
@@ -531,6 +558,17 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         artifact_path, raw = artifact
         document = json.loads(raw)
         safe_artifact(document)
+        expectation_snapshot = None
+        if manifest_bound and values.get('playbooks.forge_revision'):
+            from forge_workload_contract import workload_expectations
+            expectation_snapshot, expected = workload_expectations(
+                client, parent_id, values['playbooks.forge_revision'],
+                json.loads(values['playbooks.workload_selection']), document)
+            if (values.get('playbooks.expected_concurrencies') and
+                    json.loads(values['playbooks.expected_concurrencies']) != expected):
+                raise ValueError('Forge expected concurrency tags disagree with execution workloads')
+            values['playbooks.expected_concurrencies'] = json.dumps(expected, sort_keys=True)
+            safe_artifact(expectation_snapshot)
         model = load_unique_yaml((path.parent.parent.parent / 'model.yaml').read_text())
         validate_model_identity(document, recipe, model)
         for test in document['tests']:
@@ -569,7 +607,10 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
                                    'image_digest': values['playbooks.image_digest'], 'platform': platform},
                    'workload': {'tests': [t.get('labels', {}) for t in document['tests']
                                          if t.get('labels', {}).get('benchmark_tool') == harness]},
-                   'artifacts': [{'type': 'raw-output', 'path': 'kpis.json', 'checksum': checksum}]}
+                    'artifacts': [{'type': 'raw-output', 'path': 'kpis.json', 'checksum': checksum}]}
+            if expectation_snapshot is not None:
+                run['workload']['expectations'] = expectation_snapshot
+                run['artifacts'].append({'type': 'profile-snapshot', **expectation_snapshot['profile_source']})
             directory = checked_path(repo, str(path.parent.relative_to(repo) / 'results' / result['run_id']))
             files = {'result.json': json.dumps(result, indent=2, allow_nan=False) + '\n',
                      'run.yaml': yaml.safe_dump(run, sort_keys=False), 'kpis.json': raw.decode()}
@@ -637,7 +678,10 @@ def main():
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--pr-number', type=int, required=True)
     parser.add_argument('--comment-id', type=int)
-    parser.add_argument('--tested-revision', required=True)
+    parser.add_argument('--tested-revision', required=True,
+                        help='exact recipe SHA recorded by Forge, not the later import/merge commit')
+    parser.add_argument('--require-parent', action='store_true',
+                        help='require a successful primary run and generate an admission receipt')
     parser.add_argument('--repo', type=Path, default=Path.cwd())
     parser.add_argument('--tracking-uri', default=os.environ.get('MLFLOW_TRACKING_URI'))
     parser.add_argument('--workspace', default=os.environ.get('MLFLOW_WORKSPACE', 'forge-sandbox'))
@@ -646,7 +690,8 @@ def main():
     try:
         client = Client(args.tracking_uri, args.workspace, os.environ['MLFLOW_USERNAME'],
                         os.environ['MLFLOW_PASSWORD'], args.insecure)
-        import_parent(client, args.repo.resolve(), args.run_id, args.tested_revision, args.pr_number, args.comment_id)
+        import_parent(client, args.repo.resolve(), args.run_id, args.tested_revision, args.pr_number,
+                      args.comment_id, require_parent=args.require_parent)
     except Exception as error:
         print(f'Forge intake rejected: {type(error).__name__}: {error}', file=sys.stderr)
         return 1
