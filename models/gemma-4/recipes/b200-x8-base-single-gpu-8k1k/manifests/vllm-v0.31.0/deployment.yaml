@@ -38,6 +38,8 @@ spec:
                 secretKeyRef:
                   name: hf-token
                   key: HF_TOKEN
+            - name: HOME
+              value: /tmp
           ports:
             - name: http
               containerPort: 8000

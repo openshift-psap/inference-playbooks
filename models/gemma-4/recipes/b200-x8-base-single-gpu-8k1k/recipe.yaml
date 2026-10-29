@@ -24,6 +24,9 @@ serving:
       cpu: '8'
       memory: 64Gi
   port: 8000
+  env:
+  - name: HOME
+    value: /tmp
   args:
   - flag: --language-model-only
     required: true
