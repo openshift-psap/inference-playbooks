@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "version": "v0.1",
-  "tag": "quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1",
-  "image": "quay.io/rh-ee-thibrahi/inference-playbooks-runner@sha256:84582baa47883b93e8e9762572de7229a81af89bb53232362d8eacb295eead98",
+  "version": "v0.1.1",
+  "tag": "quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.1",
+  "image": "quay.io/rh-ee-thibrahi/inference-playbooks-runner@sha256:aeb597892d3c173970515db4ebbf82f4bb6aa0a31681ca9ecbb1303eb59b72e5",
   "forge_revision": "93b85db135425516eb000de62d2483c62cdacacc",
-  "source_revision": "8dc5c12c63e88ac08c075f70b33ab8460083a246"
+  "source_revision": "5f8720ae84923f77db2db88572cec106bcf71e3d"
 }

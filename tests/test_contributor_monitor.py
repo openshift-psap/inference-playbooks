@@ -157,7 +157,7 @@ def test_monitor_streams_bundle_larger_than_old_expanded_limit(tmp_path):
         def read(self, size):
             return b'\0' * size
     path = tmp_path / 'evidence.tar.gz'
-    with tarfile.open(path, 'w|gz') as archive:
+    with tarfile.open(str(path), 'w|gz') as archive:
         member = tarfile.TarInfo('raw/harness-0.json')
         member.size = 257 * 1024 * 1024
         archive.addfile(member, Zeroes())

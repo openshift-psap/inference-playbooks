@@ -28,7 +28,7 @@ python3 tools/validate.py --current
 ```
 
 The default runner is the published Linux AMD64 image
-**`quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1`**. You do not need to
+**`quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.1`**. You do not need to
 build or publish an image. Preparation reads the release's immutable digest from
 [`benchmarks/runner/release.json`](../benchmarks/runner/release.json), not from a
 moving tag. The launcher pulls that digest when you run the package; anonymous
@@ -215,10 +215,10 @@ under durable retention, not an expiring intake policy.
 
 ### Supported inputs and evidence limits
 
-- Default runner release: `quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1`,
+- Default runner release: `quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.1`,
   pinned in host-side `benchmarks/runner/release.json` to
-  `sha256:84582baa47883b93e8e9762572de7229a81af89bb53232362d8eacb295eead98`.
-  The image records source commit `8dc5c12c63e88ac08c075f70b33ab8460083a246`.
+  `sha256:aeb597892d3c173970515db4ebbf82f4bb6aa0a31681ca9ecbb1303eb59b72e5`.
+  The image records source commit `5f8720ae84923f77db2db88572cec106bcf71e3d`.
   Release metadata is recorded after publication; it is not embedded into its
   own image. The runtime uses the digest captured in each request.
 - Runner: Linux AMD64, Python 3.12, OpenShift CLI 4.19.0, Forge PR #322 commit
