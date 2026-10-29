@@ -12,6 +12,7 @@ optimization_intent: single-GPU text-only serving
 maturity: day-zero
 serving:
   image: docker.io/vllm/vllm-openai:v0.31.0
+  config_overrides: true
   model: google/gemma-4-26B-A4B-it
   parallelism:
     mode: tp
