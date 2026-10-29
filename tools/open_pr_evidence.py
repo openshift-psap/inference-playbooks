@@ -143,6 +143,7 @@ def evidence_path(path):
 
 def collect_changes(repo):
     files = []
+    required = set()
     for entry in git(repo, 'status', '--porcelain=v1', '-z', '--untracked-files=all').stdout.split(b'\0'):
         if not entry:
             continue
@@ -166,10 +167,19 @@ def collect_changes(repo):
                 if reference not in old_refs:
                     if evidence_path(str(Path(path).parent / reference)) != 'result' or not reference.endswith('/run.yaml'):
                         raise ValueError('recipe contains an invalid new evidence reference')
+                    run_dir = Path(path).parent / Path(reference).parent
+                    required.update(str(run_dir / name) for name in FILES)
+                    # Only the execution's anchor run contains its shared receipt.
+                    if (repo / run_dir / RECEIPT).is_file():
+                        required.add(str(run_dir / RECEIPT))
         elif before.returncode == 0:
             raise ValueError('historical evidence is immutable; refusing to replace a run')
         files.append({'path': path, 'contents': base64.b64encode(raw).decode()})
     files.sort(key=lambda item: item['path'])
+    collected = {item['path'] for item in files}
+    for missing in sorted(required - collected):
+        if git(repo, 'cat-file', '-e', f'HEAD:{missing}', check=False).returncode:
+            raise ValueError(f'imported evidence is not collectable: {missing}; check .gitignore on the PR branch')
     if files:
         git(repo, 'add', '--', *(item['path'] for item in files))
     patch = git(repo, 'diff', '--cached', '--binary', '--no-ext-diff', '--no-textconv', 'HEAD', '--').stdout

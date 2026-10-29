@@ -78,6 +78,25 @@ def test_explicit_report_import_and_atomic_existing_branch_publication(open_inta
     assert mutation['branch'] == {'repositoryNameWithOwner': repository, 'branchName': 'contributor/recipe'}
     assert set(mutation['fileChanges']) == {'additions'}
     assert all(workflow.evidence_path(item['path']) for item in mutation['fileChanges']['additions'])
+    additions = {item['path']: item for item in mutation['fileChanges']['additions']}
+    recipe_path = path.relative_to(source).as_posix()
+    recipe = yaml.safe_load(base64.b64decode(additions[recipe_path]['contents']))
+    for reference in recipe['benchmark_runs']:
+        run_dir = Path(recipe_path).parent / Path(reference).parent
+        assert {str(run_dir / name) for name in workflow.FILES} <= additions.keys()
+    assert any(name.endswith('/' + workflow.RECEIPT) for name in additions)
+
+
+@pytest.mark.parametrize('pattern', ['**/results/', '**/result.json', '**/forge-import.json'])
+def test_ignored_evidence_rejected_before_publication(open_intake, pattern):
+    state, _, source, *_ = open_intake
+    (source / '.gitignore').write_text(pattern + '\n')
+    commit_evidence(source)
+    state['pr']['head']['sha'] = workflow.git(source, 'rev-parse', 'HEAD').stdout.decode().strip()
+    with pytest.raises(ValueError, match='imported evidence is not collectable'):
+        prepare(open_intake)
+    assert not (source / 'prepared/plan.json').exists()
+    assert not state['mutations']
 
 
 def test_tooling_merge_does_not_require_another_benchmark(open_intake):
