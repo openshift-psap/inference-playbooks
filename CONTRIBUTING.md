@@ -16,13 +16,19 @@ Create a directory under the target model and open a PR:
 models/<model-id>/recipes/<recipe-id>/
   raw-manifest/
     deployment.yaml          # your working K8s manifest(s)
-    service.yaml             # optional supporting manifests
     README.md                # optional notes
 ```
 
 Use the same `<recipe-id>` convention as full recipes (e.g.,
 `h200-x8-tp8-aggregated-8k1k`). If unsure, use a descriptive name and
 a maintainer will adjust it.
+
+Do not submit Kubernetes `Service` objects. Use operator-managed networking;
+Services created by controllers at runtime are not submitted artifacts. This
+policy applies to raw intake (including preserved submissions), `config/`,
+pinned manifests, and generated `manifests/`, including multi-document bundles
+and Kubernetes `List.items`, regardless of filename. Typed `ServiceList`
+documents are also prohibited, including empty lists.
 
 ### Required information
 
@@ -52,6 +58,7 @@ CI validates raw-manifest submissions for:
 
 - YAML/JSON syntax (no parse errors)
 - No duplicate keys in YAML documents
+- No author-supplied `Service` objects (YAML, YML, or JSON)
 - Directory is under `models/<model-id>/recipes/<recipe-id>/raw-manifest/`
 
 CI does **not** require `recipe.yaml` or schema validation for raw-only

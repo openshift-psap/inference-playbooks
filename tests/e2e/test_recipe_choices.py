@@ -2,6 +2,7 @@
 import copy
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from playwright.sync_api import expect
 
 
@@ -20,7 +21,9 @@ def test_qwen_singleton_readable_card_and_technical_identity(page, served):
     expect(card).to_have_count(1)
     expect(card).to_contain_text('Agentic workload (128K)')
     expect(card).to_contain_text('16 H200 GPUs per replica (declared)')
-    expect(card).to_contain_text('multi-node — rhoai 3.5')
+    expect(card.locator('.recipe-option__platform')).to_have_text('rhoai 3.5')
+    expect(card.locator('.status-badge--scope')).to_have_text('Multi-node')
+    expect(card.locator('.recipe-option__badges .status-badge--pending')).to_have_text('day-zero')
     expect(card).not_to_contain_text(entry['recipe_id'])
     expect(card.locator('input')).to_be_checked()
     expect(card.locator('input')).to_have_value(entry['id'])
@@ -75,6 +78,23 @@ def synthetic_catalog(page, served):
     page.goto(served[0])
     expect(page.locator('.recipe-option')).to_have_count(2)
     return payload
+
+
+@pytest.mark.parametrize('maturity, style', [('day-zero', 'pending'), ('contributed', 'contributed'), ('validated', 'verified'), ('production', 'verified')])
+def test_maturity_and_scope_badges_are_visible_and_preserve_status(page, served, maturity, style):
+    payload = copy.deepcopy(served[1])
+    entry = payload['entries'][0]
+    entry.update(maturity=maturity, scope='single-node')
+    payload['entries'] = [entry]
+    page.route('**/catalog.json', lambda route: route.fulfill(json=payload))
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.goto(served[0])
+    expect(page.locator(f'.recipe-option__badges .status-badge--{style}')).to_have_text(maturity)
+    expect(page.locator('.recipe-option__badges .status-badge--scope')).to_have_text('Single-node')
+    expect(page.locator(f'.model-meta .status-badge--{style}')).to_have_text(maturity)
+    assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+    if maturity in ('day-zero', 'contributed'):
+        expect(page.locator('.status-badge--verified')).to_have_count(0)
 
 
 def test_strict_filters_no_results_and_recovery(page, served):

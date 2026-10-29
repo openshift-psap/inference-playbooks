@@ -22,6 +22,19 @@ function recipeLabel(entry) {
   const accelerators = entry.hardware.data.accelerators;
   return `${workloadLabel(entry.workload_profile)} — ${entry.gpu_allocation.declared_gpus_per_replica ?? 'Unknown'} ${accelerators.model} GPUs per replica (${accelerators.count_per_node} per host) — ${entry.scope} — ${platformKey(entry)}`;
 }
+function isDisaggregated(entry) {
+  return ['prefix', 'disaggregated', 'prefill-decode'].includes(entry.serving.router?.strategy);
+}
+function parallelismRows(parallelism) {
+  const rows = [['Tensor parallelism (TP)', parallelism.tp > 1 ? `${parallelism.tp} GPUs per tensor-parallel group` : '1 GPU (no tensor sharding)']];
+  if (parallelism.pp > 1) rows.push(['Pipeline parallelism (PP)', `${parallelism.pp} pipeline stages`]);
+  if (parallelism.dp > 1) rows.push(['Data parallelism (DP)', `${parallelism.dp} data-parallel ranks`]);
+  return rows;
+}
+function maturityBadge(maturity) {
+  const style = { 'day-zero': 'pending', contributed: 'contributed', validated: 'verified', production: 'verified' }[maturity] || 'neutral';
+  return node('span', maturity, `status-badge status-badge--${style}`);
+}
 function renderRecipeTechnical(entry) {
   const technical = node('details', null, 'recipe-technical');
   technical.append(node('summary', 'Technical recipe identity and source rationale'), node('p', `Recipe ID: ${entry.recipe_id}`), node('p', `Platform entry: ${entry.id} — ${platformKey(entry)}`), sourceLink(entry.source, 'Recipe source'));
@@ -31,6 +44,14 @@ function renderRecipeTechnical(entry) {
     technical.append(node('p', 'Selection rationale — source prose, not a measured recommendation.'), sourceLink(entry.notes_source, 'Selection rationale source'));
     rationale.forEach(text => technical.append(node('p', text)));
   } else technical.append(node('p', 'No selection rationale supplied'));
+  technical.append(table(['Technical detail', 'Value'], [
+    ['Hardware profile', `${entry.hardware.path} revision ${entry.hardware.revision}`],
+    ['Declared serving allocation (per replica)', `${entry.gpu_allocation.declared_gpus_per_replica} GPUs`],
+    ['Image', entry.serving.image], ['Image kind', entry.serving.image_usage?.kind || 'Not classified'],
+    ['Image notes', entry.serving.image_usage?.note || 'None supplied'],
+    ['Optimization target (declared, not a measurement)', entry.optimization_intent], ['Deployment identifier', entry.deployment_mode]
+  ]), sourceLink(entry.hardware.source, 'Hardware profile source'), node('p', entry.command_note));
+  for (const spec of entry.specs) technical.append(node('p', `${spec.label}: ${spec.state === 'resolved' ? JSON.stringify(spec.value) : 'Unverified source note — inspect final artifacts'} (${spec.source})`));
   return technical;
 }
 function dimension(entry, key) {
@@ -176,7 +197,9 @@ function renderModelCard(model, entry) {
     : node('span', 'Unknown'));
   meta.append(organization);
   if (entry) {
-    meta.append(node('span', `Recipe maturity: ${entry.maturity}`));
+    const maturity = node('span', 'Recipe maturity: ');
+    maturity.append(maturityBadge(entry.maturity));
+    meta.append(maturity);
     if (entry.validation.label) meta.append(node('span', entry.validation.label, 'pill--validated'));
     meta.append(node('span', `Engine: ${entry.engine.version || 'Unknown'} (${entry.engine.source || 'unresolved'})`));
   }
@@ -228,10 +251,13 @@ function renderSelectors() {
       radio.dataset.focusKey = `recipe:${entry.id}`;
       radio.setAttribute('aria-label', recipeLabel(entry));
       radio.addEventListener('change', () => { state.entryId = radio.value; updateUrl(); render(); });
+      const badges = node('span', null, 'recipe-option__badges');
+      const scope = node('span', { 'single-node': 'Single-node', 'multi-node': 'Multi-node' }[entry.scope] || entry.scope, 'status-badge status-badge--scope');
+      badges.append(scope, maturityBadge(entry.maturity));
+      if (entry.blocked) badges.append(node('span', 'Blocked', 'status-badge status-badge--pending'));
       label.append(radio, node('span', workloadLabel(entry.workload_profile), 'recipe-option__name'),
         node('span', `${entry.gpu_allocation.declared_gpus_per_replica ?? 'Unknown'} ${entry.hardware.data.accelerators.model} GPUs per replica (declared)`, 'recipe-option__allocation'),
-        node('span', `${entry.scope} — ${platformKey(entry)}`, 'recipe-option__platform'),
-        node('span', `${entry.maturity}${entry.blocked ? ' — blocked' : ''}`, 'recipe-option__maturity'));
+        node('span', platformKey(entry), 'recipe-option__platform'), badges);
       recipes.append(label);
     }
     result.append(recipes);
@@ -239,23 +265,34 @@ function renderSelectors() {
   return result;
 }
 function renderConfigure(entry) {
-  const panel = node('div');
-  panel.append(renderRecipeTechnical(entry));
-  const inventory = entry.hardware.data.accelerators.count_per_node;
-  panel.append(table(['Property', 'Value'], [
-    ['Platform', platformKey(entry)], ['Hardware profile', `${entry.hardware.path} revision ${entry.hardware.revision}`],
-    ['Host inventory (per node)', `${inventory} accelerators`], ['Declared serving allocation (per replica)', `${entry.gpu_allocation.declared_gpus_per_replica} GPUs`],
-    ['Scope', entry.scope], ['Workload', workloadLabel(entry.workload_profile)], ['Optimization intent (declared, not a measurement)', entry.optimization_intent], ['Parallelism', entry.gpu_allocation.parallelism], ['Image', entry.serving.image],
-    ['Image kind', entry.serving.image_usage?.kind || 'Unclassified legacy image'], ['Custom image note', entry.serving.image_usage?.note || null]
-  ]));
-  panel.append(sourceLink(entry.source, 'Recipe source'), node('p', entry.command_note));
-  for (const [role, args] of Object.entries(entry.roles)) {
-    if (args.length) { panel.append(node('h2', `${role} arguments`)); panel.append(table(['Flag', 'Value', 'Why'], args.map(arg => [arg.flag, arg.value ?? null, arg.why]))); }
-  }
-  for (const spec of entry.specs) panel.append(node('p', `${spec.label}: ${spec.state === 'resolved' ? JSON.stringify(spec.value) : 'Unverified source note — inspect final artifacts'} (${spec.source})`));
+  const panel = node('div', null, 'configuration-layout');
+  const manifests = node('section', null, 'configuration-pane configuration-manifests');
+  manifests.setAttribute('aria-label', 'Deployment manifests');
+  manifests.append(node('h2', 'Manifests'));
   for (const artifact of entry.artifacts) {
-    panel.append(node('h2', artifact.kinds.join(', ')), sourceLink(artifact.source, 'Artifact source'), drawer(artifact.name, artifact.body));
+    manifests.append(node('h3', artifact.kinds.join(', ')), sourceLink(artifact.source, 'Artifact source'), drawer(artifact.name, artifact.body));
   }
+  const details = node('section', null, 'configuration-pane configuration-details');
+  details.setAttribute('aria-label', 'Configuration details');
+  details.append(node('h2', 'Configuration details'));
+  const inventory = entry.hardware.data.accelerators.count_per_node;
+  const summary = table(['Property', 'Value'], [
+    ['Checkpoint', entry.serving.model], ['Precision (declared)', entry.quantization || 'Not specified'],
+    ['Hardware', `${inventory} ${entry.hardware.data.accelerators.model} GPUs per node`],
+    ['Platform', platformKey(entry)],
+    ['Deployment scope', { 'single-node': 'Single node', 'multi-node': 'Multiple nodes' }[entry.scope] || entry.scope],
+    ['Deployment type', isDisaggregated(entry) ? 'Separate prefill and decode' : 'Combined prefill and decode'],
+    ...parallelismRows(entry.gpu_allocation.parallelism),
+    ['Benchmark workload target', workloadLabel(entry.workload_profile)]
+  ]);
+  summary.classList.add('configuration-summary');
+  details.append(summary);
+  if (isDisaggregated(entry)) details.append(node('p', 'These parallelism settings describe the recipe’s serving configuration, not the total GPU count across prefill and decode. The manifest defines each role.'));
+  for (const [role, args] of Object.entries(entry.roles)) {
+    if (args.length) { details.append(node('h3', `${role} arguments`)); details.append(table(['Flag', 'Value', 'Why'], args.map(arg => [arg.flag, arg.value ?? null, arg.why]))); }
+  }
+  details.append(renderRecipeTechnical(entry));
+  panel.append(manifests, details);
   return panel;
 }
 // ---- Benchmark charts ----
@@ -522,16 +559,24 @@ function renderBenchmark(entry) {
 function renderNotes(entry, quickstart = false) {
   const panel = node('div');
   if (quickstart && !entry.notes?.quickstart?.length) {
-    panel.append(node('p', 'Quickstart notes have not been supplied for this recipe.'),
-      node('p', 'Examples for future prerequisite notes, not requirements for this recipe: PVC access mode (RWO/RWX), weights pre-download, secrets/access, required operators/networking.'));
+    panel.append(node('p', 'No deployment walkthrough has been supplied for this recipe.'),
+      node('p', 'Open Configuration to review and download the manifests. Cluster setup and verification instructions still need to be documented.'));
     return panel;
   }
   if (!entry.notes) return node('p', 'No optional notes supplied.');
   panel.append(sourceLink(entry.notes_source, 'Notes source'));
-  panel.append(node('p', 'Contributor notes are source prose, not measured benchmark evidence; final deployment artifacts remain authoritative.'));
   if (quickstart) {
-    for (const step of entry.notes.quickstart || []) panel.append(node('h2', step.step), node('p', step.detail));
+    panel.append(node('p', 'Follow the steps in order. Commands are for you to review and run; this page does not execute them.'));
+    for (const step of entry.notes.quickstart || []) {
+      const section = node('section', null, 'quickstart-step');
+      section.append(node('h2', step.step));
+      if (step.detail) section.append(node('p', step.detail));
+      if (step.commands) section.append(drawer('Commands', step.commands, false));
+      if (step.expected) section.append(node('p', `Expected result: ${step.expected}`, 'quickstart-expected'));
+      panel.append(section);
+    }
   } else {
+    panel.append(node('p', 'Contributor notes are source prose, not measured benchmark evidence; final deployment artifacts remain authoritative.'));
     panel.append(drawer('recipe-notes.json', JSON.stringify(entry.notes, null, 2)));
   }
   return panel;

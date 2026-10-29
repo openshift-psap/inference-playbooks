@@ -25,6 +25,8 @@ def open_models(page, served, query='', hostile=False):
                          workload_profile=['guidellm-8k1k', 'aiperf-agentx-128k'][variant])
             entry['platform'] = {'stack': 'vllm', 'version': str(variant + 1)}
             entry['hardware']['accelerator_key'] = f'accelerator-{variant}'
+            # This synthetic flow selects H200 independently of recipe ordering.
+            entry['hardware']['data']['accelerators']['model'] = 'H200'
             payload['entries'].append(entry)
     page.route('**/catalog.json', lambda route: route.fulfill(json=payload))
     page.goto(served[0] + query)
