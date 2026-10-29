@@ -57,8 +57,8 @@ def scan(image, engine):
                     '--output', '/reports/report.json']
         result = run(command)
         report = reports / 'report.json'
-        if not report.is_file() or report.stat().st_size > 32 * 1024 * 1024:
-            raise ScanFailure('scanner did not produce a bounded report')
+        if not report.is_file():
+            raise ScanFailure('scanner did not produce a report')
         document = json.loads(report.read_text())
         if (not isinstance(document, dict) or document.get('SchemaVersion') != 2
                 or document.get('ArtifactType') != 'container_image'

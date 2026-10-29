@@ -14,11 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Test portable bundle and maintainer import contract
         run: |
           python3 -m pip install -r tools/requirements.txt pytest==8.3.4
-          python3 -m pytest tests/test_contributor.py tests/test_runner_image_security.py -q
+          python3 -m pytest tests/test_contributor.py tests/test_contributor_monitor.py tests/test_runner_image_security.py -q
       - name: Build pinned Forge runner (never publish from PR CI)
         run: docker build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:ci .
       - name: Gate built runner on secret scanning (never upload matches)

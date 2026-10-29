@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import gzip
 import hashlib
-import io
 import json
 from pathlib import Path
 import re
@@ -23,7 +21,6 @@ STAGES = {
     'finished': 'Finished',
 }
 OUTCOMES = {'succeeded', 'failed', 'interrupted', 'collection-failed'}
-MAX_TOTAL = 256 * 1024 * 1024
 
 
 def timestamp():
@@ -56,23 +53,24 @@ def completed_bundle(output):
     if not path.exists() or not sidecar.exists():
         return None
     digest = sidecar.read_text().strip()
-    if path.stat().st_size > MAX_TOTAL or not re.fullmatch(r'sha256:[a-f0-9]{64}', digest):
-        raise ValueError('invalid bundle checksum or size')
+    if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest):
+        raise ValueError('invalid bundle checksum')
     hasher = hashlib.sha256()
     with path.open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             hasher.update(chunk)
     if 'sha256:' + hasher.hexdigest() != digest:
         raise ValueError('bundle checksum mismatch')
-    with gzip.open(path, 'rb') as stream:
-        expanded = stream.read(MAX_TOTAL + 1)
-    if len(expanded) > MAX_TOTAL:
-        raise ValueError('expanded bundle exceeds progress reader limit')
-    with tarfile.open(fileobj=io.BytesIO(expanded), mode='r:') as archive:
-        members = [member for member in archive if member.name == 'bundle.json']
-        if len(members) != 1 or not members[0].isfile() or members[0].size > 1024 * 1024:
-            raise ValueError('missing or unsafe bundle envelope')
-        envelope = json.load(archive.extractfile(members[0]))
+    envelope, seen = None, False
+    with tarfile.open(path, mode='r|gz') as archive:
+        for member in archive:
+            if member.name == 'bundle.json':
+                if seen or not member.isfile() or member.issparse():
+                    raise ValueError('missing or unsafe bundle envelope')
+                seen = True
+                envelope = json.load(archive.extractfile(member))
+    if not isinstance(envelope, dict):
+        raise ValueError('missing or unsafe bundle envelope')
     if envelope.get('schema_version') != 1 or envelope.get('outcome') not in OUTCOMES:
         raise ValueError('unsupported bundle outcome')
     return {'schema_version': 1, 'run_id': envelope['request']['run_id'], 'stage': 'finished',
@@ -111,14 +109,16 @@ def snapshot(output: Path):
             return {'stage': 'unknown', 'outcome': 'unknown',
                     'note': 'No progress snapshot yet (not started, or an older runner).'}
     except json.JSONDecodeError:
-        return {'stage': 'unknown', 'outcome': 'unknown', 'note': 'Progress snapshot is not readable yet.'}
+        state = completed_bundle(output)
+        if state is None:
+            return {'stage': 'unknown', 'outcome': 'unknown', 'note': 'Progress snapshot is not readable yet.'}
     if not isinstance(state, dict) or state.get('schema_version') != 1 or state.get('stage') not in STAGES:
         raise ValueError('unsupported progress snapshot')
     if state.get('outcome') not in OUTCOMES | {'running'}:
         raise ValueError('unsupported progress outcome')
     if state['stage'] == 'finished' and state['outcome'] not in OUTCOMES:
         raise ValueError('finished progress requires a final outcome')
-    if not re.fullmatch(r'contributor-[a-f0-9]{32}', state.get('run_id', '')):
+    if not isinstance(state.get('run_id'), str) or not re.fullmatch(r'contributor-[a-f0-9]{32}', state['run_id']):
         raise ValueError('invalid progress run identity')
     if state['stage'] != 'finished':
         completed = completed_bundle(output)

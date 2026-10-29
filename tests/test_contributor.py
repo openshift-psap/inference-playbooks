@@ -14,11 +14,13 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tools'))
 
-from contributor_bundle import (FORGE_REVISION, LEGACY_FORGE_REVISION, MAX_FILE, checksum, json_bytes,
-                                json_load, read_archive, relative, replay, shareable, validate_request, write_archive)
+from contributor_bundle import (FORGE_REVISION, LEGACY_FORGE_REVISION, checksum, json_bytes,
+                                json_load, read_archive, relative, replay, shareable, validate_request, write_archive,
+                                validate_harness_invocation)
 from contributor_security import UIDAdmissionRejected, admit_manifest, check_runtime_uids, effective_uids
 from import_contributor import import_bundle, upload_archive
 from prepare_contributor import prepare
+import prepare_contributor as preparation
 from run_contributor import execute, snapshot_transport, standalone_overrides
 from validate import validate_benchmark_run
 
@@ -83,7 +85,9 @@ def evidence(source, tmp_path):
     pods = {'kind': 'List', 'items': [{'kind': 'Pod', 'spec': copy.deepcopy(launch['spec']['template']['spec']),
             'status': {'containerStatuses': [{'name': 'vllm', 'ready': True, 'imageID': 'sha256:' + 'c' * 64}]}}]}
     files['runtime.json'] = json_bytes({'launch': launch, 'pods_before': pods, 'pods_after': pods,
-                                      'harness_invocation': {'image': request['harness_image']},
+                                      'harness_invocation': {'image': request['harness_image'], 'guidellm_args': [
+                                          '--data=prompt_tokens=8000,output_tokens=1000',
+                                          '--rate=1,4,16,32,64,128', '--max-seconds=300']},
                                       'uid_admission': decisions})
     files['result.json'] = json_bytes(replay(request, files))
     files['raw/harness-0.json'] = json_bytes({'synthetic_fixture': True, 'metrics': {'requests': 100}})
@@ -216,7 +220,7 @@ def test_noncanonical_paths(name):
         relative(name)
 
 
-@pytest.mark.parametrize('mode', ['symlink', 'hardlink', 'device', 'executable', 'duplicate', 'oversize'])
+@pytest.mark.parametrize('mode', ['symlink', 'hardlink', 'device', 'executable', 'duplicate'])
 def test_unsafe_archive_members(evidence, tmp_path, mode):
     _, _, _, _, _, _ = evidence
     path = tmp_path / 'unsafe.tar.gz'
@@ -231,15 +235,9 @@ def test_unsafe_archive_members(evidence, tmp_path, mode):
             info.type = tarfile.CHRTYPE
         elif mode == 'executable':
             info.mode = 0o755
-        elif mode == 'oversize':
-            info.size = MAX_FILE + 1
-        if mode != 'oversize':
+        archive.addfile(info, io.BytesIO(b''))
+        if mode == 'duplicate':
             archive.addfile(info, io.BytesIO(b''))
-            if mode == 'duplicate':
-                archive.addfile(info, io.BytesIO(b''))
-        else:
-            # tar header alone is sufficient: rejection precedes reading payload.
-            archive.fileobj.write(info.tobuf())
     with pytest.raises(ValueError, match='archive member'):
         read_archive(path, checksum(path.read_bytes()))
 
@@ -258,6 +256,14 @@ def test_checksum_and_inventory(evidence, tmp_path):
 def test_standalone_disables_every_internal_integration(evidence):
     _, _, request, _, _, _ = evidence
     overrides = standalone_overrides(request, 'benchmark')
+    required = {
+        'caliper.export.backend.mlflow.enabled', 'caliper.export.notifications.enabled',
+        'caliper.postprocess.s3.import.enabled', 'caliper.postprocess.s3.export.enabled',
+        'caliper.postprocess.analyze.enabled', 'caliper.postprocess.visualize.enabled',
+        'caliper.postprocess.kpi.dashboard_csv.enabled',
+        'caliper.postprocess.kpi.artifacts_to_ai_data.enabled', 'agentic.enabled',
+    }
+    assert all(key in overrides and overrides[key] is False for key in required)
     for key, value in overrides.items():
         if key.endswith('.enabled'):
             assert value is False
@@ -271,6 +277,49 @@ def test_pin_is_consistent_with_image_and_guide():
     assert f'forge-revision="{FORGE_REVISION}"' in containerfile
     assert f"revision = '{FORGE_REVISION}'" in containerfile
     assert FORGE_REVISION in (REPO / 'docs/contributor-benchmarks.md').read_text()
+
+
+def test_published_runner_default_matches_release_metadata():
+    release = json_load(preparation.RELEASE_FILE.read_bytes())
+    assert release['version'] == 'v0.1'
+    assert release['tag'] == 'quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1'
+    assert release['forge_revision'] == FORGE_REVISION
+    assert preparation.released_runner_image() == release['image']
+    assert release['image'].startswith('quay.io/rh-ee-thibrahi/inference-playbooks-runner@sha256:')
+    assert release['image'].split('@', 1)[1] in (REPO / 'docs/contributor-benchmarks.md').read_text()
+
+
+@pytest.mark.parametrize('key,value', [('schema_version', True), ('version', 'latest'),
+                                     ('tag', 'quay.io/example/wrong:v0.1'), ('image', 'quay.io/example/runner:v0.1'),
+                                     ('forge_revision', '0' * 40), ('source_revision', None)])
+def test_published_runner_default_rejects_inconsistent_metadata(tmp_path, monkeypatch, key, value):
+    release = json_load(preparation.RELEASE_FILE.read_bytes())
+    release[key] = value
+    path = tmp_path / 'release.json'
+    path.write_bytes(json_bytes(release))
+    monkeypatch.setattr(preparation, 'RELEASE_FILE', path)
+    with pytest.raises(ValueError, match='runner release'):
+        preparation.released_runner_image()
+
+
+@pytest.mark.parametrize('override', [False, True])
+def test_prepare_cli_uses_published_digest_unless_overridden(source, tmp_path, monkeypatch, override):
+    repo, root, _ = source
+    output = tmp_path / 'cli-package'
+    arguments = ['prepare_contributor.py', str((root / 'recipe.yaml').relative_to(repo)),
+                 '--repo', str(repo), '--stack', 'vllm', '--version', 'v0.24.0',
+                 '--workload', 'guidellm-smoke', '--harness-image',
+                 'ghcr.io/vllm-project/guidellm@sha256:' + 'b' * 64, '--output', str(output)]
+    expected = preparation.released_runner_image()
+    if override:
+        expected = 'quay.io/example/custom-runner@sha256:' + 'c' * 64
+        arguments += ['--runner-image', expected]
+        monkeypatch.setattr(preparation, 'RELEASE_FILE', tmp_path / 'absent.json')
+    monkeypatch.setattr(sys, 'argv', arguments)
+    assert preparation.main() == 0
+    request = json_load((output / 'request.json').read_bytes())
+    assert request['runner_image'] == expected
+    assert expected in (output / 'run.sh').read_text()
 
 
 def test_unknown_forge_pin_is_rejected(evidence):
@@ -455,14 +504,17 @@ def test_input_closure_cannot_drop_an_override(evidence, tmp_path):
     assert not (root / 'results').exists()
 
 
-def test_decompression_is_bounded_before_tar_headers(tmp_path, monkeypatch):
-    import gzip
-    import contributor_bundle
-    path = tmp_path / 'bomb.tar.gz'
-    path.write_bytes(gzip.compress(b'x' * 100000))
-    monkeypatch.setattr(contributor_bundle, 'MAX_TOTAL', 1024)
-    with pytest.raises(ValueError, match='expanded bundle exceeds'):
-        read_archive(path, checksum(path.read_bytes()))
+def test_large_native_artifact_is_not_rejected_by_byte_size(evidence, tmp_path):
+    repo, _, request, files, _, _ = evidence
+    files['raw/harness-0.json'] = json_bytes({'native_payload': 'x' * (33 * 1024 * 1024)})
+    runtime = json_load(files['runtime.json'])
+    runtime['native_exports'][0]['original_checksum'] = checksum(files['raw/harness-0.json'])
+    runtime['native_exports'][0]['export_checksum'] = checksum(files['raw/harness-0.json'])
+    files['runtime.json'] = json_bytes(runtime)
+    path = tmp_path / 'large.tar.gz'
+    digest = write_archive(path, request, 'succeeded', files)
+    assert read_archive(path, digest)[1]['raw/harness-0.json'] == files['raw/harness-0.json']
+    assert import_bundle(repo, path, digest)['completeness'] == 'full-sweep'
 
 
 def test_cyclic_yaml_privacy_walk_is_bounded():
@@ -663,3 +715,305 @@ def test_import_allows_only_standard_injected_service_account_mount(evidence, tm
     else:
         with pytest.raises(ValueError, match='runtime serving configuration differs'):
             import_bundle(repo, path, digest)
+
+
+@pytest.mark.parametrize('field', ['runner_image', 'harness_image'])
+def test_request_private_image_endpoints_reject_at_prepare_and_intake(evidence, tmp_path, field):
+    repo, root, request, files, _, _ = evidence
+    request[field] = 'registry.example.internal/image@sha256:' + 'a' * 64
+    with pytest.raises(ValueError, match='private endpoint'):
+        prepare(repo, str((root / 'recipe.yaml').relative_to(repo)), 'vllm', 'v0.24.0',
+                'guidellm-8k1k', request['runner_image'], request['harness_image'], tmp_path / 'private-package')
+    bundle = tmp_path / 'private-request.tar.gz'
+    digest = write_archive(bundle, request, 'succeeded', files)
+    with pytest.raises(ValueError, match='private endpoint'):
+        read_archive(bundle, digest)
+
+
+@pytest.mark.parametrize('registry', ['localhost', 'quay.io/example'])
+def test_request_privacy_guard_preserves_supported_runner_references(evidence, registry):
+    _, _, request, files, _, _ = evidence
+    request['runner_image'] = registry + '/runner@sha256:' + 'a' * 64
+    validate_request(request, files)
+
+
+@pytest.mark.parametrize('change', ['replace', 'omit', 'rename', 'extra'])
+def test_replay_binds_native_artifacts_to_runtime_inventory(evidence, change):
+    repo, _, _, _, bundle, digest = evidence
+    report = import_bundle(repo, bundle, digest, apply=True, reviewed=True)
+    path = Path(report['destination']) / 'run.yaml'
+    run = yaml.safe_load(path.read_text())
+    artifact = next(a for a in run['artifacts'] if a.get('path', '').startswith('raw-harness-'))
+    if change == 'replace':
+        (path.parent / artifact['path']).write_bytes(json_bytes({'different_execution': True}))
+        artifact['checksum'] = checksum((path.parent / artifact['path']).read_bytes())
+    elif change == 'omit':
+        run['artifacts'].remove(artifact)
+    else:
+        name = 'raw-harness-99.json'
+        (path.parent / name).write_bytes((path.parent / artifact['path']).read_bytes())
+        if change == 'rename':
+            artifact['path'] = name
+        else:
+            run['artifacts'].append({**artifact, 'path': name})
+    errors = validate_benchmark_run(repo, path, run)[0]
+    assert 'native export provenance' in str(errors)
+
+
+@pytest.mark.parametrize('field', ['prompt_toks', 'output_toks'])
+@pytest.mark.parametrize('value', ['1', 1, True, [], None])
+def test_replay_rejects_mismatched_or_invalid_token_labels(evidence, field, value):
+    _, _, request, files, _, _ = evidence
+    document = json_load(files['kpis.json'])
+    document['tests'][0]['labels'][field] = value
+    files['kpis.json'] = json_bytes(document)
+    with pytest.raises(ValueError, match='token'):
+        replay(request, files)
+
+
+def test_replay_accepts_matching_token_labels_and_historical_absence(evidence):
+    _, _, request, files, _, _ = evidence
+    assert replay(request, files)['completeness'] == 'full-sweep'
+    document = json_load(files['kpis.json'])
+    document['tests'][0]['labels'].update(prompt_toks='8000.0', output_toks=1000)
+    files['kpis.json'] = json_bytes(document)
+    assert replay(request, files)['completeness'] == 'full-sweep'
+
+
+@pytest.mark.parametrize('prompt_tokens', [None, 128, '128.0', 1])
+def test_aiperf_kpi_token_labels_match_requested_workload(evidence, prompt_tokens):
+    _, _, request, files, _, _ = evidence
+    request['workload'] = 'aiperf-smoke'
+    labels = {'benchmark_tool': 'aiperf', 'benchmark_key': 'aiperf-smoke', 'model_name': 'example/model',
+              'served_model': 'example/model', 'concurrency': '1', 'output_toks': 64}
+    if prompt_tokens is not None:
+        labels['prompt_toks'] = prompt_tokens
+    files['kpis.json'] = json_bytes({'tests': [{'labels': labels, 'kpis': [
+        {'kpi_id': 'aiperf_output_token_throughput_avg', 'is_curve': False, 'value': 100}]}]})
+    if prompt_tokens == 1:
+        with pytest.raises(ValueError, match='token labels'):
+            replay(request, files)
+    else:
+        assert replay(request, files)['completeness'] == 'smoke'
+
+
+@pytest.mark.parametrize('labels', [[], None, 1, 'invalid'])
+def test_malformed_kpi_labels_report_validation_error_without_traceback(evidence, labels):
+    repo, _, _, _, bundle, digest = evidence
+    report = import_bundle(repo, bundle, digest, apply=True, reviewed=True)
+    path = Path(report['destination']) / 'run.yaml'
+    document = json_load((path.parent / 'kpis.json').read_bytes())
+    document['tests'][0]['labels'] = labels
+    (path.parent / 'kpis.json').write_bytes(json_bytes(document))
+    errors = validate_benchmark_run(repo, path, yaml.safe_load(path.read_text()))[0]
+    assert 'KPI labels must be a mapping' in str(errors)
+
+
+@pytest.mark.parametrize('pod_uid,container_uid', [(65534, None), (65534, 12345), (None, 12345)])
+def test_preserve_probe_rejects_mutated_authored_effective_uid(source, pod_uid, container_uid):
+    _, _, manifest = source
+    spec = manifest['spec']['template']['spec']
+    if pod_uid is None:
+        del spec['securityContext']['runAsUser']
+    if container_uid is not None:
+        spec['containers'][0]['securityContext'] = {'runAsUser': container_uid}
+    before = copy.deepcopy(manifest)
+    def probe(pod):
+        pod = copy.deepcopy(pod)
+        pod['spec']['containers'][0]['securityContext'] = {'runAsUser': 1000123000}
+        return pod
+    with pytest.raises(ValueError, match='authored effective UID'):
+        admit_manifest(manifest, 'benchmark', probe, allow_uid_omission=False)
+    assert manifest == before
+
+
+def test_preserve_probe_accepts_platform_uid_when_no_uid_was_authored(source):
+    _, _, manifest = source
+    del manifest['spec']['template']['spec']['securityContext']['runAsUser']
+    def probe(pod):
+        pod = copy.deepcopy(pod)
+        pod['spec']['securityContext']['runAsUser'] = 1000123000
+        return pod
+    assert admit_manifest(manifest, 'benchmark', probe, allow_uid_omission=False)[0]['admitted_uids'] == {'vllm': 1000123000}
+
+
+def test_launcher_mounts_only_selected_kubeconfig(evidence, tmp_path):
+    import json
+    import os
+    _, _, request, _, _, _ = evidence
+    credentials = tmp_path / 'shared configs'
+    credentials.mkdir()
+    selected = credentials / 'selected.yaml'
+    selected.write_text('synthetic credentials')
+    (credentials / 'unrelated.yaml').write_text('must not be mounted')
+    capture = tmp_path / 'engine-args.json'
+    engine = tmp_path / 'fake-engine'
+    engine.write_text('#!' + sys.executable + '\nimport json,sys\nfrom pathlib import Path\n'
+                      + 'Path(' + repr(str(capture)) + ').write_text(json.dumps(sys.argv[1:]))\n')
+    engine.chmod(0o755)
+    subprocess.run([str(tmp_path / 'package/run.sh'), str(selected), 'context', 'benchmark',
+                    str(tmp_path / 'run-output')], check=True, env={**os.environ, 'CONTAINER_ENGINE': str(engine)})
+    arguments = json.loads(capture.read_text())
+    mounts = [arguments[i + 1] for i, arg in enumerate(arguments) if arg == '-v']
+    assert str(selected) + ':/credentials/kubeconfig:ro' in mounts
+    assert not any(mount.startswith(str(credentials) + ':') for mount in mounts)
+    assert 'KUBECONFIG=/credentials/kubeconfig' in arguments
+    assert request['runner_image'] in arguments
+
+
+@pytest.mark.parametrize('prefix', ['s3://evidence', 's3://evidence/', 's3://evidence//accepted',
+                                    's3://evidence///accepted///'])
+def test_s3_planning_and_upload_use_identical_keys(evidence, monkeypatch, prefix):
+    import base64
+    repo, _, _, _, bundle, digest = evidence
+    encoded = base64.b64encode(bytes.fromhex(digest[7:])).decode()
+    original_run = subprocess.run
+    calls = []
+    def run(argv, **kwargs):
+        if argv[0] == 'aws':
+            calls.append(argv)
+            return SimpleNamespace(returncode=0, stdout=json_bytes({'ChecksumSHA256': encoded}))
+        return original_run(argv, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', run)
+    report = import_bundle(repo, bundle, digest, apply=True, reviewed=True, s3_prefix=prefix)
+    path = Path(report['destination']) / 'run.yaml'
+    run = yaml.safe_load(path.read_text())
+    uri = next(a['uri'] for a in run['artifacts'] if 'uri' in a)
+    assert uri == 's3://evidence/' + calls[0][calls[0].index('--key') + 1]
+    assert validate_benchmark_run(repo, path, run)[0] == []
+
+
+@pytest.mark.parametrize('phase', ['artifact', 'recipe'])
+def test_interrupted_staging_preserves_final_files_and_import_can_retry(evidence, monkeypatch, phase):
+    repo, root, _, _, bundle, digest = evidence
+    original_recipe = (root / 'recipe.yaml').read_bytes()
+    original_write = Path.write_bytes
+    failed = []
+    def write(path, data):
+        if path.name == 'payload' and ((b'benchmark_runs:' in data) == (phase == 'recipe')) and not failed:
+            failed.append(path)
+            original_write(path, data[:len(data) // 2])
+            raise OSError('synthetic interrupted staging write')
+        return original_write(path, data)
+    monkeypatch.setattr(Path, 'write_bytes', write)
+    with pytest.raises(OSError, match='interrupted staging'):
+        import_bundle(repo, bundle, digest, apply=True, reviewed=True)
+    assert (root / 'recipe.yaml').read_bytes() == original_recipe
+    assert not failed[0].exists()
+    if phase == 'artifact':
+        assert not list((root / 'results').glob('*/request.json'))
+    report = import_bundle(repo, bundle, digest, apply=True, reviewed=True)
+    assert report['applied']
+    path = Path(report['destination']) / 'run.yaml'
+    assert validate_benchmark_run(repo, path, yaml.safe_load(path.read_text()))[0] == []
+
+
+def test_atomic_recipe_update_preserves_permissions(evidence):
+    import stat
+    repo, root, _, _, bundle, digest = evidence
+    path = root / 'recipe.yaml'
+    path.chmod(0o640)
+    import_bundle(repo, bundle, digest, apply=True, reviewed=True)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+@pytest.mark.parametrize('matching', [True, False])
+def test_atomic_artifact_publication_does_not_overwrite_racing_writer(tmp_path, monkeypatch, matching):
+    import import_contributor as importer
+    directory = tmp_path / 'results/run'
+    directory.mkdir(parents=True)
+    path = directory / 'result.json'
+    original_link = importer.os.link
+    existing = b'expected' if matching else b'conflicting'
+    def link(source, target):
+        target.write_bytes(existing)
+        original_link(source, target)
+    monkeypatch.setattr(importer.os, 'link', link)
+    if matching:
+        importer.atomic_write(path, b'expected')
+    else:
+        with pytest.raises(ValueError, match='immutable run'):
+            importer.atomic_write(path, b'expected')
+    assert path.read_bytes() == existing
+
+
+def test_atomic_recipe_publication_preserves_concurrent_edit(tmp_path, monkeypatch):
+    import import_contributor as importer
+    path = tmp_path / 'recipe.yaml'
+    path.write_text('original')
+    original_write = Path.write_bytes
+    def write(staged, data):
+        result = original_write(staged, data)
+        path.write_text('concurrent')
+        return result
+    monkeypatch.setattr(Path, 'write_bytes', write)
+    with pytest.raises(ValueError, match='recipe changed during import'):
+        importer.atomic_write(path, b'updated', original='original')
+    assert path.read_text() == 'concurrent'
+
+
+def test_atomic_recipe_replace_failure_preserves_original(evidence, monkeypatch):
+    import import_contributor as importer
+    repo, root, _, _, bundle, digest = evidence
+    original = (root / 'recipe.yaml').read_bytes()
+    def replace(*args):
+        raise OSError('synthetic replace failure')
+    with monkeypatch.context() as patch:
+        patch.setattr(importer.os, 'replace', replace)
+        with pytest.raises(OSError, match='replace failure'):
+            import_bundle(repo, bundle, digest, apply=True, reviewed=True)
+    assert (root / 'recipe.yaml').read_bytes() == original
+    assert not list(root.glob('.contributor-import-*'))
+    assert import_bundle(repo, bundle, digest, apply=True, reviewed=True)['applied']
+
+
+def test_leftover_staging_outside_run_does_not_block_import(evidence):
+    repo, root, _, _, bundle, digest = evidence
+    leftover = root / 'results/.contributor-import-crashed/payload'
+    leftover.parent.mkdir(parents=True)
+    leftover.write_bytes(b'partial staged bytes')
+    assert import_bundle(repo, bundle, digest, apply=True, reviewed=True)['applied']
+    assert leftover.read_bytes() == b'partial staged bytes'
+
+
+@pytest.mark.parametrize('args', [
+    ['--data=output_tokens=1000,prompt_tokens=8000', '--rate=1.0,4,16,32,64,128', '--max-seconds=300.0'],
+    ['--data', 'kind=synthetic_text,prompt_tokens=8000,output_tokens=1000', '--rate', '1,4,16,32,64,128',
+     '--max-seconds', '300', '--rate-type', 'concurrent'],
+])
+def test_harness_workload_accepts_equivalent_guidellm_arguments(evidence, args):
+    _, _, request, _, _, _ = evidence
+    validate_harness_invocation(request, {'image': request['harness_image'], 'guidellm_args': args})
+
+
+@pytest.mark.parametrize('change', ['data', 'rate', 'max-seconds', 'rate-type', 'missing', 'duplicate'])
+def test_import_rejects_inconsistent_recorded_guidellm_workload(evidence, tmp_path, change):
+    repo, _, request, files, _, _ = evidence
+    runtime = json_load(files['runtime.json'])
+    args = runtime['harness_invocation']['guidellm_args']
+    replacements = {'data': '--data=prompt_tokens=1,output_tokens=2', 'rate': '--rate=999',
+                    'max-seconds': '--max-seconds=1', 'rate-type': '--rate-type=throughput'}
+    if change == 'missing':
+        del runtime['harness_invocation']['guidellm_args']
+    elif change == 'duplicate':
+        args.append('--rate=999')
+    else:
+        args[:] = [arg for arg in args if not arg.startswith('--' + change + '=')]
+        args.append(replacements[change])
+    files['runtime.json'] = json_bytes(runtime)
+    path = tmp_path / 'wrong-invocation.tar.gz'
+    digest = write_archive(path, request, 'succeeded', files)
+    with pytest.raises(ValueError, match='workload'):
+        import_bundle(repo, path, digest)
+
+
+@pytest.mark.parametrize('key', ['input_tokens', 'output_tokens', 'concurrency', 'request_count'])
+@pytest.mark.parametrize('value', [None, True, 999])
+def test_aiperf_recorded_workload_parameters_must_match(key, value):
+    request = {'workload': 'aiperf-smoke', 'harness_image': 'quay.io/example/aiperf@sha256:' + 'a' * 64}
+    invocation = {'image': request['harness_image'], 'input_tokens': '128', 'output_tokens': 64,
+                  'concurrency': 1.0, 'request_count': 10}
+    validate_harness_invocation(request, invocation)
+    invocation[key] = value
+    with pytest.raises(ValueError, match='workload'):
+        validate_harness_invocation(request, invocation)

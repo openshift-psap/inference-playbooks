@@ -72,6 +72,11 @@ def admit_manifest(manifest, namespace, probe, *, allow_uid_omission=True):
         declared_names = {c['name'] for c in spec['containers']}
         if not declared_names.issubset(uids):
             raise ValueError('admission response omitted a declared container')
+        if mode == 'preserve':
+            for container in spec['containers']:
+                declared = container.get('securityContext', {}).get('runAsUser', uid)
+                if declared is not None and uids[container['name']] != declared:
+                    raise ValueError('admission changed the authored effective UID')
         account = spec.get('serviceAccountName', 'default')
         if admitted['spec'].get('serviceAccountName', 'default') != account:
             raise ValueError('admission changed the intended service account')

@@ -10,17 +10,16 @@ import io
 import json
 import re
 import tarfile
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 
 from fetch_forge_evidence import safe_artifact
-from forge_model_identity import validate_model_identity
+from forge_model_identity import kpi_labels, validate_model_identity
 from normalize_kpis import normalize
 from recipe_evidence import load_unique_yaml, load_unique_yaml_all
 
 FORGE_REVISION = '93b85db135425516eb000de62d2483c62cdacacc'
 LEGACY_FORGE_REVISION = '768a285851ade70d0d5737f9bd90564350410469'
-MAX_FILE = 32 * 1024 * 1024
-MAX_TOTAL = 256 * 1024 * 1024
 MAX_FILES = 1024
 IMAGE = r'[^\s/@]+(?:/[^\s/@]+)+@sha256:[a-f0-9]{64}'
 WORKLOADS = {
@@ -95,28 +94,22 @@ def shareable(value, _budget=None, _depth=0):
 def read_archive(path: Path, expected_checksum: str) -> tuple[dict, dict[str, bytes]]:
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', expected_checksum):
         raise ValueError('explicit SHA-256 required')
-    if path.stat().st_size > MAX_TOTAL:
-        raise ValueError('compressed bundle exceeds limit')
     raw = path.read_bytes()
     if checksum(raw) != expected_checksum:
         raise ValueError('bundle checksum mismatch')
-    files, size = {}, 0
+    files = {}
     # No extractall, filesystem writes, symlinks, devices, sparse files or executables.
-    # Bound decompression before tar parsing (including PAX/GNU extended headers).
-    with gzip.GzipFile(fileobj=io.BytesIO(raw), mode='rb') as zipped:
-        expanded = zipped.read(MAX_TOTAL + 1)
-    if len(expanded) > MAX_TOTAL:
-        raise ValueError('expanded bundle exceeds limit')
-    with tarfile.open(fileobj=io.BytesIO(expanded), mode='r:') as archive:
+    # Stream tar decoding rather than holding a second, fully expanded archive.
+    # Artifact byte sizes are not capped; memory/storage must fit the evidence.
+    with tarfile.open(fileobj=io.BytesIO(raw), mode='r|gz') as archive:
         for member in archive:
             name = relative(member.name)
             if (not member.isfile() or member.issparse() or member.mode & 0o111
-                    or name in files or member.size < 0 or member.size > MAX_FILE):
-                raise ValueError('unsafe, duplicate, or oversized archive member')
-            size += member.size
-            if size > MAX_TOTAL or len(files) >= MAX_FILES:
-                raise ValueError('expanded bundle exceeds limit')
-            files[name] = archive.extractfile(member).read(MAX_FILE + 1)
+                    or name in files or member.size < 0):
+                raise ValueError('unsafe or duplicate archive member')
+            if len(files) >= MAX_FILES:
+                raise ValueError('bundle exceeds file-count limit')
+            files[name] = archive.extractfile(member).read()
             if len(files[name]) != member.size:
                 raise ValueError('truncated archive member')
     envelope = json_load(files.pop('bundle.json'))
@@ -140,9 +133,8 @@ def read_archive(path: Path, expected_checksum: str) -> tuple[dict, dict[str, by
 
 
 def write_archive(path: Path, request: dict, outcome: str, files: dict[str, bytes]) -> str:
-    if (len(files) >= MAX_FILES or any(len(data) > MAX_FILE for data in files.values())
-            or sum(len(data) for data in files.values()) > MAX_TOTAL // 2):
-        raise ValueError('evidence exceeds portable bundle limits; keep private diagnostics local')
+    if len(files) >= MAX_FILES:
+        raise ValueError('bundle exceeds file-count limit')
     envelope = {'schema_version': 1, 'request': request, 'outcome': outcome,
                 'files': {relative(name): checksum(data) for name, data in files.items()}}
     payload = {'bundle.json': json_bytes(envelope), **files}
@@ -164,6 +156,7 @@ def validate_request(request: dict, files: dict[str, bytes]):
     if (not isinstance(request, dict) or set(request) != required
             or type(request['schema_version']) is not int or request['schema_version'] != 1):
         raise ValueError('unsupported request format')
+    shareable(request)
     if not re.fullmatch(r'[a-f0-9]{40}', request['tested_revision']):
         raise ValueError('tested revision must be an immutable Git commit')
     if request['forge_revision'] not in {FORGE_REVISION, LEGACY_FORGE_REVISION}:
@@ -246,16 +239,86 @@ def replay(request: dict, files: dict[str, bytes]) -> dict:
     workload = WORKLOADS[request['workload']]
     harness = workload['harness']
     for test in document['tests']:
-        labels = test.get('labels', {})
+        labels = kpi_labels(test)
         if (labels.get('benchmark_tool') != harness or labels.get('benchmark_key') != workload['key']
                 or labels.get('served_model') != recipe['serving']['model']):
             raise ValueError('KPI workload/harness/checkpoint attribution mismatch')
+        definition = workload['definition']
+        tokens = (data_tokens(definition['data']) if harness == 'guidellm'
+                  else {name: definition[name] for name in ('input_tokens', 'output_tokens')})
+        for label, key in (('prompt_toks', 'prompt_tokens' if harness == 'guidellm' else 'input_tokens'),
+                           ('output_toks', 'output_tokens')):
+            if label in labels and workload_number(labels[label]) != workload_number(tokens[key]):
+                raise ValueError('KPI token labels differ from requested workload')
     levels = workload['definition'].get('rates', [workload['definition'].get('concurrency', 1)])
     results = normalize(document, run_id=request['run_id'], deployment_scope=recipe['deployment']['scope'],
                         accelerator_key=profile['accelerator_key'], expected_concurrencies={harness: levels})
     if set(results) != {harness}:
         raise ValueError('unexpected KPI harness set')
     return results[harness]
+
+
+def workload_number(value):
+    """Compare equivalent numeric strings exactly, rejecting bool/nonfinite data."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        raise ValueError('invalid workload token/count parameter')
+    try:
+        result = Decimal(str(value))
+    except InvalidOperation:
+        raise ValueError('invalid workload token/count parameter') from None
+    if not result.is_finite() or result < 0:
+        raise ValueError('invalid workload token/count parameter')
+    return result
+
+
+def data_tokens(value):
+    """Normalize the supported synthetic GuideLLM data specification."""
+    if not isinstance(value, str):
+        raise ValueError('invalid workload token data')
+    parts = [part.strip().partition('=') for part in value.split(',')]
+    if any(not key or not separator for key, separator, _ in parts):
+        raise ValueError('invalid workload token data')
+    values = {key: item for key, _, item in parts}
+    if len(values) != len(parts) or values.pop('kind', 'synthetic_text') != 'synthetic_text':
+        raise ValueError('invalid workload token data')
+    if set(values) != {'prompt_tokens', 'output_tokens'}:
+        raise ValueError('invalid workload token data')
+    return {key: workload_number(item) for key, item in values.items()}
+
+
+def validate_harness_invocation(request, invocation):
+    """Bind captured harness arguments to the workload, not just its image."""
+    if not isinstance(invocation, dict) or invocation.get('image') != request['harness_image']:
+        raise ValueError('executed harness image differs from request pin')
+    workload = WORKLOADS[request['workload']]
+    definition = workload['definition']
+    if workload['harness'] == 'aiperf':
+        for key in ('input_tokens', 'output_tokens', 'concurrency', 'request_count'):
+            if workload_number(invocation.get(key)) != workload_number(definition[key]):
+                raise ValueError('executed harness workload parameters differ from request')
+        return
+    args = invocation.get('guidellm_args')
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        raise ValueError('recorded GuideLLM workload arguments required')
+    options, index = {}, 0
+    while index < len(args):
+        flag, separator, value = args[index].partition('=')
+        if not flag.startswith('--'):
+            raise ValueError('invalid recorded GuideLLM workload arguments')
+        index += 1
+        if not separator and index < len(args) and not args[index].startswith('--'):
+            value = args[index]
+            index += 1
+        if flag in options:
+            raise ValueError('duplicate recorded GuideLLM workload argument')
+        options[flag] = value
+    if (data_tokens(options.get('--data')) != data_tokens(definition['data'])
+            or options.get('--rate-type', 'concurrent') != 'concurrent'
+            or workload_number(options.get('--max-seconds')) != workload_number(definition['max_seconds'])):
+        raise ValueError('executed harness workload parameters differ from request')
+    rates = options.get('--rate', '').split(',')
+    if [workload_number(value.strip()) for value in rates] != [workload_number(value) for value in definition['rates']]:
+        raise ValueError('executed harness workload parameters differ from request')
 
 
 def runtime_identity(runtime: dict, request: dict) -> tuple[str, str]:

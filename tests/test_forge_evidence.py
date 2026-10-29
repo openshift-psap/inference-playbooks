@@ -1,6 +1,7 @@
 """Offline Forge contract and intake tests; no live credentials or network needed."""
 import copy
 import hashlib
+import io
 import json
 import subprocess
 import sys
@@ -20,6 +21,15 @@ from ingest_forge import selected_run
 from forge_admission import admitted_execution, load_admissions
 from normalize_kpis import normalize
 from validate import validate_benchmark_run
+
+
+def test_http_artifact_intake_has_no_byte_size_cap():
+    from types import SimpleNamespace
+    payload = b'x' * (11 * 1024 * 1024)
+    client = Client.__new__(Client)
+    client.uri, client.headers = 'https://evidence.example.org', {}
+    client.opener = SimpleNamespace(open=lambda *args, **kwargs: io.BytesIO(payload))
+    assert client.request('/artifact', raw=True) == payload
 
 
 @pytest.fixture

@@ -27,25 +27,16 @@ python3 -m pip install -r tools/requirements.txt
 python3 tools/validate.py --current
 ```
 
-Use a reviewed runner image by digest, or build it yourself. This local-build
-example uses Podman and does **not** require publishing the runner image:
-
-```sh
-podman build -f benchmarks/runner/Containerfile \
-  -t localhost/playbooks-contributor:reviewed .
-python3 tools/scan_runner_image.py localhost/playbooks-contributor:reviewed
-RUNNER_IMAGE=$(podman image inspect localhost/playbooks-contributor:reviewed \
-  --format '{{index .RepoDigests 0}}')
-```
-
-For Docker, use a published runner by digest, or publish your build and resolve
-its registry digest. An image ID is not a substitute for a manifest digest.
-When sharing a package with another machine, use a runner reference that machine
-can pull; the local Podman image above is only available on your build host.
+The default runner is the published Linux AMD64 image
+**`quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1`**. You do not need to
+build or publish an image. Preparation reads the release's immutable digest from
+[`benchmarks/runner/release.json`](../benchmarks/runner/release.json), not from a
+moving tag. The launcher pulls that digest when you run the package; anonymous
+pulls are supported. No registry write credentials are needed.
 
 Set `HARNESS_IMAGE` to an audited compatible GuideLLM v0.7.4 or AIPerf 0.12.0 image
-by digest. Unlike the local runner, the harness image must be pullable by your
-cluster. For the GuideLLM example, this is the Linux AMD64 v0.7.4 image used in
+by digest. The harness image must be pullable by your cluster. For the GuideLLM
+example, this is the Linux AMD64 v0.7.4 image used in
 the live smoke test:
 
 ```sh
@@ -54,7 +45,7 @@ PACKAGE_DIR="$HOME/playbooks-runs/gemma-package-001"
 python3 tools/prepare_contributor.py \
   models/gemma-4/recipes/h200-x1-tp1-guidellm-8k1k/recipe.yaml \
   --stack vllm --version v0.24.0 --workload guidellm-smoke \
-  --runner-image "$RUNNER_IMAGE" --harness-image "$HARNESS_IMAGE" \
+  --harness-image "$HARNESS_IMAGE" \
   --output "$PACKAGE_DIR"
 ```
 
@@ -97,9 +88,12 @@ render, validate, and commit the changes, then prepare a fresh package. Keep
 make the test run. Include your source branch/commit or PR when returning evidence
 so reviewers can obtain the exact tested revision.
 
-On SELinux hosts, use a dedicated kubeconfig directory with a container-readable
-label. The launcher does not relabel that credential directory. Its parent
-directory and kubeconfig file must be readable by your container user.
+The launcher mounts only the selected kubeconfig file read-only, not its parent
+directory or sibling credentials. Supply a dedicated, self-contained file with
+only the credentials you intend to expose; all contexts inside that file remain
+readable by the runner. On SELinux hosts, give the file a container-readable
+label. The launcher does not relabel it. The file must be readable by your
+container user.
 
 ### 3. Run once
 
@@ -115,7 +109,8 @@ context, and namespace. The output directory must **not already exist**.
 Podman is preferred when both engines exist; set `CONTAINER_ENGINE=docker` to
 override. The launcher uses your UID, host networking, and inherited proxy
 variables. It does not mount your home directory or forward AWS credentials.
-The default overall deadline is six hours; actual runtime depends on the workload.
+The Forge test phase has a default six-hour timeout. Preflight, evidence collection,
+and packaging can take additional time.
 
 ### 4. Monitor from another terminal (optional)
 
@@ -220,6 +215,12 @@ under durable retention, not an expiring intake policy.
 
 ### Supported inputs and evidence limits
 
+- Default runner release: `quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1`,
+  pinned in host-side `benchmarks/runner/release.json` to
+  `sha256:84582baa47883b93e8e9762572de7229a81af89bb53232362d8eacb295eead98`.
+  The image records source commit `8dc5c12c63e88ac08c075f70b33ab8460083a246`.
+  Release metadata is recorded after publication; it is not embedded into its
+  own image. The runtime uses the digest captured in each request.
 - Runner: Linux AMD64, Python 3.12, OpenShift CLI 4.19.0, Forge PR #322 commit
   `93b85db135425516eb000de62d2483c62cdacacc`. Archives/base image are pinned and
   checksummed; Python dependencies are hash-locked.
@@ -320,15 +321,19 @@ unrecorded live phases or perform importer validation.
 Bundle v1 contains `bundle.json` (request, outcome, exact checksum inventory),
 allowlisted input snapshots, replay files, and native JSON exports. Intake rejects
 unsafe paths/types, executable content, duplicates, excessive structure, changed
-results, and inventory mismatches. Limits: 1024 files, 32 MiB/member, 256 MiB
-compressed/expanded intake ceiling; the producer leaves space for archive headers.
+results, and inventory mismatches. The bundle retains a 1024-file inventory limit,
+but artifact byte sizes and compressed/expanded bundle sizes are not capped.
+Provision enough memory and disk for the evidence: import parses retained JSON
+in memory, while the monitor streams the archive to read its outcome. Large
+artifacts still require deliberate privacy review and an appropriate retention
+location; removing size caps does not change repository publication policy.
 
 ### Developer verification
 
 Run from the repository root. These tests use synthetic data, not model evidence:
 
 ```sh
-python3 -m pytest tests/test_contributor.py -q
+python3 -m pytest tests/test_contributor.py tests/test_contributor_monitor.py tests/test_runner_image_security.py -q
 podman build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:test .
 python3 tools/scan_runner_image.py localhost/contributor-runner:test
 podman run --rm --network none --entrypoint python \
@@ -342,6 +347,31 @@ podman run --rm --network none --entrypoint python -e SMOKE_HARNESS=aiperf \
 Both smoke tests invoke the real Forge CLI and Caliper; only Kubernetes and
 benchmark Jobs are simulated. Rerun these proofs after pin/CLI/dependency changes.
 Regenerate `requirements.lock` from `requirements.in` deliberately, not at runtime.
+
+### Development runner override
+
+Normal contributors use the published default. To test runner changes locally,
+build and scan your own image, then explicitly pass its digest during preparation:
+
+```sh
+podman build -f benchmarks/runner/Containerfile \
+  -t localhost/playbooks-contributor:reviewed .
+python3 tools/scan_runner_image.py localhost/playbooks-contributor:reviewed
+RUNNER_IMAGE=$(podman image inspect localhost/playbooks-contributor:reviewed \
+  --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}')
+if [ -z "$RUNNER_IMAGE" ]; then
+  echo 'No manifest digest is available; publish to a developer-controlled registry and resolve its digest before continuing.' >&2
+  exit 1
+fi
+# Add --runner-image "$RUNNER_IMAGE" to the prepare_contributor.py command above.
+```
+
+If a local Podman build has no `RepoDigests`, or for Docker builds, publish the
+development image to a registry you control and
+resolve its registry digest before passing `--runner-image`. Image IDs and mutable
+tags are not substitutes for manifest digests. A local Podman reference only
+works on the machine holding that image; use a pullable reference when sharing
+the package with another machine.
 
 ### Image secret-scan gate
 

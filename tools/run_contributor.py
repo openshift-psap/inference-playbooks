@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import yaml
 
 from contributor_bundle import (FORGE_REVISION, WORKLOADS, checksum, json_bytes, json_load, relative,
-                                replay, shareable, validate_request, write_archive)
+                                replay, shareable, validate_harness_invocation, validate_request, write_archive)
 from recipe_evidence import load_unique_yaml, load_unique_yaml_all
 from contributor_security import UIDAdmissionRejected, admit_manifest, check_runtime_uids
 from monitor_contributor import Progress
@@ -210,7 +210,8 @@ def instrument(phase, request, private: Path, runtime: dict, inputs: Path, files
         progress.update('benchmarking', detail=f'GuideLLM concurrency windows: {definition["rates"]}; {definition["max_seconds"]}s per window.')
         kwargs['hf_token_secret'] = hf_secret()
         runtime['harness_invocation'] = {key: value for key, value in kwargs.items()
-                                         if key not in {'endpoint_url', 'namespace', 'name'}}
+                                          if key not in {'endpoint_url', 'namespace', 'name'}}
+        validate_harness_invocation(request, runtime['harness_invocation'])
         return original_guidellm(**kwargs)
     phase.run_guidellm_benchmark.run = guidellm
 
@@ -219,7 +220,8 @@ def instrument(phase, request, private: Path, runtime: dict, inputs: Path, files
     def aiperf_run(**kwargs):
         progress.update('benchmarking', detail=f'AIPerf concurrency: {kwargs.get("concurrency")}.')
         runtime['harness_invocation'] = {key: value for key, value in kwargs.items()
-                                         if key not in {'endpoint_url', 'namespace', 'name'}}
+                                          if key not in {'endpoint_url', 'namespace', 'name'}}
+        validate_harness_invocation(request, runtime['harness_invocation'])
         return original_aiperf(**kwargs)
     def aiperf_job(**kwargs):
         job = original_job(**kwargs)

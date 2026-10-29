@@ -206,7 +206,7 @@ Create protected environment `forge-evidence`, with:
 Dispatch the workflow from `main`; other refs are deliberately excluded.
 
 Credentials are read from the environment, never CLI arguments or output.
-HTTP requests include `X-MLflow-Workspace`, have timeouts/size limits, and
+HTTP requests include `X-MLflow-Workspace`, have timeouts but no artifact byte-size cap, and
 reject redirects to avoid credential leakage. The bot workflow checks out
 trusted `main`, never executes code from the recipe PR head, and uses unique
 import branches so unrelated pending imports are not overwritten.

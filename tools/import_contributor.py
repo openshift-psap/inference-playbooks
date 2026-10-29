@@ -5,9 +5,13 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
+import re
+import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -15,7 +19,7 @@ import jsonschema
 import yaml
 
 from contributor_bundle import (FORGE_REVISION, WORKLOADS, checksum, json_bytes, json_load, portable_manifest,
-                                read_archive, replay, runtime_identity, shareable)
+                                read_archive, replay, runtime_identity, shareable, validate_harness_invocation)
 from fetch_forge_evidence import append_reference, checked_path, tested_inputs
 from forge_serving_contract import validate_launch
 from prepare_contributor import source_files
@@ -39,8 +43,7 @@ def validate_evidence(repo: Path, request: dict, files: dict, *, historical=Fals
         raise ValueError('bundled input closure differs from tested Git snapshot')
     runtime = json_load(files['runtime.json'])
     shareable(runtime)
-    if runtime['harness_invocation']['image'] != request['harness_image']:
-        raise ValueError('executed harness image differs from request pin')
+    validate_harness_invocation(request, runtime['harness_invocation'])
     if (runtime['launch']['kind'] == 'LLMInferenceService') != (request['platform']['stack'] == 'rhoai'):
         raise ValueError('serving kind differs from selected platform')
     if not isinstance(runtime['uid_admission'], list):
@@ -85,7 +88,9 @@ def replay_run(repo: Path, path: Path, run: dict):
         if not any(a.get('path') == filename and a.get('checksum') == checksum((path.parent / filename).read_bytes())
                    for a in run['artifacts']):
             raise ValueError('checksummed contributor replay artifact reference missing')
-    native = False
+    expected_native = {name.replace('/', '-'): digest for name, digest in
+                       native_export_inventory(json_load(files['runtime.json'])).items()}
+    native, observed_native = False, {}
     for artifact in run['artifacts']:
         if artifact.get('path'):
             target = path.parent / artifact['path']
@@ -94,37 +99,82 @@ def replay_run(repo: Path, path: Path, run: dict):
             if checksum(target.read_bytes()) != artifact.get('checksum'):
                 raise ValueError('contributor artifact checksum mismatch')
             if artifact['path'].startswith('raw-harness-'):
+                if artifact['path'] in observed_native:
+                    raise ValueError('native export provenance has duplicate artifact references')
+                observed_native[artifact['path']] = artifact['checksum']
                 shareable(json_load(target.read_bytes()))
                 native = True
         elif artifact.get('uri') and artifact.get('checksum') == run['contributor']['bundle_checksum']:
             native = True  # Retained full native exports; ordinary replay remains offline.
-    if not native:
-        raise ValueError('native harness export provenance missing')
+    if not native or (observed_native and observed_native != expected_native):
+        raise ValueError('native export provenance differs from runtime inventory')
     return result
 
 
-def upload_archive(path: Path, prefix: str, digest: str) -> str:
-    """No contributor credentials; immutable single-object writes using maintainer AWS CLI."""
+def native_export_inventory(runtime):
+    exports = runtime.get('native_exports')
+    if not isinstance(exports, list) or not exports:
+        raise ValueError('native export provenance missing')
+    inventory = {}
+    for entry in exports:
+        if (not isinstance(entry, dict) or not isinstance(entry.get('path'), str)
+                or not re.fullmatch(r'raw/harness-[0-9]+\.json', entry['path'])
+                or entry['path'] in inventory or not isinstance(entry.get('export_checksum'), str)
+                or not re.fullmatch(r'sha256:[a-f0-9]{64}', entry['export_checksum'])):
+            raise ValueError('invalid native export provenance inventory')
+        inventory[entry['path']] = entry['export_checksum']
+    return inventory
+
+
+def archive_destination(prefix: str, digest: str):
+    """Use one S3 key normalization for preflight planning and actual upload."""
     parsed = urlparse(prefix)
     if parsed.scheme != 's3' or not parsed.netloc or parsed.params or parsed.query or parsed.fragment or parsed.username:
         raise ValueError('use a durable s3://bucket/prefix without credentials or query strings')
     key = parsed.path.strip('/') + '/' + digest.removeprefix('sha256:') + '.tar.gz'
     key = key.lstrip('/')
+    return parsed.netloc, key, f's3://{parsed.netloc}/{key}'
+
+
+def upload_archive(path: Path, prefix: str, digest: str) -> str:
+    """No contributor credentials; immutable single-object writes using maintainer AWS CLI."""
+    bucket, key, uri = archive_destination(prefix, digest)
     encoded = base64.b64encode(bytes.fromhex(digest.removeprefix('sha256:'))).decode()
     # Conditional write fails closed on conflicts; no read/list/overwrite/delete permission needed.
-    command = ['aws', 's3api', 'put-object', '--bucket', parsed.netloc, '--key', key,
+    command = ['aws', 's3api', 'put-object', '--bucket', bucket, '--key', key,
                '--body', str(path), '--if-none-match', '*', '--checksum-algorithm', 'SHA256',
                '--checksum-sha256', encoded]
     result = subprocess.run(command, capture_output=True)
     if result.returncode:
         # An existing identical checksummed object is a retry, not an overwrite.
-        head = subprocess.run(['aws', 's3api', 'head-object', '--bucket', parsed.netloc, '--key', key,
+        head = subprocess.run(['aws', 's3api', 'head-object', '--bucket', bucket, '--key', key,
                                '--checksum-mode', 'ENABLED'], check=True, capture_output=True)
         if json_load(head.stdout).get('ChecksumSHA256') != encoded:
             raise ValueError('S3 object conflict or upload failure; local evidence preserved')
     elif json_load(result.stdout).get('ChecksumSHA256') != encoded:
         raise ValueError('S3 did not confirm the uploaded SHA-256')
-    return f's3://{parsed.netloc}/{key}'
+    return uri
+
+
+def atomic_write(path: Path, data: bytes, *, original=None):
+    """Stage full bytes; publish immutable artifacts without replacing conflicts."""
+    # Artifact staging is outside the final run, so even crash leftovers cannot
+    # change that run's artifact coverage or prevent an otherwise valid retry.
+    parent = path.parent if original is not None else path.parent.parent
+    with tempfile.TemporaryDirectory(prefix='.contributor-import-', dir=parent) as temporary:
+        staged = Path(temporary) / 'payload'
+        staged.write_bytes(data)
+        if original is not None:
+            staged.chmod(stat.S_IMODE(path.stat().st_mode))
+            if path.read_text() != original:
+                raise ValueError('recipe changed during import; retry without overwriting concurrent edits')
+            os.replace(staged, path)
+        else:
+            try:
+                os.link(staged, path)
+            except FileExistsError:
+                if path.is_symlink() or path.read_bytes() != data:
+                    raise ValueError('immutable run already exists with different evidence') from None
 
 
 def import_bundle(repo: Path, bundle: Path, digest: str, *, apply=False, reviewed=False, s3_prefix=None):
@@ -136,8 +186,7 @@ def import_bundle(repo: Path, bundle: Path, digest: str, *, apply=False, reviewe
     request = envelope['request']
     path, recipe, result, revision, image_digest = validate_evidence(repo, request, files)
     runtime = json_load(files['runtime.json'])
-    exports = runtime.get('native_exports', [])
-    if ({entry['path']: entry['export_checksum'] for entry in exports}
+    if (native_export_inventory(runtime)
             != {name: checksum(data) for name, data in files.items() if name.startswith('raw/')}):
         raise ValueError('native export provenance differs from bundle inventory')
     workload = WORKLOADS[request['workload']]
@@ -182,7 +231,7 @@ def import_bundle(repo: Path, bundle: Path, digest: str, *, apply=False, reviewe
         return append_reference(path.read_text(), str((directory / 'run.yaml').relative_to(path.parent)))
     # Check all local identities/conflicts before using storage credentials or writing files.
     if s3_prefix:
-        uri = s3_prefix.rstrip('/') + '/' + digest.removeprefix('sha256:') + '.tar.gz'
+        uri = archive_destination(s3_prefix, digest)[2]
         run['artifacts'].append({'type': 'raw-output', 'uri': uri, 'checksum': digest,
                                  'size_bytes': bundle.stat().st_size})
     original = path.read_text()
@@ -203,10 +252,9 @@ def import_bundle(repo: Path, bundle: Path, digest: str, *, apply=False, reviewe
     for name, data in output.items():
         target = directory / name
         if not target.exists():
-            with target.open('xb') as handle:
-                handle.write(data)
+            atomic_write(target, data)
     if path.read_text() != updated:
-        path.write_text(updated)
+        atomic_write(path, updated.encode(), original=original)
     report['applied'] = True
     return report
 

@@ -3,7 +3,7 @@ repos:
     hooks:
       - id: contributor-bundles
         name: test portable contributor evidence and maintainer import
-        entry: python3 -m pytest tests/test_contributor.py tests/test_runner_image_security.py -q
+        entry: python3 -m pytest tests/test_contributor.py tests/test_contributor_monitor.py tests/test_runner_image_security.py -q
         language: python
         additional_dependencies:
           - pytest==8.3.4
@@ -11,7 +11,7 @@ repos:
           - jsonschema==4.25.1
           - Jinja2==3.1.6
         pass_filenames: false
-        files: ^(tools/|tests/test_(contributor|runner_image_security)\.py$|schema/|benchmarks/runner/|\.dockerignore$|\.github/workflows/recipe-evidence\.yml$)
+        files: ^(tools/|tests/test_(contributor(_monitor)?|runner_image_security)\.py$|schema/|benchmarks/runner/|\.dockerignore$|\.github/workflows/recipe-evidence\.yml$)
       - id: hardware-profiles
         name: validate schemas and hardware-profile corrections
         entry: python3 tools/validate.py --base HEAD --cached

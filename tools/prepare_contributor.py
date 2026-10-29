@@ -4,15 +4,35 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
 import uuid
 from pathlib import Path
 
-from contributor_bundle import FORGE_REVISION, WORKLOADS, checksum, json_bytes, shareable, validate_request
+from contributor_bundle import FORGE_REVISION, IMAGE, WORKLOADS, checksum, json_bytes, json_load, shareable, validate_request
 from fetch_forge_evidence import tested_inputs
 from recipe_evidence import load_unique_yaml, load_unique_yaml_all
+
+# Host-side release metadata is recorded after publication, not baked into itself.
+RELEASE_FILE = Path(__file__).resolve().parents[1] / 'benchmarks/runner/release.json'
+
+
+def released_runner_image():
+    """Use the recorded immutable release; no tag resolution or network access."""
+    release = json_load(RELEASE_FILE.read_bytes())
+    if (not isinstance(release, dict) or type(release.get('schema_version')) is not int or release['schema_version'] != 1
+            or release.get('forge_revision') != FORGE_REVISION):
+        raise ValueError('runner release metadata is unsupported or uses a different Forge revision')
+    image, version = release.get('image', ''), release.get('version', '')
+    source_revision = release.get('source_revision', '')
+    if (not isinstance(image, str) or not re.fullmatch(IMAGE, image)
+            or not isinstance(version, str) or not re.fullmatch(r'v[0-9]+\.[0-9]+(?:\.[0-9]+)?', version)
+            or release.get('tag') != image.split('@', 1)[0] + ':' + version
+            or not isinstance(source_revision, str) or not re.fullmatch(r'[a-f0-9]{40}', source_revision)):
+        raise ValueError('runner release must record a consistent tag, digest, and source revision')
+    return image
 
 
 def git(repo, *args):
@@ -76,8 +96,7 @@ if [ "$#" -ne 4 ]; then
 fi
 package=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 kubeconfig=$(realpath -- "$1")
-credentials=$(dirname -- "$kubeconfig")
-config_name=$(basename -- "$kubeconfig")
+[ -f "$kubeconfig" ] || { echo "Kubeconfig must be a regular file" >&2; exit 2; }
 output=$(realpath -m -- "$4")
 mkdir -- "$output"
 chmod 700 "$output"
@@ -90,9 +109,9 @@ if [ "$(basename -- "$engine")" = podman ]; then userns=--userns=keep-id; fi
 exec "$engine" run --rm --init --network host --user "$(id -u):$(id -g)" \\
   ${userns:+"$userns"} \\
   --cap-drop ALL --security-opt no-new-privileges \\
-  -e "KUBECONFIG=/credentials/$config_name" \\
+  -e KUBECONFIG=/credentials/kubeconfig \\
   -e HTTP_PROXY -e HTTPS_PROXY -e NO_PROXY -e http_proxy -e https_proxy -e no_proxy \\
-  -v "$package:/inputs:ro,Z" -v "$credentials:/credentials:ro" -v "$output:/outputs:Z" \\
+  -v "$package:/inputs:ro,Z" -v "$kubeconfig:/credentials/kubeconfig:ro" -v "$output:/outputs:Z" \\
   IMAGE --context "$2" --namespace "$3"
 '''.replace('  IMAGE ', '  ' + shlex.quote(runner_image) + ' ')
     (output / 'run.sh').write_text(launcher)
@@ -115,13 +134,14 @@ def main():
     parser.add_argument('--stack', choices=['vllm', 'rhoai'], required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--workload', choices=sorted(WORKLOADS), required=True)
-    parser.add_argument('--runner-image', required=True, help='digest-pinned runner image (local or published)')
+    parser.add_argument('--runner-image', help='digest-pinned override; defaults to benchmarks/runner/release.json')
     parser.add_argument('--harness-image', required=True, help='audited GuideLLM/AIPerf image@sha256:digest')
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()
     try:
+        runner_image = args.runner_image or released_runner_image()
         request = prepare(args.repo.resolve(), args.recipe, args.stack, args.version, args.workload,
-                          args.runner_image, args.harness_image, args.output)
+                          runner_image, args.harness_image, args.output)
         print(json.dumps({'run_id': request['run_id'], 'package': str(args.output)}))
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         print(f'Cannot prepare contributor package: {error}', file=sys.stderr)

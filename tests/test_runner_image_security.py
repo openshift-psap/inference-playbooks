@@ -95,6 +95,7 @@ def test_ci_secret_gate_runs_after_build_and_before_smoke_without_publication():
     workflow = yaml.safe_load((REPO / '.github/workflows/recipe-evidence.yml').read_text())
     assert workflow['permissions'] == {'contents': 'read'}
     steps = workflow['jobs']['contributor-bundles']['steps']
+    assert steps[0]['with']['persist-credentials'] is False
     build = next(index for index, step in enumerate(steps) if 'docker build' in step.get('run', ''))
     gate = next(index for index, step in enumerate(steps) if 'tools/scan_runner_image.py' in step.get('run', ''))
     smoke = next(index for index, step in enumerate(steps) if 'docker run' in step.get('run', ''))
@@ -103,7 +104,25 @@ def test_ci_secret_gate_runs_after_build_and_before_smoke_without_publication():
     assert not steps[gate].get('continue-on-error')
     assert not any('push' in step.get('run', '') or 'secrets.' in str(step) for step in steps)
     assert 'tests/test_runner_image_security.py' in steps[1]['run']
+    assert 'tests/test_contributor_monitor.py' in steps[1]['run']
     precommit = yaml.safe_load((REPO / '.pre-commit-config.yaml').read_text())
     hook = next(hook for repo in precommit['repos'] for hook in repo.get('hooks', [])
                 if hook['id'] == 'contributor-bundles')
     assert hook['entry'] in steps[1]['run']
+
+
+def test_scanner_report_is_not_rejected_by_byte_size(monkeypatch, capsys):
+    fake_engine(monkeypatch)
+    original = scanner.run
+    def run(argv, **kwargs):
+        result = original(argv, **kwargs)
+        if argv[1] == 'run':
+            mount = next(arg for arg in argv if arg.endswith(':/reports:Z'))
+            report = Path(mount.removesuffix(':/reports:Z')) / 'report.json'
+            with report.open('a') as stream:
+                stream.write(' ' * (33 * 1024 * 1024))
+        return result
+    monkeypatch.setattr(scanner, 'run', run)
+    monkeypatch.setenv('CONTAINER_ENGINE', 'docker')
+    assert scanner.main(['localhost/example:reviewed']) == 0
+    assert 'Secret scan passed' in capsys.readouterr().out

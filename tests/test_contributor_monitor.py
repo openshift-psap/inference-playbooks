@@ -113,13 +113,11 @@ def test_old_completed_runs_need_no_credentials_or_progress_file(tmp_path, outco
     assert state['outcome'] == outcome and state['stage'] == 'finished'
 
 
-@pytest.mark.parametrize('change', ['checksum', 'link', 'expanded-limit'])
+@pytest.mark.parametrize('change', ['checksum', 'link'])
 def test_unsafe_terminal_bundle_fails_closed(tmp_path, monkeypatch, change):
     legacy_bundle(tmp_path, symlink=change == 'link')
     if change == 'checksum':
         (tmp_path / 'evidence.tar.gz.sha256').write_text('sha256:' + '0' * 64)
-    elif change == 'expanded-limit':
-        monkeypatch.setattr(monitor, 'MAX_TOTAL', 2048)
     assert monitor.main([str(tmp_path)]) == 1
 
 
@@ -127,3 +125,45 @@ def test_local_text_cannot_inject_terminal_control_characters(tmp_path):
     progress = monitor.Progress(tmp_path, REQUEST)
     progress.update('deploying', detail='not a clear-screen command: \x1b[2J')
     assert '\x1b' not in monitor.render(monitor.snapshot(tmp_path))
+
+
+@pytest.mark.parametrize('run_id', [123, {}, [], None])
+def test_invalid_run_identity_is_reported_without_traceback(tmp_path, capsys, run_id):
+    monitor.Progress(tmp_path, REQUEST)
+    path = tmp_path / 'progress.json'
+    state = json.loads(path.read_text())
+    state['run_id'] = run_id
+    path.write_text(json.dumps(state))
+    assert monitor.main([str(tmp_path)]) == 1
+    assert 'Cannot read progress safely' in capsys.readouterr().out
+
+
+def test_malformed_progress_uses_verified_bundle_and_watch_finishes(tmp_path):
+    (tmp_path / 'progress.json').write_text('{')
+    legacy_bundle(tmp_path)
+    assert monitor.snapshot(tmp_path)['outcome'] == 'succeeded'
+    assert monitor.main([str(tmp_path), '--watch']) == 0
+
+
+def test_malformed_progress_does_not_bypass_bundle_checksum(tmp_path):
+    (tmp_path / 'progress.json').write_text('{')
+    legacy_bundle(tmp_path)
+    (tmp_path / 'evidence.tar.gz.sha256').write_text('sha256:' + '0' * 64)
+    assert monitor.main([str(tmp_path), '--watch']) == 1
+
+
+def test_monitor_streams_bundle_larger_than_old_expanded_limit(tmp_path):
+    class Zeroes:
+        def read(self, size):
+            return b'\0' * size
+    path = tmp_path / 'evidence.tar.gz'
+    with tarfile.open(path, 'w|gz') as archive:
+        member = tarfile.TarInfo('raw/harness-0.json')
+        member.size = 257 * 1024 * 1024
+        archive.addfile(member, Zeroes())
+        envelope = json.dumps({'schema_version': 1, 'request': REQUEST, 'outcome': 'succeeded'}).encode()
+        member = tarfile.TarInfo('bundle.json')
+        member.size = len(envelope)
+        archive.addfile(member, io.BytesIO(envelope))
+    (tmp_path / 'evidence.tar.gz.sha256').write_text('sha256:' + hashlib.sha256(path.read_bytes()).hexdigest())
+    assert monitor.snapshot(tmp_path)['outcome'] == 'succeeded'
