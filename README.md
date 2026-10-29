@@ -19,6 +19,10 @@ to explore deployment configurations and available benchmark evidence.
 
 ## Target Workloads
 
+For a prepared recipe package with pinned Forge execution and returnable evidence,
+use the [portable contributor runner guide](docs/contributor-benchmarks.md).
+The manually applied Jobs below are a separate workflow.
+
 Reusable benchmark Jobs live in
 [`benchmarks/manifests/`](benchmarks/manifests/). Set the `ENDPOINT`,
 `MODEL`, and `TOKENIZER` environment values in each manifest before

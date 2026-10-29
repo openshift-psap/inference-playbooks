@@ -39,7 +39,7 @@ def pod_templates(manifest):
     return {}
 
 
-def admit_manifest(manifest, namespace, probe):
+def admit_manifest(manifest, namespace, probe, *, allow_uid_omission=True):
     """Preserve authored UID first; omit it only after an explicit UID rejection.
 
     Probes use the caller's identity and the workload's service account. They are
@@ -61,6 +61,8 @@ def admit_manifest(manifest, namespace, probe):
         try:
             admitted = probe(candidate)
         except UIDAdmissionRejected:
+            if not allow_uid_omission:
+                raise ValueError('authored UID rejected; update and commit the recipe instead of rewriting its launch') from None
             if not positive_uid(uid) or spec.get('securityContext', {}).get('runAsNonRoot') is not True:
                 raise ValueError('UID rejected; no safe pod-level non-root omission candidate available') from None
             del candidate['spec']['securityContext']['runAsUser']
@@ -138,7 +140,7 @@ def runtime_mounts(spec, container, declared):
             if name in authored_names or not name.startswith('kube-api-access-'):
                 continue
             sources = volume.get('projected', {}).get('sources', [])
-            if len(sources) != 3:
+            if len(sources) not in {3, 4}:
                 continue
             expiry = sources[0].get('serviceAccountToken', {}).get('expirationSeconds')
             if type(expiry) is not int or not 600 <= expiry <= 86400:
@@ -147,7 +149,11 @@ def runtime_mounts(spec, container, declared):
                 {'serviceAccountToken': {'expirationSeconds': expiry, 'path': 'token'}},
                 {'configMap': {'name': 'kube-root-ca.crt', 'items': [{'key': 'ca.crt', 'path': 'ca.crt'}]}},
                 {'downwardAPI': {'items': [{'fieldRef': {'apiVersion': 'v1', 'fieldPath': 'metadata.namespace'},
-                                           'path': 'namespace'}]}}]}}
+                                            'path': 'namespace'}]}}]}}
+            if len(sources) == 4:
+                expected['projected']['sources'].append({'configMap': {
+                    'name': 'openshift-service-ca.crt',
+                    'items': [{'key': 'service-ca.crt', 'path': 'service-ca.crt'}]}})
             if volume == expected:
                 ignored.add(name)
     return [mount for mount in container.get('volumeMounts', []) if not (

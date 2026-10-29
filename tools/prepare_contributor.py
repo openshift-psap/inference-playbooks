@@ -55,12 +55,6 @@ def prepare(repo: Path, recipe_path: str, stack: str, version: str, workload: st
         if (repo / name.removeprefix('inputs/')).read_bytes() != raw:
             raise ValueError('package inputs must be committed and clean')
     manifest = manifest_paths[0]
-    documents = [d for d in load_unique_yaml_all(files['inputs/' + manifest].decode()) if d]
-    primaries = [d for d in documents if d.get('kind') in {'Deployment', 'LeaderWorkerSet', 'LLMInferenceService'}]
-    if len(primaries) != 1 or any(d.get('kind') not in {'Deployment', 'LeaderWorkerSet', 'LLMInferenceService', 'Service'} for d in documents):
-        raise ValueError('unsupported manifest shape; requires one serving resource and optional Service')
-    if primaries[0]['kind'] == 'LLMInferenceService' and not primaries[0]['spec']['model']['uri'].startswith('pvc://'):
-        raise ValueError('standalone LLMInferenceService requires an existing populated PVC; no internal model-cache provisioning')
     request = {'schema_version': 1, 'run_id': 'contributor-' + uuid.uuid4().hex,
                'recipe_path': recipe_path, 'tested_revision': revision,
                'platform': {'stack': stack, 'version': version}, 'manifest_path': manifest,
@@ -103,6 +97,14 @@ exec "$engine" run --rm --init --network host --user "$(id -u):$(id -g)" \\
 '''.replace('  IMAGE ', '  ' + shlex.quote(runner_image) + ' ')
     (output / 'run.sh').write_text(launcher)
     (output / 'run.sh').chmod(0o755)
+    (output / 'monitor.py').write_bytes(Path(__file__).with_name('monitor_contributor.py').read_bytes())
+    monitor = '''#!/bin/sh
+set -eu
+package=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec python3 "$package/monitor.py" "$@"
+'''
+    (output / 'monitor.sh').write_text(monitor)
+    (output / 'monitor.sh').chmod(0o755)
     return request
 
 

@@ -17,7 +17,8 @@ from forge_model_identity import validate_model_identity
 from normalize_kpis import normalize
 from recipe_evidence import load_unique_yaml, load_unique_yaml_all
 
-FORGE_REVISION = '768a285851ade70d0d5737f9bd90564350410469'
+FORGE_REVISION = '93b85db135425516eb000de62d2483c62cdacacc'
+LEGACY_FORGE_REVISION = '768a285851ade70d0d5737f9bd90564350410469'
 MAX_FILE = 32 * 1024 * 1024
 MAX_TOTAL = 256 * 1024 * 1024
 MAX_FILES = 1024
@@ -165,7 +166,7 @@ def validate_request(request: dict, files: dict[str, bytes]):
         raise ValueError('unsupported request format')
     if not re.fullmatch(r'[a-f0-9]{40}', request['tested_revision']):
         raise ValueError('tested revision must be an immutable Git commit')
-    if request['forge_revision'] != FORGE_REVISION:
+    if request['forge_revision'] not in {FORGE_REVISION, LEGACY_FORGE_REVISION}:
         raise ValueError('unsupported Forge revision')
     for key in ('runner_image', 'harness_image'):
         registry = request[key].split('/')[0]
@@ -206,7 +207,35 @@ def validate_request(request: dict, files: dict[str, bytes]):
         raise ValueError('benchmark workload differs from recipe')
     profile = load_unique_yaml(files['inputs/' + recipe['hardware_profile']].decode())
     model = load_unique_yaml(files[f'inputs/models/{recipe["model_id"]}/model.yaml'].decode())
+    if request['forge_revision'] == FORGE_REVISION:
+        portable_manifest(request, files)
     return recipe, model, profile
+
+
+def portable_manifest(request, files):
+    """The new Forge contract admits one unchanged, self-contained serving object."""
+    path = PurePosixPath(request['manifest_path'])
+    folder = PurePosixPath(request['recipe_path']).parent / 'manifests' / f'{request["platform"]["stack"]}-{request["platform"]["version"]}'
+    manifests = {name for name in request['inputs'] if PurePosixPath(name).is_relative_to(folder)}
+    if path.parent != folder or manifests != {str(path)}:
+        raise ValueError('initial runner requires one self-contained YAML manifest per platform')
+    documents = [doc for doc in load_unique_yaml_all(files['inputs/' + str(path)].decode()) if doc is not None]
+    if (len(documents) != 1 or not isinstance(documents[0], dict)
+            or documents[0].get('kind') not in {'Deployment', 'LeaderWorkerSet', 'LLMInferenceService'}):
+        raise ValueError('requires one serving resource; authored Services and companions are unsupported')
+    manifest = documents[0]
+    if manifest['kind'] == 'LLMInferenceService':
+        if 'prefill' in manifest['spec']:
+            raise ValueError('LLMInferenceService P/D is not supported')
+        if not manifest['spec']['model']['uri'].startswith('pvc://'):
+            raise ValueError('standalone LLMInferenceService requires an existing populated PVC')
+        def hostpath(value):
+            if isinstance(value, dict):
+                return ('hostPath' in value or any(hostpath(child) for child in value.values()))
+            return isinstance(value, list) and any(hostpath(child) for child in value)
+        if hostpath(manifest['spec']):
+            raise ValueError('LLMInferenceService hostPath volumes are unsupported; use PVC-backed storage')
+    return manifest
 
 
 def replay(request: dict, files: dict[str, bytes]) -> dict:

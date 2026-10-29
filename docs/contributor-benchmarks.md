@@ -1,52 +1,112 @@
 # Portable contributor benchmarks
 
+A maintainer prepares a pinned recipe package. The contributor runs it on their
+cluster and returns **two files**: `evidence.tar.gz` and
+`evidence.tar.gz.sha256`. The maintainer reviews and imports the results.
+
+Contributors need **no AWS, S3, MLflow, Prow/Fournos, or internal artifact access**.
+This is separate from [manually applying benchmark Jobs](../benchmarks/README.md).
 Related: [issue #62](https://github.com/openshift-psap/inference-playbooks/issues/62).
 
-The contributor runs a selected, committed recipe with **local pinned Forge** and
-returns a versioned evidence archive through any approved sharing medium.
-Maintainers validate/import it and optionally upload retained artifacts. The
-contributor needs **no AWS credentials, S3 client, Prow/Fournos service, internal
-vault, MLflow, or internal artifact access**.
+## Contributor: run the package
 
-```text
-Maintainer prepares package -> contributor deploys/benchmarks -> local bundle
-  -> approved sharing medium -> maintainer inspects/replays/reviews
-  -> optional maintainer storage upload -> evidence PR
+### 1. Check prerequisites
+
+Ask the maintainer for the complete package directory and its cluster requirements.
+Review `request.json` and the selected manifest under `playbooks/` before running.
+Do not edit packaged inputs.
+
+- Use a Linux AMD64 machine with Podman or Docker and access to the runner image.
+- Provide a self-contained kubeconfig with embedded credentials/certificates and
+  an explicit context. External exec authentication plugins are unsupported.
+- Use an existing namespace with enough NVIDIA GPU capacity, required controllers,
+  image/model access, and any manifest-referenced Secrets or populated model PVCs.
+- Allow the cluster to reach the required image registries and model/tokenizer
+  downloads. Operators, permissions, storage, and network setup are prerequisites;
+  the runner does not install or repair them.
+- For GuideLLM, this pin uses shared emptyDir/sidecar result collection; no default
+  results-PVC storage class is needed. AIPerf creates a results PVC and needs
+  working default PVC provisioning. Model-storage requirements are separate.
+- Have the [cluster permissions listed below](#cluster-permissions). Preflight
+  checks are partial; passing them does not guarantee workload or collection access.
+
+**Gemma example below:** the serving manifest needs one H200 GPU and a Secret
+named `hf-token` with key `HF_TOKEN`. It uses the `default` service account and
+fixed non-root UID **65534**, which must be admissible in the target namespace.
+If these requirements cannot be met, request a corrected maintainer package;
+do not edit inputs, remove the UID, or grant SCC privileges to make it run.
+
+On SELinux hosts, use a dedicated kubeconfig directory with a container-readable
+label. The launcher does not relabel that credential directory. Its parent
+directory and kubeconfig file must be readable by your container user.
+
+### 2. Run once
+
+Replace all four arguments with your actual paths, context, and namespace. The
+output directory must **not already exist**.
+
+```sh
+/path/to/gemma-contributor-package/run.sh \
+  /absolute/path/to/kubeconfig EXPLICIT_CONTEXT benchmark-namespace \
+  /absolute/path/to/NEW-output-directory
 ```
 
-## Current boundary
+Podman is preferred when both engines exist; set `CONTAINER_ENGINE=docker` to
+override. The launcher uses your UID, host networking, and inherited proxy
+variables. It does not mount your home directory or forward AWS credentials.
+The default overall deadline is six hours; actual runtime depends on the workload.
 
-- Linux AMD64 runner image, Python 3.12, OpenShift CLI 4.19.0, and Forge
-  `768a285851ade70d0d5737f9bd90564350410469` from PR-322. Source archives and
-  base image are pinned/checksummed; Python dependencies are hash-locked.
-- Deployment, LeaderWorkerSet, or PVC-backed LLMInferenceService, with one
-  self-contained manifest file and optional Service in the same YAML stream.
-  P/D bundles, InferenceService, custom DRA allocation, and heterogeneous serving
-  image digests are not admitted by this first contract. Unsupported layouts
-  fail, rather than being translated into another topology.
-- `guidellm-8k1k`: 8000/1000 tokens, concurrent streams 1/4/16/32/64/128,
-  300 seconds per stream count. `guidellm-smoke` and `aiperf-smoke` check plumbing
-  only. The supplied harness image must be an audited compatible version
-  (GuideLLM v0.7.4 or AIPerf 0.12.0), referenced by digest.
-- AgentX is deliberately rejected until its external corpus/tokenizer revision
-  and checksum acquisition are audited. A date in a dataset name is not an
-  immutable-content proof. Do not substitute smoke evidence for AgentX.
-- The first live acceptance target is the existing Gemma single-GPU Deployment
-  below. Container/synthetic proof does not establish GPU performance, topology
-  correctness, or live LWS/LLMInferenceService compatibility.
+### 3. Monitor from another terminal (optional)
 
-The maturity-policy work in #62 remains separate. Neither runner nor importer
-changes maturity, deployment verification, or image recommendations. In
-particular, successful import does not mean `contributor-validated`, independent
-`validated`, or production-ready. Review qualifying workload coverage, error
-rates/quality, known issues, actual hardware and model provenance before proposing
-graduation. Evidence belongs only to the tested platform/checkpoint/workload.
+The package includes a read-only monitor requiring only local **Python 3.9+**:
 
-## Maintainer: build and prepare
+```sh
+/path/to/gemma-contributor-package/monitor.sh \
+  /absolute/path/to/NEW-output-directory --watch
+```
 
-Use a trusted checkout/toolchain. The selected recipe and deployment inputs must
-already be committed, rendered, validated, and clean. Preparation does not run
-historical renderers or deploy anything.
+Use the same output directory you passed to `run.sh`; it is where progress is
+written, not a new destination. Omit `--watch` for one snapshot. No kubeconfig,
+cluster CLI, credentials, or extra Python packages are needed for monitoring.
+Ctrl-C stops only the monitor, not the test.
+The monitor's exit status indicates whether monitoring worked, not whether the
+benchmark succeeded or its evidence was accepted.
+
+It shows the recorded phase, elapsed/stage time, latest native Forge task,
+last observed serving readiness, benchmark configuration, and final execution
+outcome. Readiness is an observation, not continuous health monitoring. Stage age
+is not a heartbeat, and no overall completion percentage is guessed. An abruptly
+killed runner can leave a stale snapshot; inspect its process/private logs then.
+A successful execution still needs separate maintainer import validation/review.
+
+### 4. Review and return the result
+
+```text
+NEW-output-directory/
+  evidence.tar.gz
+  evidence.tar.gz.sha256
+  progress.json              # local status only; do not return this file
+  private-diagnostics/       # keep local; do not share this directory
+```
+
+**After privacy review, share only the archive and checksum sidecar** through
+your approved delivery channel. See [privacy and review](#privacy-and-review).
+
+For `run.sh`, exit code **0** means success; **1** means an unsuccessful attempt. The printed
+JSON and bundle `outcome` distinguish `failed`, `interrupted`, and
+`collection-failed`. Inspect `private-diagnostics/` locally on failure. Failed
+bundles are diagnostic-only and cannot be imported as successful evidence.
+Very early failures or an uncatchable kill may produce no archive.
+
+**For another attempt, request a fresh package/run ID and use a new output
+directory.** Keep each attempt separate. After a crash, ask your administrator
+to reconcile recorded run-owned resources; never force-delete unrelated objects.
+
+## Maintainer: prepare and distribute
+
+Run commands from a trusted repository checkout. The selected recipe and inputs
+must already be rendered, validated, committed, and clean. Preparation does not
+deploy anything or execute historical repository code.
 
 ```sh
 python3 -m pip install -r tools/requirements.txt
@@ -55,10 +115,10 @@ podman build -f benchmarks/runner/Containerfile \
   -t quay.io/YOUR_ORG/playbooks-contributor:reviewed .
 ```
 
-Publish the reviewed image through your normal process. Resolve that published
-image and the compatible harness image to digests; set `RUNNER_IMAGE` and
-`HARNESS_IMAGE` to fully qualified `registry/repository@sha256:...` references.
-No image is published automatically by the tooling or PR CI.
+Publish the reviewed image through your normal process. Set `RUNNER_IMAGE` and
+`HARNESS_IMAGE` to real, fully qualified `registry/repository@sha256:...` references.
+The harness must be an audited compatible GuideLLM v0.7.4 or AIPerf 0.12.0 image.
+Tooling and PR CI do not publish images automatically.
 
 ```sh
 python3 tools/prepare_contributor.py \
@@ -68,214 +128,190 @@ python3 tools/prepare_contributor.py \
   --output /tmp/opencode/gemma-contributor-package
 ```
 
-The package includes `run.sh`, `request.json`, and the allowlisted Git input
-closure under `playbooks/`. The request records the exact tested commit,
-platform, manifest, input checksums, workload, Forge revision, image pins, and
-unique run ID. It does not contain a Git checkout, arbitrary recipe scripts,
-credentials, existing results, or model weights. Distribute this directory as
-a reviewed package; the launcher itself is executable maintainer-supplied code,
-unlike a returned evidence archive.
+Distribute the **complete directory**, including `run.sh`, `monitor.sh`,
+`monitor.py`, `request.json`, and `playbooks/`, with this guide and the selected
+manifest's prerequisites. Preserve the executable bits on both shell scripts.
+These scripts are reviewed maintainer-supplied executable
+code; the returned evidence archive is data only.
 
-Each prepared package is **one attempt**. Prepare a new package/run ID for a new
-attempt; never merge measurements from different attempts into a sweep.
+The request pins the tested commit, platform, workload, Forge revision, images,
+input checksums, and unique run ID. Packages contain no Git checkout, credentials,
+model weights, existing results, or arbitrary recipe scripts. One package is one
+attempt; do not combine attempts into a benchmark sweep.
 
-## Contributor: run and share
+## Maintainer: validate, review, and import
 
-Prerequisites:
-
-- Podman or Docker, image/model registry access and sufficient cluster egress.
-- A self-contained kubeconfig with embedded credentials/certificates and an
-  explicit context; external exec authentication plugins are unsupported.
-- An existing namespace with appropriate namespaced permissions, NVIDIA GPU
-  capacity, working default benchmark-PVC storage, and required controllers.
-- Any recipe-referenced local secrets/populated model PVCs. Operators, storage
-  infrastructure, model-access permissions, and cluster changes are your
-  prerequisites, not automatically installed or modified by this runner.
-- Permission to inspect node capacity/software metadata. This is not an
-  exclusive GPU reservation or independent proof of interconnect topology.
-
-Review the inputs and expected GPU/time cost before launching:
+Use a clean, trusted feature worktree based on `main`, with the tested commit
+available in Git. Confirm the checksum through the contributor's delivery channel;
+a supplied checksum is an integrity check, **not an execution attestation**.
 
 ```sh
-./gemma-contributor-package/run.sh \
-  /absolute/path/to/kubeconfig EXPLICIT_CONTEXT benchmark-namespace \
-  /absolute/path/to/NEW-output-directory
+CHECKSUM=$(cat /received/evidence.tar.gz.sha256)
+python3 tools/import_contributor.py /received/evidence.tar.gz \
+  --checksum "$CHECKSUM"
 ```
 
-The launcher chooses Podman first, otherwise Docker (`CONTAINER_ENGINE` can
-select one), uses the caller's UID, mounts inputs/credentials read-only, and
-uses Podman keep-id mapping and host networking so cluster proxies work. Proxy environment variables are
-forwarded; no AWS environment or home directory is forwarded. The mounted
-kubeconfig parent directory must be readable by the container; on SELinux hosts
-use a dedicated credential directory with an appropriate container-readable
-label. The launcher deliberately does not relabel a shared kubeconfig directory.
+This is read-only by default. It validates archive safety, the input closure
+against Git, launch/runtime identity, image pins, privacy patterns, and KPI replay.
+It prints a summary; it does **not** perform human review or extract files for you.
+Inspect the validated input snapshots, `runtime.json`, `kpis.json`, `result.json`,
+and sanitized native exports under `raw/` with a trusted archive viewer. Do not
+execute bundle content or blindly extract an unvalidated archive.
 
-The runner creates a private temporary flattened kubeconfig with the requested
-context/namespace; it does not edit the original. It preflights permissions and
-required PVC/Secret references, invokes Forge's existing deployment/workload/
-finalizer flow, and captures serving configuration/readiness/image identity
-before and after the workload. The default overall deadline is six hours.
-Forge imports and execution use its installation directory, matching its native
-launcher so DSL task registration and lookup agree regardless of contributor cwd.
-Cleanup targets Forge-created names, not existing model PVCs or secrets. An
-uncatchable kill/host failure can still leave resources; inspect local diagnostics
-and reconcile only the recorded run-owned resources, without force-deletion.
-
-### Non-root UID admission
-
-For complete Deployment/LWS Pod templates, the runner performs a **Pod**
-server-side dry run in the target namespace with the declared service account.
-It first preserves the authored UID. Only an explicit `runAsUser` admission
-rejection permits a second, UID-omitted candidate, and that candidate must retain
-`runAsNonRoot: true` and receive a concrete positive UID. Authentication/network
-errors, missing assignments, and root/container-level overrides fail closed.
-The runner never infers UID assignment from the presence of OpenShift APIs,
-copies unrelated admission mutations, grants SCC permissions, or allows root.
-
-Dry runs use the caller's identity, which can differ from a workload controller's
-identity. They are preflight evidence, not a controller-admission guarantee.
-The real serving Pod's effective UID (container setting overrides Pod setting)
-and service account are checked against the probe **before** benchmarking and
-again afterward. `runtime.json` records the decision and admitted security
-contexts, and offline import verifies the exact UID transformation. Native
-hosted-Forge historical evidence retains its existing validation behavior.
-Deployment runtime comparison permits Kubernetes' standard read-only
-`kube-api-access-*` mount only after checking its exact projected token,
-`kube-root-ca.crt`, and namespace sources. Authored mounts and other additions
-still require an exact match; a familiar mount name alone is insufficient.
-LLMInferenceService controller-expanded templates are not guessed into complete
-Pods; their authored policy remains unchanged and actual serving Pods must show
-concrete non-root UIDs before benchmarking.
-
-The output contains:
-
-```text
-evidence.tar.gz
-evidence.tar.gz.sha256
-private-diagnostics/        # LOCAL ONLY; do not share this directory
-```
-
-**Share only the archive and checksum sidecar**, after reviewing their contents
-for your organization's privacy requirements. Private diagnostics and console
-logs can contain endpoints and other identifying details and are never included
-automatically. Credentials, prompts/responses, host identifiers, and arbitrary
-resource/log dumps are not acceptable published evidence.
-
-Native JSON exports retain numeric metrics. The source-side exporter removes
-known host-identity fields and replaces the exact generated private endpoint
-with `${ENDPOINT}`. `runtime.json` records original/export SHA-256 values and
-redacted field paths; these exports are explicitly sanitized, not described as
-byte-identical native originals. Unknown sensitive content blocks collection
-instead of being silently published. Review remains necessary.
-
-Bounded adapters address PR-322's local path: admission-aware UID handling above;
-AIPerf declaration labels are
-also written to its parser's source metadata, and benchmark Jobs may reuse the
-serving manifest's unambiguous `HF_TOKEN` Secret reference (key `HF_TOKEN`) for
-gated tokenizer access. Only the reference is passed; no Secret contents are read
-into the bundle. Forge still owns deployment, workload execution, parsing, and
-cleanup. Actual harness invocation settings are recorded in `runtime.json`.
-
-Nonzero exit outcomes distinguish failed, interrupted, and collection-failed
-attempts. They can return diagnostic-only bundles, but the maintainer importer
-will not admit them as successful benchmark evidence. Very early input errors
-or uncatchable kills may prevent archive creation; local data is not uploaded
-or erased. Preserve attempts independently.
-
-## Maintainer: inspect, review, import
-
-Work in a clean, trusted feature worktree based on `main`, with the tested commit
-available in Git. The importer does not fetch commits, execute bundle code, run
-historical renderers, or need GPU/cluster access. Confirm the checksum through
-the contributor's approved delivery channel; a self-reported checksum is not
-an execution attestation.
+After human privacy/provenance review:
 
 ```sh
 python3 tools/import_contributor.py /received/evidence.tar.gz \
-  --checksum sha256:THE_RETURNED_SHA256
-```
-
-This is read-only by default: safe bounded archive parsing, canonical input
-closure/Git attribution, platform/model identity, captured launch equivalence,
-ready serving roles and consistent image digests, privacy guards, and independent
-KPI-to-result replay. Source-side native exports remain available for review.
-The existing repository normalizer consumes the same authoritative Forge KPI
-format as hosted Forge imports; this does not independently re-attest how
-contributor-controlled raw measurements or KPIs were produced.
-
-Perform the human privacy/provenance review before applying:
-
-```sh
-python3 tools/import_contributor.py /received/evidence.tar.gz \
-  --checksum sha256:THE_RETURNED_SHA256 --apply --reviewed
-```
-
-Without external storage, sanitized native exports are retained locally in the
-run directory. For bulky artifacts, maintainers can instead upload the complete
-approved archive to durable S3 storage using their own AWS CLI v2 credentials:
-
-```sh
-python3 tools/import_contributor.py /received/evidence.tar.gz \
-  --checksum sha256:THE_RETURNED_SHA256 --apply --reviewed \
-  --s3-prefix s3://TEAM_OWNED_BUCKET/accepted/contributor-evidence
-```
-
-Only this maintainer command uses AWS. Conditional writes prevent overwrite;
-S3 SHA-256 confirmation is required. A retry may reuse an existing object only
-after verifying its checksum. Bucket access/retention are maintainer policy;
-accepted evidence must not expire under an intake lifecycle. Upload failure
-preserves the received bundle and does not create repository references.
-
-The importer adds only `results/<run-id>/` files and additive `benchmark_runs`
-references. It retains `request.json`, `runtime.json`, `kpis.json`, and
-`result.json` for offline CI replay, plus either local native exports or a
-durable `s3://` artifact reference with SHA-256. Repeated imports are idempotent;
-different bytes under an existing run identity fail. It neither commits/pushes
-nor opens/merges PRs or changes maturity. Normal `validate.py`, pre-commit and CI
-replay contributor evidence without accessing S3. Replay binds an existing run
-to its historical Git snapshot, so later assessment or configuration changes do
-not rewrite/invalidate the original measurement or claim that newer inputs were
-tested. New imports still require current-input equality; historical evidence
-does not qualify an untested upgrade or platform for graduation.
-
-```sh
+  --checksum "$CHECKSUM" --apply --reviewed
 python3 tools/validate.py --current
 python3 tools/catalog.py
 git diff --check
-# Review changes and open an evidence PR through normal repository policy.
 ```
 
-## Bundle format v1 and verification
+Review the diff and open an evidence PR. The importer adds `results/<run-id>/`
+and additive `benchmark_runs` references; it does not commit, push, open PRs, or
+change maturity. Repeating an identical import is safe; different evidence under
+the same run ID is rejected. Ordinary local/CI validation replays retained
+evidence offline against its historical inputs, not newer recipe configurations.
 
-`bundle.json` contains `schema_version: 1`, the immutable request, execution
-`outcome`, and an exact file/checksum inventory. Payload files are allowlisted
-input snapshots, `kpis.json`, `runtime.json`, `result.json`, and native JSON
-exports under `raw/`. Archives are reproducible and contain no filesystem owner
-or timestamp metadata. The outer SHA-256 is in the sidecar.
+### Optional: maintainer S3 retention
 
-Intake rejects path traversal, duplicate/noncanonical names, symlinks/hardlinks,
-devices, executables, sparse files, unsupported payloads, duplicate JSON/YAML
-keys, excessive structure depth, mismatched inventories and changed results.
-Limits: 1024 files, 32 MiB/member, 256 MiB compressed/expanded intake ceiling;
-the producer uses a smaller payload ceiling to leave space for headers.
+Instead of retaining native exports as individual local files, add a durable S3
+destination to the **initial** reviewed apply command:
 
-Local/CI tests use synthetic tooling data, never published model evidence:
+```sh
+python3 tools/import_contributor.py /received/evidence.tar.gz \
+  --checksum "$CHECKSUM" --apply --reviewed \
+  --s3-prefix s3://TEAM_OWNED_BUCKET/accepted/contributor-evidence
+```
+
+Only this step needs maintainer AWS CLI v2 credentials. Conditional writes and
+S3 SHA-256 confirmation prevent silent overwrite. Upload failures preserve the
+received bundle and do not create repository references. Keep accepted evidence
+under durable retention, not an expiring intake policy.
+
+## Reference
+
+### Supported inputs and evidence limits
+
+- Runner: Linux AMD64, Python 3.12, OpenShift CLI 4.19.0, Forge PR #322 commit
+  `93b85db135425516eb000de62d2483c62cdacacc`. Archives/base image are pinned and
+  checksummed; Python dependencies are hash-locked.
+- One platform and one self-contained manifest containing one Deployment,
+  LeaderWorkerSet, or PVC-backed LLMInferenceService. Authored Services, companion
+  objects, P/D, InferenceService, custom DRA, LLMInferenceService hostPath volumes,
+  and heterogeneous serving image digests are unsupported.
+- `guidellm-8k1k`: 8000/1000 tokens, concurrent streams 1/4/16/32/64/128,
+  300 seconds per stream count. `guidellm-smoke` and `aiperf-smoke` check plumbing
+  only. AgentX remains rejected until its external corpus/tokenizer revision and
+  checksum acquisition are audited; smoke evidence is not AgentX evidence.
+- Synthetic/container tests do not establish GPU performance or live distributed
+  compatibility. Import never grants independent validation, production readiness,
+  deployment verification, or recipe maturity. Evidence covers only tested inputs.
+
+### Cluster permissions
+
+Ask your cluster administrator to check permissions for the selected kind/harness:
+
+- Cluster scope: get the selected namespace; list nodes for capacity/software facts.
+- Namespace scope: get/list/create/delete the serving resource, Services, Pods,
+  Jobs, and PVCs. Current preflight requires PVC permissions even for GuideLLM.
+- Read controller ownership chains: ReplicaSets and Deployments; StatefulSets for
+  LWS and applicable controller-expanded workloads. Allow readiness watches and
+  rollout/status reads for the selected serving resource.
+- Read referenced PVCs/Secret metadata, Pod logs and relevant events; create
+  `pods/exec` sessions for result collection. Benchmark helpers use apply, so allow
+  the required create/patch operations for their Jobs, helper Pods, and PVCs.
+- Workload service accounts must be able to pull images and satisfy admission
+  policy. Deployment/LWS Pod server-side dry runs use the caller's identity, which
+  may differ from controller admission. Preflight is not a complete RBAC audit.
+
+### Launch and admission contract
+
+The runner flattens kubeconfig into a private temporary file without editing the
+original. Forge selects `<model>/recipes/<recipe-folder>` and a recipe-relative
+`manifests/<platform>/<file>.yaml`, not an opaque `recipe_id` search.
+
+A read-only adapter serves Forge's Git lookups from the package's checksummed
+snapshot. It does not fetch Git or independently attest the contributor's source;
+maintainer import verifies the exact closure against the real tested commit.
+Forge's source/submission checks still allow only placement into an omitted
+namespace. It preserves authored serving names and refuses preexisting conflicts.
+
+**Serving resources** use create-only requests, UID-owned Pod capture, and
+UID-preconditioned cleanup. Endpoint discovery does not synthesize a Service.
+These guarantees do **not** extend to all benchmark helper resources: the pinned
+harness helpers still use apply and name-based cleanup. Existing model PVCs and
+Secrets are prerequisites, not cleanup targets.
+
+Deployment/LWS Pod probes preserve authored UIDs. UID rejection fails without a
+UID-omitted retry; correct and commit the recipe before preparing another package.
+The runner neither grants SCC permissions nor allows root. Actual Pod UIDs and
+service accounts must match the probe before and after benchmarking. Controller-
+expanded LLMInferenceService templates are not guessed into complete Pods, but
+their actual serving Pods must still show concrete non-root UIDs.
+
+Offline import verifies the unchanged launch. Runtime comparison permits only
+Kubernetes' validated standard read-only `kube-api-access-*` mount in addition to
+authored mounts, including OpenShift's exact standard service-CA projection when
+present. Benchmark Jobs can reuse an unambiguous `HF_TOKEN` Secret
+reference with key `HF_TOKEN`; Secret values are not copied into the archive.
+
+### Privacy and review
+
+Private diagnostics, console logs, and HTML reports can contain cluster endpoints
+or identifying details. Keep them local. Never publish credentials, private
+prompts/responses, host identifiers, or arbitrary resource/log dumps as evidence.
+
+Native JSON exports retain numeric metrics but remove recognized host-identity
+fields and replace the generated private endpoint with `${ENDPOINT}`.
+`runtime.json` records original/export checksums and redacted paths; these are
+sanitized exports, not byte-identical originals. **Detected prohibited fields or
+patterns block collection; unrecognized sensitive content may remain, so review
+is required.** Contributor-controlled evidence is not independent attestation.
+
+### Local HTML reports
+
+Forge generates `*__postprocessing/kpis/kpis.html` under `private-diagnostics/`.
+This pin includes AIPerf concurrency charts grouped by explicit `sweep_id` labels;
+per-run scalar KPIs remain unchanged. KPI HTML generation is separate from the
+disabled plugin `visualize` step. Reports are not in the shareable archive;
+separate sharing requires privacy review.
+
+### Legacy packages and archive format
+
+Bundles pinned to `768a285851ade70d0d5737f9bd90564350410469` remain importable and
+replayable under historical launch rules, including bounded UID omission. New
+packages use the current pin; this runner refuses old-pin execution. Keep the
+old reviewed runner for an unfinished attempt, or prepare a fresh package/run ID.
+Never relabel historical measurements.
+
+Older packages have no monitor helper/progress snapshots. From a trusted checkout,
+`python3 tools/monitor_contributor.py /path/to/output` can still show their final
+reported bundle outcome after checksum verification; it does not reconstruct
+unrecorded live phases or perform importer validation.
+
+Bundle v1 contains `bundle.json` (request, outcome, exact checksum inventory),
+allowlisted input snapshots, replay files, and native JSON exports. Intake rejects
+unsafe paths/types, executable content, duplicates, excessive structure, changed
+results, and inventory mismatches. Limits: 1024 files, 32 MiB/member, 256 MiB
+compressed/expanded intake ceiling; the producer leaves space for archive headers.
+
+### Developer verification
+
+Run from the repository root. These tests use synthetic data, not model evidence:
 
 ```sh
 python3 -m pytest tests/test_contributor.py -q
 podman build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:test .
 podman run --rm --network none --entrypoint python \
-  -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,Z" \
+  -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,z" \
   localhost/contributor-runner:test /smoke.py
 podman run --rm --network none --entrypoint python -e SMOKE_HARNESS=aiperf \
-  -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,Z" \
+  -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,z" \
   localhost/contributor-runner:test /smoke.py
 ```
 
-The container test invokes the **real pinned Forge CLI and Caliper subprocesses**;
-only Kubernetes and benchmark Jobs are simulated. It verifies collection and
-finalizers without network or credentials. A live GPU run, published runner
-digest, AgentX data contract, and graduation-policy integration are separate
-release gates. Updating Forge, the CLI, or dependencies requires rerunning these
-proofs; regenerate `requirements.lock` from `requirements.in` deliberately, not
-at contributor runtime.
+Both smoke tests invoke the real Forge CLI and Caliper; only Kubernetes and
+benchmark Jobs are simulated. Rerun these proofs after pin/CLI/dependency changes.
+Regenerate `requirements.lock` from `requirements.in` deliberately, not at runtime.

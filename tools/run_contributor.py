@@ -23,6 +23,7 @@ from contributor_bundle import (FORGE_REVISION, WORKLOADS, checksum, json_bytes,
                                 replay, shareable, validate_request, write_archive)
 from recipe_evidence import load_unique_yaml, load_unique_yaml_all
 from contributor_security import UIDAdmissionRejected, admit_manifest, check_runtime_uids
+from monitor_contributor import Progress
 
 
 def oc(*args):
@@ -43,8 +44,8 @@ def admission_probe(pod):
 
 def standalone_overrides(request, namespace):
     return {
-        'inference_playbooks.recipe': Path(request['recipe_path']).parent.name,
-        'inference_playbooks.manifest_path': request['manifest_path'],
+        'inference_playbooks.recipe': str(Path(request['recipe_path']).parent.relative_to('models')),
+        'inference_playbooks.manifest_path': str(Path(request['manifest_path']).relative_to(Path(request['recipe_path']).parent)),
         'inference_playbooks.namespace': namespace,
         'inference_playbooks.workload': WORKLOADS[request['workload']]['key'],
         'caliper.export.backend.mlflow.enabled': False,
@@ -136,33 +137,54 @@ def preflight(request, inputs: Path, namespace: str, context: str, private: Path
     return {'visible_nodes': facts, 'qualification': 'Observed capacity, not exclusive reservation or topology proof.'}
 
 
-def instrument(phase, request, private: Path, runtime: dict):
+def snapshot_transport(bundle, request, inputs: Path, files: dict, forge: Path):
+    """Replace Git transport only, not Forge's source/submission equivalence checks.
+
+    Packages contain reviewed checksummed snapshots, not a Git checkout. The
+    importer independently binds their exact closure to the real tested commit.
+    Never fall back to disk/Git/network for a path absent from that inventory.
+    """
+    inputs, forge = inputs.resolve(), forge.resolve()
+    def revision(root):
+        if Path(root).resolve() == inputs:
+            return request['tested_revision']
+        if Path(root).resolve() == forge:
+            installed = (forge / 'REVISION').read_text().strip()
+            if installed == request['forge_revision'] == FORGE_REVISION:
+                return installed
+        raise ValueError('snapshot revision lookup outside pinned inputs/Forge')
+
+    def git_bytes(root, commit, path):
+        if Path(root).resolve() != inputs or commit != request['tested_revision'] or path not in request['inputs']:
+            raise ValueError('snapshot lookup outside the requested input inventory')
+        raw = files['inputs/' + relative(path)]
+        if checksum(raw) != request['inputs'][path]:
+            raise ValueError('snapshot input checksum mismatch')
+        return raw
+
+    def artifact_paths(root, commit, folder):
+        if Path(root).resolve() != inputs or commit != request['tested_revision']:
+            raise ValueError('snapshot inventory lookup outside tested inputs')
+        if folder != inputs / Path(request['manifest_path']).parent:
+            raise ValueError('snapshot inventory lookup outside selected platform')
+        return sorted(inputs / name for name in request['inputs']
+                      if Path(name).parent == folder.relative_to(inputs) and Path(name).suffix in {'.yaml', '.yml'})
+
+    bundle._revision, bundle._git_bytes, bundle._git_artifact_paths = revision, git_bytes, artifact_paths
+
+
+def instrument(phase, request, private: Path, runtime: dict, inputs: Path, files: dict, forge: Path, progress: Progress):
     """Observe the existing Forge flow; retain its deployment/benchmark/finalizers."""
     original_write, original_workload = phase._write_launch_manifest, phase._run_workload
-    original_metadata = phase.create_test_metadata
-    original_strip = phase._strip_hardcoded_uid
-
-    def preserve_uid(spec):
-        # Keep Forge's HOME/USER compatibility handling, not its unconditional UID removal.
-        context = spec.get('securityContext', {})
-        missing = object()
-        uid = context.pop('runAsUser', missing)
-        try:
-            original_strip(spec)
-        finally:
-            if uid is not missing:
-                context['runAsUser'] = uid
-    phase._strip_hardcoded_uid = preserve_uid
-
-    def metadata(directory, labels, **kwargs):
-        # PR-322's AIPerf parser consumes labels, not kpi_labels. Preserve its
-        # existing declaration labels at source so both parsers retain identity.
-        kpi_labels = kwargs.get('kpi_labels', {})
-        if kpi_labels.get('benchmark_tool') == 'aiperf':
-            labels = {**kpi_labels, **labels}
-        return original_metadata(directory, labels, **kwargs)
-
-    phase.create_test_metadata = metadata
+    from projects.inference_playbooks.orchestration import manifest_bundle
+    snapshot_transport(manifest_bundle, request, inputs, files, forge)
+    runtime['input_transport'] = 'checksummed-snapshot'
+    created_resources = []
+    original_create = phase._create_checked_bundle
+    def create(src, namespace, metadata, created):
+        original_create(src, namespace, metadata, created)
+        created_resources.extend(created)
+    phase._create_checked_bundle = create
 
     def hf_secret():
         found = set()
@@ -184,6 +206,8 @@ def instrument(phase, request, private: Path, runtime: dict):
 
     original_guidellm = phase.run_guidellm_benchmark.run
     def guidellm(**kwargs):
+        definition = WORKLOADS[request['workload']]['definition']
+        progress.update('benchmarking', detail=f'GuideLLM concurrency windows: {definition["rates"]}; {definition["max_seconds"]}s per window.')
         kwargs['hf_token_secret'] = hf_secret()
         runtime['harness_invocation'] = {key: value for key, value in kwargs.items()
                                          if key not in {'endpoint_url', 'namespace', 'name'}}
@@ -193,6 +217,7 @@ def instrument(phase, request, private: Path, runtime: dict):
     from projects.aiperf.toolbox.run_aiperf_benchmark import main as aiperf
     original_aiperf, original_job = aiperf.run, aiperf.build_job_manifest
     def aiperf_run(**kwargs):
+        progress.update('benchmarking', detail=f'AIPerf concurrency: {kwargs.get("concurrency")}.')
         runtime['harness_invocation'] = {key: value for key, value in kwargs.items()
                                          if key not in {'endpoint_url', 'namespace', 'name'}}
         return original_aiperf(**kwargs)
@@ -207,7 +232,9 @@ def instrument(phase, request, private: Path, runtime: dict):
 
     def write(name, manifest):
         if manifest['kind'] in {'Deployment', 'LeaderWorkerSet', 'LLMInferenceService'}:
-            runtime['uid_admission'] = admit_manifest(manifest, manifest['metadata']['namespace'], admission_probe)
+            progress.update('deploying')
+            runtime['uid_admission'] = admit_manifest(manifest, manifest['metadata']['namespace'], admission_probe,
+                                                      allow_uid_omission=False)
             runtime['launch'] = copy.deepcopy(manifest)
             # Namespaces and provider/controller metadata do not prove performance.
             runtime['launch']['metadata'] = {'name': manifest['metadata']['name']}
@@ -215,9 +242,8 @@ def instrument(phase, request, private: Path, runtime: dict):
 
     def snapshot(namespace):
         launch = runtime['launch']
-        selector = ('app.kubernetes.io/name=' if launch['kind'] == 'LLMInferenceService'
-                    else 'forge.openshift.io/run=') + launch['metadata']['name']
-        pods = json_load(oc('get', 'pods', '-n', namespace, '-l', selector, '-o', 'json'))
+        primary = next(resource for resource in created_resources if resource['kind'] == launch['kind'])
+        pods = {'items': phase.wait_recipe.owned_pods(namespace, primary['metadata']['uid'])}
         sanitized = []
         for pod in pods['items']:
             containers = [c for c in pod['spec']['containers'] if c['name'] in {'vllm', 'vllm-leader', 'vllm-worker', 'main'}]
@@ -237,9 +263,15 @@ def instrument(phase, request, private: Path, runtime: dict):
         runtime['_private_endpoints'] = [endpoint, urlparse(endpoint).hostname]
         runtime['pods_before'] = snapshot(namespace)
         check_runtime_uids(runtime['pods_before'], runtime['uid_admission'])
-        original_workload(*args, **kwargs)
-        runtime['pods_after'] = snapshot(namespace)
-        check_runtime_uids(runtime['pods_after'], runtime['uid_admission'])
+        ready = sum(status.get('ready') is True for pod in runtime['pods_before']['items']
+                    for status in pod['status']['containerStatuses'])
+        progress.update('benchmarking', serving_ready_containers=ready)
+        try:
+            original_workload(*args, **kwargs)
+            runtime['pods_after'] = snapshot(namespace)
+            check_runtime_uids(runtime['pods_after'], runtime['uid_admission'])
+        finally:
+            progress.update('finalizing')
 
     phase._write_launch_manifest, phase._run_workload = write, workload
     workload = WORKLOADS[request['workload']]
@@ -284,8 +316,8 @@ def export_native(value, endpoints, paths=None, prefix=''):
 
 def execute(request, inputs: Path, output: Path, namespace: str, context: str, forge: Path, timeout: int):
     files = {'inputs/' + relative(name): (inputs / relative(name)).read_bytes() for name in request['inputs']}
-    recipe, _, _ = validate_request(request, files)
-    if (forge / 'REVISION').read_text().strip() != FORGE_REVISION:
+    validate_request(request, files)
+    if (forge / 'REVISION').read_text().strip() != request['forge_revision'] or request['forge_revision'] != FORGE_REVISION:
         raise ValueError('runner contains a different Forge revision')
     # Fresh output required: retries are distinct attempts, never overwritten evidence.
     output.mkdir(parents=True, exist_ok=True)
@@ -294,12 +326,12 @@ def execute(request, inputs: Path, output: Path, namespace: str, context: str, f
     outcome, runtime = 'failed', {}
     artifacts = output / 'private-diagnostics'
     artifacts.mkdir(mode=0o700)
+    progress = Progress(output, request)
     with tempfile.TemporaryDirectory(prefix='contributor-') as tmp:
         private = Path(tmp)
         try:
             runtime['environment'] = preflight(request, inputs, namespace, context, private)
             overrides = standalone_overrides(request, namespace)
-            overrides['inference_playbooks.recipe'] = recipe['recipe_id']
             metadata = artifacts / '000__ci_metadata'
             metadata.mkdir()
             (metadata / 'variable_overrides.yaml').write_text(yaml.safe_dump(overrides))
@@ -313,7 +345,7 @@ def execute(request, inputs: Path, output: Path, namespace: str, context: str, f
                 spec = importlib.util.spec_from_file_location('portable_forge_cli', forge / 'projects/inference_playbooks/orchestration/cli.py')
                 cli = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(cli)
-                instrument(cli.test_phase, request, private, runtime)
+                instrument(cli.test_phase, request, private, runtime, inputs, files, forge, progress)
                 def deadline(_signal, _frame):
                     raise TimeoutError('benchmark attempt deadline exceeded')
                 signal.signal(signal.SIGALRM, deadline)
@@ -337,6 +369,7 @@ def execute(request, inputs: Path, output: Path, namespace: str, context: str, f
         finally:
             signal.alarm(0)
         if outcome == 'succeeded':
+            progress.update('collecting')
             try:
                 kpis = list(artifacts.glob('*__postprocessing/kpis/kpis.json'))
                 if len(kpis) != 1:
@@ -368,8 +401,11 @@ def execute(request, inputs: Path, output: Path, namespace: str, context: str, f
                 (artifacts / 'collection-error.txt').write_text(traceback.format_exc())
                 files = {name: data for name, data in files.items() if name.startswith('inputs/')}
                 print('Evidence collection/privacy check failed; private diagnostics remain local.', file=sys.stderr)
+        if outcome != 'succeeded':
+            progress.update('packaging', outcome=outcome)
         archive = output / 'evidence.tar.gz'
         digest = write_archive(archive, request, outcome, files)
+        progress.update('finished', outcome=outcome)
         print(json.dumps({'outcome': outcome, 'bundle': str(archive), 'checksum': digest}))
     return 0 if outcome == 'succeeded' else 1
 

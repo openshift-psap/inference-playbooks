@@ -3,7 +3,7 @@ FROM docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c10
 
 LABEL org.opencontainers.image.source="https://github.com/openshift-psap/inference-playbooks" \
       org.opencontainers.image.description="Standalone contributor Forge runner; no artifact uploads" \
-      dev.inference-playbooks.forge-revision="768a285851ade70d0d5737f9bd90564350410469"
+      dev.inference-playbooks.forge-revision="93b85db135425516eb000de62d2483c62cdacacc"
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp USER=contributor \
     PYTHONPATH=/opt/forge:/opt/playbooks/tools PATH=/opt/forge/bin:$PATH
@@ -14,10 +14,10 @@ RUN python -m pip install --no-cache-dir --require-hashes -r /opt/requirements.l
 # Both downloaded archives are fixed and verified before extraction. No moving refs.
 RUN python - <<'PY'
 import hashlib, io, pathlib, tarfile, urllib.request
-revision = '768a285851ade70d0d5737f9bd90564350410469'
+revision = '93b85db135425516eb000de62d2483c62cdacacc'
 sources = [
     ('https://codeload.github.com/openshift-psap/forge/tar.gz/' + revision,
-     '16ed49b104a50141a6342e84a4b161b9524f38acb50bdcda9a774dc908650c45', '/opt/forge'),
+     '068fc91a2f8489b7f291f8ca31f7b8dcb6b8fa5e289bc2fcea0147d7495387c0', '/opt/forge'),
     ('https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.19.0/openshift-client-linux-4.19.0.tar.gz',
      'c90254d7ededb6da4f6d3911fbe6d7d2e35654a480d684f5d2e502e8be7cd6fd', None),
 ]

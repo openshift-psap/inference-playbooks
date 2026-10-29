@@ -14,8 +14,8 @@ from urllib.parse import urlparse
 import jsonschema
 import yaml
 
-from contributor_bundle import (WORKLOADS, checksum, json_bytes, json_load, read_archive,
-                                replay, runtime_identity, shareable)
+from contributor_bundle import (FORGE_REVISION, WORKLOADS, checksum, json_bytes, json_load, portable_manifest,
+                                read_archive, replay, runtime_identity, shareable)
 from fetch_forge_evidence import append_reference, checked_path, tested_inputs
 from forge_serving_contract import validate_launch
 from prepare_contributor import source_files
@@ -45,6 +45,12 @@ def validate_evidence(repo: Path, request: dict, files: dict, *, historical=Fals
         raise ValueError('serving kind differs from selected platform')
     if not isinstance(runtime['uid_admission'], list):
         raise ValueError('UID admission decisions must be a list')
+    if request['forge_revision'] == FORGE_REVISION:
+        expected_launch = portable_manifest(request, files)
+        expected_launch['metadata'] = {'name': expected_launch['metadata']['name']}
+        if (runtime['launch'] != expected_launch
+                or any(decision.get('mode') != 'preserve' for decision in runtime['uid_admission'])):
+            raise ValueError('captured launch differs from namespace-only Forge contract')
     validate_launch(repo, request['manifest_path'], request['tested_revision'], runtime['launch'],
                     require_current=not historical, uid_admission=runtime['uid_admission'])
     revision, image_digest = runtime_identity({**runtime, '_recipe': recipe}, request)

@@ -14,12 +14,12 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tools'))
 
-from contributor_bundle import (MAX_FILE, checksum, json_bytes, json_load, read_archive,
-                                relative, replay, shareable, write_archive)
+from contributor_bundle import (FORGE_REVISION, LEGACY_FORGE_REVISION, MAX_FILE, checksum, json_bytes,
+                                json_load, read_archive, relative, replay, shareable, validate_request, write_archive)
 from contributor_security import UIDAdmissionRejected, admit_manifest, check_runtime_uids, effective_uids
 from import_contributor import import_bundle, upload_archive
 from prepare_contributor import prepare
-from run_contributor import standalone_overrides
+from run_contributor import execute, snapshot_transport, standalone_overrides
 from validate import validate_benchmark_run
 
 
@@ -79,7 +79,6 @@ def evidence(source, tmp_path):
          'values': [[c, c * 10] for c in [1, 4, 16, 32, 64, 128]]}]}]}
     files['kpis.json'] = json_bytes(kpis)
     launch = copy.deepcopy(deployment)
-    launch['metadata']['name'] = 'test-run'
     decisions = admit_manifest(launch, 'benchmark', copy.deepcopy)
     pods = {'kind': 'List', 'items': [{'kind': 'Pod', 'spec': copy.deepcopy(launch['spec']['template']['spec']),
             'status': {'containerStatuses': [{'name': 'vllm', 'ready': True, 'imageID': 'sha256:' + 'c' * 64}]}}]}
@@ -100,12 +99,17 @@ def evidence(source, tmp_path):
 
 def test_prepare_is_pinned_scoped_and_portable(evidence, tmp_path):
     repo, root, request, files, bundle, digest = evidence
-    assert request['forge_revision'] == '768a285851ade70d0d5737f9bd90564350410469'
+    assert request['forge_revision'] == '93b85db135425516eb000de62d2483c62cdacacc'
     launcher = (tmp_path / 'package/run.sh').read_text()
     assert '--user "$(id -u):$(id -g)"' in launcher
     assert request['runner_image'] in launcher
     assert '--userns=keep-id' in launcher
     subprocess.run(['sh', '-n', str(tmp_path / 'package/run.sh')], check=True)
+    subprocess.run(['sh', '-n', str(tmp_path / 'package/monitor.sh')], check=True)
+    assert (tmp_path / 'package/monitor.py').read_bytes() == (REPO / 'tools/monitor_contributor.py').read_bytes()
+    status = subprocess.run([str(tmp_path / 'package/monitor.sh'), str(tmp_path), '--watch'],
+                            check=True, capture_output=True, text=True)
+    assert 'Outcome: succeeded' in status.stdout
     assert 'AWS' not in launcher
     assert not (tmp_path / 'package/playbooks/.git').exists()
     assert read_archive(bundle, digest)[0]['request'] == request
@@ -258,6 +262,125 @@ def test_standalone_disables_every_internal_integration(evidence):
         if key.endswith('.enabled'):
             assert value is False
     assert overrides['ci_job.cluster'] == 'portable-contributor'
+    assert overrides['inference_playbooks.recipe'] == 'test/recipes/test-recipe'
+    assert overrides['inference_playbooks.manifest_path'] == 'manifests/vllm-v0.24.0/deployment.yaml'
+
+
+def test_pin_is_consistent_with_image_and_guide():
+    containerfile = (REPO / 'benchmarks/runner/Containerfile').read_text()
+    assert f'forge-revision="{FORGE_REVISION}"' in containerfile
+    assert f"revision = '{FORGE_REVISION}'" in containerfile
+    assert FORGE_REVISION in (REPO / 'docs/contributor-benchmarks.md').read_text()
+
+
+def test_unknown_forge_pin_is_rejected(evidence):
+    _, _, request, files, _, _ = evidence
+    request['forge_revision'] = '0' * 40
+    with pytest.raises(ValueError, match='unsupported Forge revision'):
+        validate_request(request, files)
+
+
+def test_current_runner_refuses_legacy_request_before_preflight(evidence, tmp_path):
+    _, _, request, _, _, _ = evidence
+    request['forge_revision'] = LEGACY_FORGE_REVISION
+    forge = tmp_path / 'forge'
+    forge.mkdir()
+    (forge / 'REVISION').write_text(FORGE_REVISION)
+    output = tmp_path / 'outputs'
+    with pytest.raises(ValueError, match='different Forge revision'):
+        execute(request, tmp_path / 'package/playbooks', output, 'benchmark', 'fixture', forge, 60)
+    assert not output.exists()
+
+
+def test_snapshot_transport_is_bounded_and_checksummed(evidence, tmp_path):
+    _, _, request, files, _, _ = evidence
+    inputs, forge = tmp_path / 'inputs', tmp_path / 'forge'
+    inputs.mkdir()
+    forge.mkdir()
+    (forge / 'REVISION').write_text(FORGE_REVISION)
+    bundle = SimpleNamespace()
+    snapshot_transport(bundle, request, inputs, files, forge)
+    assert bundle._revision(inputs) == request['tested_revision']
+    assert bundle._revision(forge) == FORGE_REVISION
+    assert bundle._git_bytes(inputs, request['tested_revision'], request['recipe_path']) == files['inputs/' + request['recipe_path']]
+    assert bundle._git_artifact_paths(inputs, request['tested_revision'], inputs / Path(request['manifest_path']).parent) == [inputs / request['manifest_path']]
+    with pytest.raises(ValueError, match='outside'):
+        bundle._revision(tmp_path)
+    for root, revision, path in [(tmp_path, request['tested_revision'], request['recipe_path']),
+                                  (inputs, '0' * 40, request['recipe_path']),
+                                  (inputs, request['tested_revision'], 'models/unrequested.yaml')]:
+        with pytest.raises(ValueError, match='outside'):
+            bundle._git_bytes(root, revision, path)
+    with pytest.raises(ValueError, match='outside selected platform'):
+        bundle._git_artifact_paths(inputs, request['tested_revision'], inputs)
+    files['inputs/' + request['recipe_path']] += b'\n# changed\n'
+    with pytest.raises(ValueError, match='checksum'):
+        bundle._git_bytes(inputs, request['tested_revision'], request['recipe_path'])
+    (forge / 'REVISION').write_text(LEGACY_FORGE_REVISION)
+    with pytest.raises(ValueError, match='outside'):
+        bundle._revision(forge)
+
+
+@pytest.mark.parametrize('change', ['service', 'extra-file', 'llmisvc-hostpath'])
+def test_prepare_rejects_incompatible_forge_bundles(source, tmp_path, change):
+    repo, root, manifest = source
+    path = root / 'manifests/vllm-v0.24.0/deployment.yaml'
+    if change == 'service':
+        path.write_text(path.read_text() + '---\napiVersion: v1\nkind: Service\nmetadata:\n  name: test\n')
+    elif change == 'extra-file':
+        (path.parent / 'extra.yml').write_text('kind: Service\n')
+    else:
+        manifest = {'apiVersion': 'serving.kserve.io/v1alpha2', 'kind': 'LLMInferenceService',
+                    'metadata': {'name': 'test'}, 'spec': {'model': {'uri': 'pvc://models/model'},
+                    'template': {'volumes': [{'name': 'model', 'hostPath': {'path': '/models'}}]}}}
+        path.write_text(yaml.safe_dump(manifest))
+    commit(repo)
+    with pytest.raises(ValueError, match='serving resource|self-contained|hostPath'):
+        prepare(repo, str((root / 'recipe.yaml').relative_to(repo)), 'vllm', 'v0.24.0',
+                'guidellm-8k1k', 'quay.io/example/runner@sha256:' + 'a' * 64,
+                'ghcr.io/vllm-project/guidellm@sha256:' + 'b' * 64, tmp_path / 'incompatible')
+    assert not (tmp_path / 'incompatible').exists()
+
+
+@pytest.mark.parametrize('change', ['name', 'uid', 'env', 'label'])
+def test_new_pin_rejects_old_launch_rewrites(evidence, tmp_path, change):
+    repo, _, request, files, _, _ = evidence
+    runtime = json_load(files['runtime.json'])
+    launch = runtime['launch']
+    if change == 'name':
+        launch['metadata']['name'] = 'test-run'
+    elif change == 'uid':
+        del launch['spec']['template']['spec']['securityContext']['runAsUser']
+    elif change == 'env':
+        launch['spec']['template']['spec']['containers'][0]['env'] = [{'name': 'HOME', 'value': '/tmp'}]
+    else:
+        launch['spec']['template']['metadata']['labels']['forge.openshift.io/run'] = 'test'
+    files['runtime.json'] = json_bytes(runtime)
+    path = tmp_path / 'rewrite.tar.gz'
+    digest = write_archive(path, request, 'succeeded', files)
+    with pytest.raises(ValueError, match='namespace-only'):
+        import_bundle(repo, path, digest)
+
+
+def test_legacy_pin_bundle_remains_importable_and_replayable(evidence, tmp_path):
+    repo, _, request, files, _, _ = evidence
+    request['forge_revision'] = LEGACY_FORGE_REVISION
+    runtime = json_load(files['runtime.json'])
+    runtime['launch']['metadata']['name'] = 'legacy-test-run'
+    def probe(pod):
+        if 'runAsUser' in pod['spec']['securityContext']:
+            raise UIDAdmissionRejected('runAsUser rejected')
+        pod['spec']['securityContext']['runAsUser'] = 1000123000
+        return pod
+    runtime['uid_admission'] = admit_manifest(runtime['launch'], 'benchmark', probe)
+    for key in ('pods_before', 'pods_after'):
+        runtime[key]['items'][0]['spec']['securityContext']['runAsUser'] = 1000123000
+    files['runtime.json'] = json_bytes(runtime)
+    path = tmp_path / 'legacy.tar.gz'
+    digest = write_archive(path, request, 'succeeded', files)
+    assert import_bundle(repo, path, digest, apply=True, reviewed=True)['applied']
+    run_path = next(repo.glob('models/*/recipes/*/results/*/run.yaml'))
+    assert validate_benchmark_run(repo, run_path, yaml.safe_load(run_path.read_text()))[0] == []
 
 
 def test_maintainer_upload_is_conditional_checksums_and_retry(tmp_path, monkeypatch):
@@ -442,6 +565,17 @@ def test_admission_does_not_fallback_on_auth_or_network_error(source):
     assert len(calls) == 1
 
 
+def test_new_forge_admission_never_rewrites_rejected_uid(source):
+    _, _, manifest = source
+    before, calls = copy.deepcopy(manifest), []
+    def probe(pod):
+        calls.append(pod)
+        raise UIDAdmissionRejected('runAsUser rejected')
+    with pytest.raises(ValueError, match='update and commit the recipe'):
+        admit_manifest(manifest, 'benchmark', probe, allow_uid_omission=False)
+    assert len(calls) == 1 and manifest == before
+
+
 def test_container_uid_overrides_pod_uid_and_root_is_rejected(source):
     _, _, manifest = source
     spec = manifest['spec']['template']['spec']
@@ -492,7 +626,7 @@ def test_import_requires_uid_decisions(evidence, tmp_path, decisions):
         import_bundle(repo, path, digest)
 
 
-@pytest.mark.parametrize('change', [None, 'secret', 'root-ca', 'writable', 'mount-path', 'extra-source'])
+@pytest.mark.parametrize('change', [None, 'openshift-ca', 'bad-openshift-ca', 'secret', 'root-ca', 'writable', 'mount-path', 'extra-source'])
 def test_import_allows_only_standard_injected_service_account_mount(evidence, tmp_path, change):
     repo, _, request, files, _, _ = evidence
     runtime = json_load(files['runtime.json'])
@@ -502,7 +636,12 @@ def test_import_allows_only_standard_injected_service_account_mount(evidence, tm
         {'downwardAPI': {'items': [{'fieldRef': {'apiVersion': 'v1', 'fieldPath': 'metadata.namespace'},
                                    'path': 'namespace'}]}}]}}
     mount = {'name': volume['name'], 'mountPath': '/var/run/secrets/kubernetes.io/serviceaccount', 'readOnly': True}
-    if change == 'secret':
+    if change in {'openshift-ca', 'bad-openshift-ca'}:
+        volume['projected']['sources'].append({'configMap': {'name': 'openshift-service-ca.crt',
+            'items': [{'key': 'service-ca.crt', 'path': 'service-ca.crt'}]}})
+        if change == 'bad-openshift-ca':
+            volume['projected']['sources'][-1]['configMap']['items'][0]['key'] = 'unexpected'
+    elif change == 'secret':
         volume['projected']['sources'][0] = {'secret': {'name': 'unexpected'}}
     elif change == 'root-ca':
         volume['projected']['sources'][1]['configMap']['name'] = 'unexpected'
@@ -519,7 +658,7 @@ def test_import_allows_only_standard_injected_service_account_mount(evidence, tm
     files['runtime.json'] = json_bytes(runtime)
     path = tmp_path / 'admitted-mount.tar.gz'
     digest = write_archive(path, request, 'succeeded', files)
-    if change is None:
+    if change in {None, 'openshift-ca'}:
         assert import_bundle(repo, path, digest)['applied'] is False
     else:
         with pytest.raises(ValueError, match='runtime serving configuration differs'):

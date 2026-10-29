@@ -1,5 +1,10 @@
 # Common Benchmark Jobs
 
+Received a prepared recipe package, or need to collect importable recipe evidence?
+Use the [portable contributor runner guide](../docs/contributor-benchmarks.md)
+instead. The manual Jobs described here have different Service, PVC, and version
+requirements; do not apply these instructions to the portable runner package.
+
 This directory contains Kubernetes Job templates that can benchmark any
 OpenAI-compatible inference endpoint. Apply each Job in the same namespace as
 the target Service, after making the required substitutions described below.
