@@ -1,0 +1,43 @@
+schema_version: 1
+profile_id: coreweave-h200-sxm-8x-2tib-r1
+profile_revision: 2
+kind: hardware-profile
+description: >
+  CoreWeave eight-H200 SXM node with about 2 TiB of host memory, used for the
+  GLM-5.3 HiSparse and P/D runs. The host memory is what distinguishes it
+  from the generic H200 profile: these recipes keep 512 GiB of KV cache in
+  host memory per node.
+accelerator_key: nvidia-h200-x8
+
+provider:
+  name: coreweave
+
+accelerators:
+  vendor: nvidia
+  model: H200
+  form_factor: SXM
+  count_per_node: 8
+  memory_per_gpu_gib: 141
+  intra_node_interconnect: nvlink
+
+host:
+  cpu_architecture: x86_64
+  cpu_count: 128
+  memory_gib: 2014
+
+# Single-node recipes do not use the inter-node network; P/D recipes move KV
+# cache between nodes over it with NIXL (UCX over RDMA).
+network:
+  inter_node_transport: infiniband
+  inter_node_bandwidth_gbe: 3200
+  rdma: true
+  accelerator_nic_allocation: rdma/ib device-plugin resource, 8 per node
+  notes: >
+    Eight 400 Gb/s InfiniBand ports per node, one per GPU (3200 Gb/s
+    aggregate), exposed to pods as the rdma/ib resource.
+
+correction_log:
+  - revision: 1
+    summary: Initial profile.
+  - revision: 2
+    summary: Record the InfiniBand network (8 x 400 Gb/s RDMA per node), which the P/D recipes use.
