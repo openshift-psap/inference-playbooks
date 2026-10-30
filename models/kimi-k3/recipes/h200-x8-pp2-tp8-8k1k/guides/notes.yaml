@@ -1,0 +1,62 @@
+schema_version: 1
+profile:
+  label: Kimi K3 throughput on two H200 nodes
+  headline: TP8×PP2 configuration with the Humming MoE backend on two H200 nodes.
+  specs:
+    - {label: Checkpoint, source: "model.yaml#/huggingface_id"}
+    - {label: Hardware, source: "hardware_profile#/accelerators"}
+    - {label: Parallelism, source: "recipe.yaml#/serving/parallelism"}
+    - {label: Precision, source: "recipe.yaml#/quantization"}
+    - {label: Context and backend, source: "recipe.yaml#/serving/args"}
+decisions:
+  - subjects: [tensor parallelism, pipeline parallelism, moe backend]
+    why: Preserve the submitted TP8×PP2 Humming configuration.
+  - subjects: [RDMA device selection, NCCL_IB_GID_INDEX]
+    why: Allow NCCL to select among the pod's allocated RDMA devices while retaining the submitted RoCE GID.
+  - subjects: [image, Humming SITU]
+    why: >-
+      Replace the submitted development image with the upstream vLLM release
+      following Michey's recommendation:
+      https://github.com/openshift-psap/inference-playbooks/pull/19#issuecomment-6004104985.
+      Release source includes Kimi K3 pipeline parallelism and Humming SITU;
+      remove the legacy site-packages patch rather than modifying the new image.
+      See https://github.com/vllm-project/vllm/releases/tag/v0.29.0 and
+      https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/model_executor/layers/fused_moe/experts/fused_humming_moe.py.
+  - subjects: [platform scope]
+    why: This contribution targets standalone vLLM only. RHOAI deployment is explicitly out of scope and must be introduced through a separate recipe and review.
+known_issues:
+  - issue: The selected CUDA 13.0 image requires an r580+ NVIDIA driver on both nodes.
+    impact: An incompatible host driver can prevent GPU initialization.
+    mitigation: >-
+      Check the driver on both nodes against the image's CUDA requirements
+      before deployment.
+  - issue: FLASHMLA and Humming startup compatibility with the selected image and H200 TP8×PP2 layout needs confirmation.
+    impact: Model or backend initialization failures can prevent the two-node serving group from becoming ready.
+    mitigation: Verify model loading and distributed startup on both roles, then exercise tool and reasoning parsing through the leader endpoint.
+  - issue: The submitted GID setting may not match the target cluster's RoCE configuration.
+    impact: Incorrect device or GID selection can prevent inter-node communication.
+    mitigation: Verify the allocated RDMA devices and GID value on both nodes and confirm RDMA connectivity before starting the serving group.
+  - issue: The serving image uses a versioned tag rather than an immutable digest.
+    impact: Tag changes or different node caches can select different executable images across roles or restarts.
+    mitigation: Resolve and pin the image digest before deployment and record it with benchmark evidence.
+  - issue: The selected image's startup with the namespace-assigned non-root UID needs confirmation.
+    impact: A process that assumes root or cannot write to its configured cache can fail during startup.
+    mitigation: Run both LWS roles with OpenShift-assigned non-root UIDs, keep writable caches on emptyDir, and verify model startup; do not grant anyuid unless runtime evidence shows it is required.
+  - issue: Each eligible GPU node needs a mounted local NVMe cache with the same pinned checkpoint and hostPath admission.
+    impact: A missing RAID mount, incomplete or mismatched checkpoint, insufficient permissions, or an SCC that disallows hostPath prevents model loading on one or both nodes.
+    mitigation: Verify the local filesystem and checkpoint on both nodes, allow the configured read-only hostPath through the serving service account's SCC, and retain writable caches on emptyDir. See guides/storage.md.
+  - issue: The reported source sweep used 1000 input and 1000 output tokens rather than the target GuideLLM 8K/1K workload.
+    impact: The source sweep's input distribution does not represent the selected workload.
+    mitigation: Run the target workload and commit its exact harness configuration, prompt provenance, raw output, and normalized results.
+quickstart:
+  - step: Prepare
+    detail: >-
+      Install the LeaderWorkerSet controller and composite DRA GPU/NIC-pair
+      driver; verify both local NVMe model caches, matching checkpoint revisions,
+      and image availability. The serving overlay runs both roles as non-root;
+      verify read-only checkpoint access, hostPath admission, and writable
+      emptyDir caches with the assigned SCC.
+  - {step: Network, detail: Verify allocated RDMA devices and target-cluster GID settings symmetrically; see recipe.yaml and the referenced hardware profile.}
+  - {step: Render, detail: Run tools/render.py for this recipe; config/ is an overlay and must not be applied directly.}
+  - {step: Deploy, detail: "Apply manifests/vllm-v0.29.0/leaderworkerset.yaml. The LWS controller creates the headless Service for leader/worker rendezvous; the recipe does not create an HTTP Service."}
+  - {step: Verify, detail: "Port-forward the leader pod's port 8000, wait for leader health, and query /v1/models. Confirm real-checkpoint loading before benchmarking and recording sanitized artifacts. Use guides/validation.md for the promotion reviewer checklist."}

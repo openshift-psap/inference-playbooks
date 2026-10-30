@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: download-kimi-k3-model
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      containers:
+        - name: download
+          image: docker.io/vllm/vllm-openai:v0.29.0
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              if [ -e /models/Kimi-K3 ]; then
+                echo "Refusing to overwrite existing /models/Kimi-K3; use an empty model claim." >&2
+                exit 1
+              fi
+              hf download moonshotai/Kimi-K3 \
+                --revision f831ab66814297da540d832a5235f8e904f29d06 \
+                --local-dir /models/Kimi-K3
+              test -s /models/Kimi-K3/config.json
+              test -s /models/Kimi-K3/model.safetensors.index.json
+              test "$(find /models/Kimi-K3 -maxdepth 1 -type f -name 'model-*-of-000096.safetensors' -size +0c | wc -l)" -eq 96
+          env:
+            - name: HF_HOME
+              value: /tmp/hf-home
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+          volumeMounts:
+            - name: model-weights
+              mountPath: /models
+      restartPolicy: Never
+      volumes:
+        - name: model-weights
+          persistentVolumeClaim:
+            claimName: inference-playbooks-model-kimi-k3-9fcb53074b

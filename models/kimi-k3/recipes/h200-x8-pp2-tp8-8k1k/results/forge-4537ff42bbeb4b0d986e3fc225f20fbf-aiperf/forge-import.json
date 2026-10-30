@@ -1,0 +1,32 @@
+{
+  "outputs": [
+    {
+      "benchmark_run_id": "4537ff42bbeb4b0d986e3fc225f20fbf",
+      "files": {
+        "kpis.json": "cdb08d73fa5c0b37f7c575550d88ec916efac5f0",
+        "result.json": "034c358adfa90b25765bf71d8555765e2d996943",
+        "run.yaml": "1010031995442d0c2a12241b0910bad38f667f57"
+      },
+      "harness": "aiperf",
+      "recipe_path": "models/kimi-k3/recipes/h200-x8-pp2-tp8-8k1k/recipe.yaml",
+      "run_path": "models/kimi-k3/recipes/h200-x8-pp2-tp8-8k1k/results/forge-4537ff42bbeb4b0d986e3fc225f20fbf-aiperf/run.yaml"
+    },
+    {
+      "benchmark_run_id": "4537ff42bbeb4b0d986e3fc225f20fbf",
+      "files": {
+        "kpis.json": "cdb08d73fa5c0b37f7c575550d88ec916efac5f0",
+        "result.json": "9e22b86f32094e9216d23254320ea6230aff1850",
+        "run.yaml": "f988e0b31efe8e573e49f61854ca7fe139115eb5"
+      },
+      "harness": "guidellm",
+      "recipe_path": "models/kimi-k3/recipes/h200-x8-pp2-tp8-8k1k/recipe.yaml",
+      "run_path": "models/kimi-k3/recipes/h200-x8-pp2-tp8-8k1k/results/forge-4537ff42bbeb4b0d986e3fc225f20fbf-guidellm/run.yaml"
+    }
+  ],
+  "parent_run_id": "4537ff42bbeb4b0d986e3fc225f20fbf",
+  "pr_number": 19,
+  "tested_revision": "69c51de1c7a66fbdfcff2a0256add4ae68e61e5a",
+  "tracking_origin": "https://mlflow.apps.psap-automation.ibm.rhperfscale.org",
+  "version": 1,
+  "workspace": "forge-inference-playbooks"
+}
