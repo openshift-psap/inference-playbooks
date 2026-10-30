@@ -1,5 +1,8 @@
 # Forge benchmark evidence ingestion
 
+This page describes post-merge ingestion and backfill. For importing directly
+into an open recipe PR, see the [maintainer workflow](../tests/forge/README.md#maintainer-workflow-open-pr).
+
 `benchmark-ingest.yml` finds merged recipe PRs on a `main` push, or backfills
 one merged PR through `workflow_dispatch`. It selects only the latest explicit
 successful `psap-forge-bot[bot]` report, ordered by GitHub `created_at` then ID.
@@ -60,9 +63,10 @@ to `main`; ingestion itself does not publish the site or promote recipe maturity
 
 ## Execution metadata
 
-Consolidated parent imports do not require custom `playbooks.*` tags. When these
-tags are incomplete, intake reads existing parent artifacts to populate the
-unchanged benchmark-run fields:
+Consolidated parent imports do not require custom `playbooks.*` tags. Intake
+always checks the recorded execution artifacts, including the versioned bundle
+contract for current producers. Complete tags must agree with those artifacts;
+they cannot bypass validation. Recorded inputs supply the benchmark-run fields:
 
 - `01__test/000__ci_metadata/fournos_fjob.yaml`: foreign recipe PR number and
   requested/tested recipe SHA from `spec.env`, checked against the final PR history.
