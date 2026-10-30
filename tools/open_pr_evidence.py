@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fetch_forge_evidence import Client, import_parent
-from forge_admission import FILES, RECEIPT, admitted_execution, load_admissions, origin
+from forge_admission import FILES, RECEIPT, load_admissions
 from ingest_forge import github, selected_run
 from recipe_evidence import load_unique_yaml
 
@@ -202,14 +202,14 @@ def prepare(repository, number, comment_id, output, actor, insecure=False):
     trusted_inputs(repo, TRUSTED)
     client = Client(uri, selected['workspace'], os.environ['MLFLOW_USERNAME'], os.environ['MLFLOW_PASSWORD'], insecure)
     admissions = load_admissions(repo)
-    admission = admissions.get((origin(uri), selected['workspace'], selected['run_id']))
-    revision = admission['receipt']['tested_revision'] if admission else recorded_revision(client, selected['run_id'], number)
+    revision = recorded_revision(client, selected['run_id'], number)
     if git(repo, 'merge-base', '--is-ancestor', revision, snapshot['head_sha'], check=False).returncode:
         raise ValueError('tested recipe SHA is not in this PR head history; select a matching run or rerun Forge')
     print(f"PR #{number}: selected run {selected['run_id']}; tested {revision}; current head {snapshot['head_sha']}")
-    if not admitted_execution(repo, admissions, client, selected['run_id'], revision, number, {}):
-        import_parent(client, repo, selected['run_id'], revision, number, comment_id,
-                      require_parent=True, admissions=admissions)
+    # An open PR's receipt is an index, not proof of the selected experiment.
+    # Re-import compares existing immutable files with the actual Forge output.
+    import_parent(client, repo, selected['run_id'], revision, number, comment_id,
+                  require_parent=True, admissions=admissions)
     validate_candidate(repo, TRUSTED)
     files, patch = collect_changes(repo)
     small = len(files) <= MAX_PUBLISH_FILES and sum(len(item['contents']) for item in files) <= MAX_PUBLISH_BYTES
@@ -228,7 +228,7 @@ def prepare(repository, number, comment_id, output, actor, insecure=False):
                     'git apply --check evidence.patch && git apply evidence.patch\n```\n'
                     'Commit the evidence to the existing PR, then run normal PR validation.\n')
     elif mode == 'unchanged':
-        summary += 'This execution is already indexed and remains applicable. No commit is needed.\n'
+        summary += 'Committed evidence matches the selected Forge execution and remains applicable. No commit is needed.\n'
     (output / 'summary.md').write_text(summary)
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:

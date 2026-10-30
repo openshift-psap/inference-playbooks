@@ -34,8 +34,11 @@ publication, including when App permissions prevent a write.
 
 Select each attempt explicitly. If deployment inputs change, fix the recipe,
 rerun Forge, and select the new successful report. Existing result files are
-immutable. Re-selecting an already imported execution validates its committed
-receipt and makes no commit; evidence-only commits or unrelated tooling merges
+immutable. Re-selecting an already imported execution re-reads its Forge
+metadata and KPIs and compares the regenerated evidence with the committed
+files. Matching evidence makes no commit; this requires MLflow access but no
+GPU rerun. A receipt alone does not establish the selected experiment's results.
+Evidence-only commits or unrelated tooling merges
 do not require another GPU run. The original tested SHA is preserved. Failures
 and delivery details appear in the Actions run summary.
 

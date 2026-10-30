@@ -190,20 +190,54 @@ def test_size_limit_falls_back_to_patch(open_intake, monkeypatch):
     assert plan['mode'] == 'patch'
 
 
-def test_repeat_import_after_evidence_commit_is_offline_and_noop(open_intake):
+def test_repeat_import_rechecks_selected_execution_and_is_noop(open_intake, monkeypatch):
     state, _, _, _, revision, client, *_ = open_intake
     plan, output = prepare(open_intake)
     repo = output / 'checkout'
     commit_evidence(repo)
     state['source'] = repo
     state['pr']['head']['sha'] = workflow.git(repo, 'rev-parse', 'HEAD').stdout.decode().strip()
-    client.request = client.run = client.kpis = lambda *a, **kw: pytest.fail('repeat admission contacted MLflow')
+    calls = []
+    original = client.kpis
+    def observed(run_id):
+        calls.append(run_id)
+        return original(run_id)
+    monkeypatch.setattr(client, 'kpis', observed)
     repeated, repeated_output = prepare(open_intake, 'repeated')
     assert repeated['mode'] == 'unchanged'
     assert repeated['tested_revision'] == revision
     assert repeated['files'] == []
     assert repeated_output.joinpath('evidence.patch').read_bytes() == b''
     assert workflow.publish(repeated, 'maintainer') is None
+    assert not state['mutations']
+    assert calls == [plan['run_id']]
+
+
+@pytest.mark.parametrize('mismatch', ['pr', 'revision', 'kpis'])
+def test_receipt_does_not_bypass_selected_execution_comparison(open_intake, mismatch):
+    state, _, _, _, _, client, _, artifacts = open_intake
+    _, output = prepare(open_intake)
+    repo = output / 'checkout'
+    commit_evidence(repo)
+    state['source'] = repo
+    state['pr']['head']['sha'] = workflow.git(repo, 'rev-parse', 'HEAD').stdout.decode().strip()
+    if mismatch == 'kpis':
+        artifact_path, raw = client.kpis('d' * 32)
+        document = json.loads(raw)
+        metric = next(k for k in document['tests'][0]['kpis'] if k['kpi_id'] == 'playbooks_ttft_median')
+        metric['values'][0][1] += 1
+        client.kpis = lambda run_id: (artifact_path, json.dumps(document).encode())
+        expected = 'immutable run already exists with different evidence'
+    else:
+        key = '01__test/000__ci_metadata/fournos_fjob.yaml'
+        document = yaml.safe_load(artifacts[key])
+        field = 'FORGE_FOREIGN_TESTING_PULL_' + ('NUMBER' if mismatch == 'pr' else 'PULL_SHA')
+        document['spec']['env'][field] = '35' if mismatch == 'pr' else 'f' * 40
+        artifacts[key] = yaml.safe_dump(document)
+        expected = 'another PR' if mismatch == 'pr' else 'not in this PR head history'
+    with pytest.raises(ValueError, match=expected):
+        prepare(open_intake, 'mismatched')
+    assert not (open_intake[2] / 'mismatched/plan.json').exists()
     assert not state['mutations']
 
 
@@ -217,6 +251,7 @@ def test_fix_rerun_import_preserves_history_and_rejects_old_run(open_intake):
     recipe = yaml.safe_load(recipe_path.read_text())
     recipe['serving']['args'] = [{'flag': '--max-num-seqs', 'value': '8'}]
     recipe_path.write_text(yaml.safe_dump(recipe))
+    old_artifacts = dict(artifacts)
     source = next(key for key in artifacts if key.endswith('/server-deployment.yaml'))
     launch = yaml.safe_load(artifacts[source])
     launch['spec']['template']['spec']['containers'][0]['args'] += ['--max-num-seqs', '8']
@@ -224,10 +259,13 @@ def test_fix_rerun_import_preserves_history_and_rejects_old_run(open_intake):
     new_revision = record_launch(repo, artifacts, source)
     state['source'] = repo
     state['pr']['head']['sha'] = new_revision
+    new_artifacts = dict(artifacts)
+    artifacts.update(old_artifacts)
     with pytest.raises(ValueError, match='differs from tested revision'):
         prepare(open_intake, 'stale')
     assert not (open_intake[2] / 'stale/plan.json').exists()
 
+    artifacts.update(new_artifacts)
     parent['info']['run_id'] = 'e' * 32
     original = client.request
     client.request = lambda endpoint, *a, **kw: original(endpoint.replace('e' * 32, 'd' * 32), *a, **kw)
