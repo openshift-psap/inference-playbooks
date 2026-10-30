@@ -79,3 +79,6 @@ deployment:
   manifests:
     - {path: manifests/vllm-v0.29.0/leaderworkerset.yaml, kind: LeaderWorkerSet, generated: true}
 notes: guides/notes.yaml
+benchmark_runs:
+- results/forge-4537ff42bbeb4b0d986e3fc225f20fbf-guidellm/run.yaml
+- results/forge-4537ff42bbeb4b0d986e3fc225f20fbf-aiperf/run.yaml
