@@ -1,15 +1,17 @@
 """Sweep intent comes from producer profiles/Jobs, never observed KPI points."""
 import copy
+import io
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from forge_workload_contract import invocation_levels, replay_expectations, workload_expectations
+from forge_workload_contract import fetch_profiles, invocation_levels, replay_expectations, workload_expectations
 from normalize_kpis import normalize
 
 
@@ -161,3 +163,29 @@ def test_invalid_profile_levels_are_not_rounded_into_a_plan(planning, value):
     planning[3]['ai']['concurrency'] = value
     with pytest.raises(ValueError):
         derive(planning)
+
+
+def test_profile_download_has_no_byte_size_cap(monkeypatch):
+    from fetch_forge_evidence import NoRedirect
+    revision = 'c' * 40
+    raw = b'# ' + b'x' * (1024 * 1024) + b'\nguide:\n  rates: [1, 4, 16, 32]\n'
+    calls = []
+    def open_profile(url, *, timeout):
+        calls.append((url, timeout))
+        return io.BytesIO(raw)
+    def opener(*handlers):
+        assert len(handlers) == 1 and isinstance(handlers[0], NoRedirect)
+        return SimpleNamespace(open=open_profile)
+    monkeypatch.setattr('forge_workload_contract.build_opener', opener)
+    fetch_profiles.cache_clear()
+    try:
+        url, downloaded = fetch_profiles(revision)
+        assert downloaded == raw
+        assert yaml.safe_load(downloaded)['guide']['rates'] == [1, 4, 16, 32]
+        assert url == (f'https://raw.githubusercontent.com/openshift-psap/forge/{revision}/'
+                       'projects/rhaiis/orchestration/config.d/workloads.yaml')
+        assert calls == [(url, 30)]
+        assert fetch_profiles(revision) == (url, downloaded)
+        assert len(calls) == 1
+    finally:
+        fetch_profiles.cache_clear()

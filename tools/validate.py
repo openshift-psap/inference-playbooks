@@ -555,6 +555,13 @@ def validate_benchmark_run(repo: Path, path: Path, run: dict) -> tuple[list[str]
         elif artifact_uri:
             if not artifact.get("checksum"):
                 errors.append(f"{path}: artifact[{i}] external URI requires a checksum: {artifact_uri}")
+    if run.get('evidence_source') == 'contributor-forge' and result_path and result_path.is_file():
+        from import_contributor import replay_run
+        import subprocess
+        try:
+            replay_run(repo, path, run)
+        except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+            errors.append(f'{path}: contributor evidence replay failed: {error}')
     if run.get('evidence_source') == 'forge-kpis' and result_path and result_path.is_file():
         # The same offline replay runs in local validation/pre-commit and CI.
         from normalize_kpis import normalize

@@ -9,6 +9,32 @@ on:
     branches: [main]
 
 jobs:
+  contributor-bundles:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Test portable bundle and maintainer import contract
+        run: |
+          python3 -m pip install -r tools/requirements.txt pytest==8.3.4
+          python3 -m pytest tests/test_contributor.py tests/test_contributor_monitor.py tests/test_runner_image_security.py -q
+      - name: Build pinned Forge runner (never publish from PR CI)
+        run: docker build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:ci .
+      - name: Gate built runner on secret scanning (never upload matches)
+        env:
+          CONTAINER_ENGINE: docker
+        run: python3 tools/scan_runner_image.py localhost/contributor-runner:ci
+      - name: Exercise real Forge CLI and Caliper with synthetic jobs, without network or credentials
+        run: |
+          for harness in guidellm aiperf; do
+            docker run --rm --network none --entrypoint python \
+              -e SMOKE_HARNESS="$harness" \
+              -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro" \
+              localhost/contributor-runner:ci /smoke.py
+          done
+
   hardware-profiles:
     runs-on: ubuntu-latest
     outputs:

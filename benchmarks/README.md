@@ -1,5 +1,12 @@
 # Common Benchmark Jobs
 
+Want to prepare and run a pinned recipe yourself and collect importable evidence?
+Use the [portable contributor runner guide](../docs/contributor-benchmarks.md)
+instead. The manual Jobs described here have different Service, PVC, and version
+requirements; do not apply these instructions to the portable runner package.
+The portable runner defaults to the published Quay `v0.1.1` release; no local image
+build is needed for normal use.
+
 This directory contains Kubernetes Job templates that can benchmark any
 OpenAI-compatible inference endpoint. Apply each Job in the same namespace as
 the target Service, after making the required substitutions described below.

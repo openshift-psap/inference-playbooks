@@ -47,9 +47,7 @@ class Client:
         request = Request(self.uri + path, data=None if body is None else json.dumps(body).encode(),
                           headers={**self.headers, 'Content-Type': 'application/json'})
         with self.opener.open(request, timeout=60) as response:
-            data = response.read(10 * 1024 * 1024 + 1)
-        if len(data) > 10 * 1024 * 1024:
-            raise ValueError('artifact exceeds 10 MiB intake limit')
+            data = response.read()
         return data if raw else json.loads(data)
 
     def run(self, run_id):

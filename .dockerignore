@@ -1,0 +1,7 @@
+# Repository metadata and host-generated caches are not runner build inputs.
+.git
+.venv
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.py[cod]

@@ -1,10 +1,19 @@
 """Exact, declaration-based Forge KPI identity checks shared by intake and replay."""
 
 
+def kpi_labels(test):
+    if not isinstance(test, dict):
+        raise ValueError('KPI test must be a mapping')
+    labels = test.get('labels', {})
+    if not isinstance(labels, dict):
+        raise ValueError('KPI labels must be a mapping')
+    return labels
+
+
 def validate_model_identity(document, recipe, model):
     checkpoint = recipe['serving']['model']
     for test in document['tests']:
-        labels = test.get('labels', {})
+        labels = kpi_labels(test)
         if 'served_model' in labels:
             if labels['served_model'] != checkpoint:
                 raise ValueError('KPI served model attribution disagrees with recipe')
