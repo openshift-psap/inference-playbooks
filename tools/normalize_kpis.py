@@ -56,11 +56,18 @@ def normalize(document, *, run_id, deployment_scope, accelerator_key, expected_c
     """Return one result per harness. Conflicting points must not be averaged."""
     groups = {}
     workloads = {}
+    sweeps = {}
     for test in document['tests']:
         labels = kpi_labels(test)
         harness = labels.get('benchmark_tool')
         if harness not in ('guidellm', 'aiperf'):
             continue
+        sweep_id = labels.get('sweep_id')
+        if sweep_id is not None and (not isinstance(sweep_id, str) or not sweep_id):
+            raise ValueError('invalid sweep identity')
+        if harness in sweeps and sweeps[harness] != sweep_id:
+            raise ValueError(f'{harness}: multiple sweep identities are unsupported')
+        sweeps[harness] = sweep_id
         points = groups.setdefault(harness, {})
         # Distinct workloads must not silently become a single sweep.
         identity = {k: labels[k] for k in ('benchmark_key', 'model_name', 'served_model', 'quantization', 'prompt_toks',
