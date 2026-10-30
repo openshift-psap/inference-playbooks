@@ -283,6 +283,14 @@ def test_fix_rerun_import_replaces_history_and_rejects_old_run(open_intake):
     mutation = state['mutations'][-1]['variables']['input']
     assert mutation['fileChanges']['deletions'] == new_plan['deletions']
     assert mutation['expectedHeadOid'] == new_revision
+    # Simulate the published replacement at HEAD. The tested revision still
+    # includes the old run references, which are evidence metadata, not inputs.
+    commit_evidence(new_repo)
+    state['source'] = new_repo
+    state['pr']['head']['sha'] = workflow.git(new_repo, 'rev-parse', 'HEAD').stdout.decode().strip()
+    repeated, _ = prepare(open_intake, 'rerun-repeated', 124)
+    assert repeated['mode'] == 'unchanged'
+    assert repeated['files'] == repeated['deletions'] == []
 
 
 def test_replacement_patch_removes_old_harness_and_reimports_as_noop(open_intake):
@@ -335,6 +343,28 @@ def test_replacement_refuses_to_delete_unrelated_files(open_intake):
         workflow.retain_selected_execution(repo, admission)
     assert unrelated.read_text() == 'user work'
     assert run.exists()
+
+
+@pytest.mark.parametrize('source', ['local', None])
+def test_replacement_refuses_non_forge_evidence_before_deletion(open_intake, source):
+    _, output = prepare(open_intake)
+    repo = output / 'checkout'
+    run = next(repo.glob('models/**/results/*/run.yaml'))
+    document = yaml.safe_load(run.read_text())
+    if source is None:
+        document.pop('evidence_source')
+    else:
+        document['evidence_source'] = source
+    run.write_text(yaml.safe_dump(document))
+    recipe_path = next(repo.glob('models/**/recipe.yaml'))
+    recipe = yaml.safe_load(recipe_path.read_text())
+    keep = next(ref for ref in recipe['benchmark_runs'] if ref != str(run.relative_to(recipe_path.parent)))
+    admission = {'receipt': {'outputs': [{'recipe_path': str(recipe_path.relative_to(repo)),
+                                         'run_path': str(recipe_path.parent.relative_to(repo) / keep)}]}}
+    before = {p: p.read_bytes() for p in recipe_path.parent.rglob('*') if p.is_file()}
+    with pytest.raises(ValueError, match='cannot replace a non-Forge benchmark run'):
+        workflow.retain_selected_execution(repo, admission)
+    assert before == {p: p.read_bytes() for p in recipe_path.parent.rglob('*') if p.is_file()}
 
 
 @pytest.mark.parametrize('path', ['.github/workflows/evil.yml', 'tools/evil.py',

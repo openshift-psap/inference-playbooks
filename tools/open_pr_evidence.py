@@ -161,6 +161,8 @@ def retain_selected_execution(repo, admission):
             run_path = relative.parent / reference
             if evidence_path(str(run_path)) != 'result' or run_path.name != 'run.yaml':
                 raise ValueError('cannot replace an unsupported benchmark evidence path')
+            if load_unique_yaml((repo / run_path).read_text()).get('evidence_source') != 'forge-kpis':
+                raise ValueError('cannot replace a non-Forge benchmark run')
             directory = repo / run_path.parent
             for item in directory.iterdir():
                 name = str(item.relative_to(repo))

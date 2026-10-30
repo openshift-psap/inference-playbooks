@@ -38,9 +38,11 @@ recipe retains only that execution: its new results and references replace the
 previous run's results, receipt, and references in the same atomic commit (or
 patch). All harnesses from the selected execution are retained; a harness absent
 from the new run is not carried forward from an older run. Other recipes are
-untouched. Run IDs remain immutable: conflicting evidence under the same ID
-still fails rather than being overwritten. History remains in MLflow and Git,
-not in the current recipe tree.
+untouched. For runs still present in the current tree, conflicting evidence
+under the same ID fails rather than being overwritten. Removed runs are not
+checked against their earlier Git contents; historical-run restoration and its
+validation policy are future work. History remains in MLflow and Git, not in
+the current recipe tree.
 
 Re-selecting an already imported execution re-reads its Forge
 metadata and KPIs and compares the regenerated evidence with the committed

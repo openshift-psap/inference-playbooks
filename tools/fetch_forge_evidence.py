@@ -440,10 +440,8 @@ def tested_inputs(repo, relative, expected_revision, require_clean=None):
     tested = load_unique_yaml(subprocess.run(['git', '-C', str(repo), 'show', f'{expected_revision}:{relative}'],
                               check=True, capture_output=True, text=True).stdout)
     current = dict(recipe)
-    tested_references = tested.get('benchmark_runs', [])
-    current_references = current.get('benchmark_runs', [])
-    if any(reference not in current_references for reference in tested_references):
-        raise ValueError('merged recipe removed tested benchmark references')
+    # Evidence references are outputs, not deployment inputs. Replacement can
+    # remove earlier runs that were still indexed when this execution was tested.
     for data in (tested, current):
         data.pop('benchmark_runs', None)
     if tested != current:
