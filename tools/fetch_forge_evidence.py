@@ -292,7 +292,33 @@ def distributed_serving_values(manifest, pods, checkpoint):
     return revisions.pop(), digests.pop()
 
 
-def execution_values(client, parent_id, repo, expected_revision, pr_number):
+def verify_pr_revision(repo, revision, pr_head):
+    """Accept only an exact commit on the merged PR's history, never another ref."""
+    if any(not isinstance(value, str) or not re.fullmatch('[a-f0-9]{40}', value)
+           for value in (revision, pr_head)):
+        raise ValueError('invalid tested recipe revision or PR head')
+    if revision != pr_head:
+        result = subprocess.run(['git', '-C', str(repo), 'merge-base', '--is-ancestor', revision, pr_head],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            raise ValueError('tested recipe revision is not an ancestor of the merged PR head')
+    return revision
+
+
+def execution_context(client, parent_id):
+    """Read only the recorded recipe context, not the Forge checkout revision."""
+    raw = client.request('/get-artifact?' + urlencode({
+        'run_id': parent_id, 'path': '01__test/000__ci_metadata/fournos_fjob.yaml'}), raw=True)
+    try:
+        env = load_unique_yaml(raw.decode())['spec']['env']
+        if not isinstance(env, dict):
+            raise ValueError('invalid environment')
+        return env
+    except (yaml.YAMLError, ValueError, KeyError, TypeError):
+        raise ValueError('invalid Forge execution YAML') from None
+
+
+def execution_values(client, parent_id, repo, expected_revision, pr_number, context=None):
     """Read existing Forge execution metadata into the existing run contract."""
     def artifact(path):
         return client.request('/get-artifact?' + urlencode({'run_id': parent_id, 'path': path}), raw=True).decode()
@@ -303,8 +329,7 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number):
         except (yaml.YAMLError, ValueError):
             raise ValueError('invalid Forge execution YAML') from None
 
-    fjob = document('01__test/000__ci_metadata/fournos_fjob.yaml')
-    env = fjob['spec']['env']
+    env = execution_context(client, parent_id) if context is None else context
     # Recorded requested/tested recipe context, not an independent checkout
     # attestation and not the Forge checkout's PULL_PULL_SHA.
     revision = env.get('FORGE_FOREIGN_TESTING_PULL_PULL_SHA')
@@ -518,7 +543,7 @@ def set_references(text, references):
 
 
 def import_parent(client, repo, parent_id, expected_revision, pr_number, comment_id=None,
-                  *, require_parent=False, admissions=None):
+                  *, require_parent=False, admissions=None, pr_head_revision=None):
     parent = client.run(parent_id)
     actual_parent = tags(parent).get('mlflow.parentRunId')
     if actual_parent:
@@ -531,11 +556,22 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
     if require_parent:
         if parent['info']['run_id'] != parent_id:
             raise ValueError('selected execution identity mismatch')
-        if tags(parent).get('playbooks.tested_revision', expected_revision) != expected_revision:
+        if pr_head_revision is None and tags(parent).get('playbooks.tested_revision', expected_revision) != expected_revision:
             raise ValueError('selected execution tested revision mismatch')
     parent_artifact = client.kpis(parent_id)
     current_parent = parent_artifact is not None and re.fullmatch(
         r'01__test/\d+__postprocessing/kpis/kpis.json', parent_artifact[0])
+    context = None
+    if pr_head_revision is not None:
+        if not require_parent:
+            raise ValueError('historical PR revision selection requires a primary parent run')
+        revision = tags(parent).get('playbooks.tested_revision', expected_revision)
+        if current_parent and 'playbooks.tested_revision' not in tags(parent):
+            context = execution_context(client, parent_id)
+            revision = context.get('FORGE_FOREIGN_TESTING_PULL_PULL_SHA')
+        # Ancestry authorizes selection only. attribution/tested_inputs and
+        # validate_launch still require the merged deployment to match this SHA.
+        expected_revision = verify_pr_revision(repo, revision, pr_head_revision)
     candidates = [parent] if current_parent else [parent, *client.children(parent)]
     if require_parent and any(run['info']['status'] not in {'FINISHED', 'FAILED', 'KILLED'}
                               for run in candidates):
@@ -555,7 +591,7 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
         # Current executions have recorded launch evidence. Even complete tags
         # must agree with it; tags cannot bypass the versioned bundle contract.
         if current_parent:
-            recorded = execution_values(client, parent_id, repo, expected_revision, pr_number)
+            recorded = execution_values(client, parent_id, repo, expected_revision, pr_number, context)
             if any(key in values and values[key] != value for key, value in recorded.items()):
                 raise ValueError('Forge attribution tags disagree with recorded execution')
             values = {**values, **recorded}
