@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fetch_forge_evidence import Client, import_parent
-from forge_admission import FILES, RECEIPT, load_admissions
+from fetch_forge_evidence import Client, import_parent, set_references
+from forge_admission import FILES, RECEIPT, load_admissions, origin
 from ingest_forge import github, selected_run
 from recipe_evidence import load_unique_yaml
 
@@ -141,13 +141,57 @@ def evidence_path(path):
     raise ValueError('publication contains a path outside the evidence allowlist')
 
 
-def collect_changes(repo):
+def retain_selected_execution(repo, admission):
+    """Keep only this imported execution in its recipes; return exact removed files."""
+    selected = {}
+    for output in admission['receipt']['outputs']:
+        recipe_path = Path(output['recipe_path'])
+        selected.setdefault(recipe_path, set()).add(
+            str(Path(output['run_path']).relative_to(recipe_path.parent)))
+    updates, removed, directories = {}, set(), set()
+    for relative, keep in selected.items():
+        path = repo / relative
+        text = path.read_text()
+        references = load_unique_yaml(text).get('benchmark_runs', [])
+        if not keep.issubset(references):
+            raise ValueError('selected execution is missing recipe references')
+        for reference in references:
+            if reference in keep:
+                continue
+            run_path = relative.parent / reference
+            if evidence_path(str(run_path)) != 'result' or run_path.name != 'run.yaml':
+                raise ValueError('cannot replace an unsupported benchmark evidence path')
+            directory = repo / run_path.parent
+            for item in directory.iterdir():
+                name = str(item.relative_to(repo))
+                if item.is_symlink() or not item.is_file() or evidence_path(name) != 'result':
+                    raise ValueError('previous run contains unsupported files; refusing automatic removal')
+                removed.add(name)
+            directories.add(directory)
+        updates[path] = set_references(text, [ref for ref in references if ref in keep])
+    # All replacement paths are checked before removing any previous evidence.
+    for name in sorted(removed):
+        (repo / name).unlink()
+    for directory in directories:
+        directory.rmdir()
+    for path, text in updates.items():
+        if path.read_text() != text:
+            path.write_text(text)
+    return removed
+
+
+def collect_changes(repo, removed=()):
     files = []
+    deletions = []
+    removed = set(removed)
     required = set()
     for entry in git(repo, 'status', '--porcelain=v1', '-z', '--untracked-files=all').stdout.split(b'\0'):
         if not entry:
             continue
         status, path = entry[:2].decode(), entry[3:].decode()
+        if status == ' D' and path in removed and evidence_path(path) == 'result':
+            deletions.append({'path': path})
+            continue
         if status not in {' M', '??'}:
             raise ValueError('evidence import produced an unexpected deletion, rename or staged change')
         kind = evidence_path(path)
@@ -161,8 +205,9 @@ def collect_changes(repo):
                 raise ValueError('evidence import cannot create a recipe')
             old, new = load_unique_yaml(before.stdout.decode()), load_unique_yaml(raw.decode())
             old_refs, new_refs = old.pop('benchmark_runs', []), new.pop('benchmark_runs', [])
-            if old != new or not set(old_refs).issubset(new_refs):
-                raise ValueError('evidence import changed recipe inputs or removed historical references')
+            if old != new or any(str(Path(path).parent / ref) not in removed
+                                 for ref in set(old_refs) - set(new_refs)):
+                raise ValueError('evidence import changed recipe inputs or removed unrelated references')
             for reference in new_refs:
                 if reference not in old_refs:
                     if evidence_path(str(Path(path).parent / reference)) != 'result' or not reference.endswith('/run.yaml'):
@@ -180,10 +225,13 @@ def collect_changes(repo):
     for missing in sorted(required - collected):
         if git(repo, 'cat-file', '-e', f'HEAD:{missing}', check=False).returncode:
             raise ValueError(f'imported evidence is not collectable: {missing}; check .gitignore on the PR branch')
-    if files:
-        git(repo, 'add', '--', *(item['path'] for item in files))
+    if {item['path'] for item in deletions} != removed:
+        raise ValueError('previous evidence removal differs from the prepared replacement')
+    deletions.sort(key=lambda item: item['path'])
+    if files or deletions:
+        git(repo, 'add', '--', *(item['path'] for item in files + deletions))
     patch = git(repo, 'diff', '--cached', '--binary', '--no-ext-diff', '--no-textconv', 'HEAD', '--').stdout
-    return files, patch
+    return files, deletions, patch
 
 
 def prepare(repository, number, comment_id, output, actor, insecure=False):
@@ -210,17 +258,21 @@ def prepare(repository, number, comment_id, output, actor, insecure=False):
     # Re-import compares existing immutable files with the actual Forge output.
     import_parent(client, repo, selected['run_id'], revision, number, comment_id,
                   require_parent=True, admissions=admissions)
+    removed = retain_selected_execution(
+        repo, admissions[(origin(uri), selected['workspace'], selected['run_id'])])
     validate_candidate(repo, TRUSTED)
-    files, patch = collect_changes(repo)
-    small = len(files) <= MAX_PUBLISH_FILES and sum(len(item['contents']) for item in files) <= MAX_PUBLISH_BYTES
-    mode = 'unchanged' if not files else ('publish' if snapshot['head_repository'] == repository and small else 'patch')
+    files, deletions, patch = collect_changes(repo, removed)
+    small = len(files) + len(deletions) <= MAX_PUBLISH_FILES and sum(len(item['contents']) for item in files) <= MAX_PUBLISH_BYTES
+    mode = 'unchanged' if not files and not deletions else ('publish' if snapshot['head_repository'] == repository and small else 'patch')
     plan = {'version': 1, 'repository': repository, 'pr_number': number, **snapshot, **selected,
-            'tracking_uri': uri, 'tested_revision': revision, 'mode': mode, 'files': files}
+            'tracking_uri': uri, 'tested_revision': revision, 'mode': mode, 'files': files,
+            'deletions': deletions}
     (output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
     (output / 'evidence.patch').write_bytes(patch)
     summary = (f"## Forge evidence for PR #{number}\n\n"
                f"- Selected run: `{selected['run_id']}`\n- Tested recipe: `{revision}`\n"
-               f"- Prepared against PR head: `{snapshot['head_sha']}`\n- Files: {len(files)}\n"
+               f"- Prepared against PR head: `{snapshot['head_sha']}`\n- Files added/updated: {len(files)}\n"
+               f"- Previous evidence files removed: {len(deletions)}\n"
                f"- Delivery: **{mode}**\n\n")
     if mode == 'patch':
         summary += ('Download the evidence artifact and apply it to the exact prepared head:\n\n'
@@ -262,7 +314,8 @@ def publish(plan, actor):
     if selected != {key: plan[key] for key in selected}:
         raise ValueError('Forge report changed after preparation; revalidate the selected execution')
     files = plan['files']
-    if not files or len(files) > MAX_PUBLISH_FILES or sum(len(item['contents']) for item in files) > MAX_PUBLISH_BYTES:
+    deletions = plan.get('deletions', [])
+    if (not files and not deletions) or len(files) + len(deletions) > MAX_PUBLISH_FILES or sum(len(item['contents']) for item in files) > MAX_PUBLISH_BYTES:
         raise ValueError('evidence exceeds atomic publication limits; use the prepared patch')
     paths = set()
     for item in files:
@@ -271,6 +324,13 @@ def publish(plan, actor):
             raise ValueError('duplicate evidence publication path')
         paths.add(item['path'])
         base64.b64decode(item['contents'], validate=True)
+    for item in deletions:
+        if set(item) != {'path'} or evidence_path(item['path']) != 'result' or item['path'] in paths:
+            raise ValueError('invalid evidence deletion path')
+        paths.add(item['path'])
+    changes = {'additions': files}
+    if deletions:
+        changes['deletions'] = deletions
     # GitHub signs commits it creates. expectedHeadOid is an atomic compare-and-
     # swap, so a push racing this request cannot be overwritten or force-pushed.
     data = graphql({'query': '''mutation($input: CreateCommitOnBranchInput!) {
@@ -280,7 +340,7 @@ def publish(plan, actor):
         'expectedHeadOid': current['head_sha'],
         'message': {'headline': f"feat(evidence): import Forge results for PR #{plan['pr_number']}",
                     'body': f"Forge run: {plan['run_id']}\nTested recipe: {plan['tested_revision']}"},
-        'fileChanges': {'additions': files}}}})
+        'fileChanges': changes}}})
     return data['createCommitOnBranch']['commit']
 
 

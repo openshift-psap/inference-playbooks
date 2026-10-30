@@ -241,7 +241,7 @@ def test_receipt_does_not_bypass_selected_execution_comparison(open_intake, mism
     assert not state['mutations']
 
 
-def test_fix_rerun_import_preserves_history_and_rejects_old_run(open_intake):
+def test_fix_rerun_import_replaces_history_and_rejects_old_run(open_intake):
     state, repository, _, path, revision, client, parent, artifacts = open_intake
     _, output = prepare(open_intake)
     repo = output / 'checkout'
@@ -274,9 +274,67 @@ def test_fix_rerun_import_preserves_history_and_rejects_old_run(open_intake):
     new_plan, new_output = prepare(open_intake, 'rerun', 124)
     assert new_plan['tested_revision'] == new_revision != revision
     new_repo = new_output / 'checkout'
-    assert all((new_repo / p).read_bytes() == raw for p, raw in historical.items())
+    assert all(not (new_repo / p).exists() for p in historical)
+    assert {item['path'] for item in new_plan['deletions']} == {str(p) for p in historical}
     updated = yaml.safe_load((new_repo / recipe_path.relative_to(repo)).read_text())
-    assert len(updated['benchmark_runs']) == 4
+    assert len(updated['benchmark_runs']) == 2
+    assert all('e' * 32 in ref for ref in updated['benchmark_runs'])
+    workflow.publish(new_plan, 'maintainer')
+    mutation = state['mutations'][-1]['variables']['input']
+    assert mutation['fileChanges']['deletions'] == new_plan['deletions']
+    assert mutation['expectedHeadOid'] == new_revision
+
+
+def test_replacement_patch_removes_old_harness_and_reimports_as_noop(open_intake):
+    state, repository, source, path, revision, client, parent, _ = open_intake
+    _, output = prepare(open_intake)
+    repo = output / 'checkout'
+    commit_evidence(repo)
+    state['source'] = repo
+    state['pr']['head']['sha'] = workflow.git(repo, 'rev-parse', 'HEAD').stdout.decode().strip()
+    state['pr']['head']['repo']['full_name'] = 'contributor/inference-playbooks'
+    artifact_path, raw = client.kpis('d' * 32)
+    document = json.loads(raw)
+    document['tests'] = [t for t in document['tests'] if t['labels']['benchmark_tool'] == 'aiperf']
+    client.kpis = lambda run_id: (artifact_path, json.dumps(document).encode())
+    parent['info']['run_id'] = 'e' * 32
+    original = client.request
+    client.request = lambda endpoint, *a, **kw: original(endpoint.replace('e' * 32, 'd' * 32), *a, **kw)
+    state['comments'][124] = {**forge_report('e' * 32, comment_id=124),
+                              'issue_url': f'https://api.github.com/repos/{repository}/issues/34'}
+    plan, replacement = prepare(open_intake, 'replacement', 124)
+    assert plan['mode'] == 'patch'
+    assert len(plan['deletions']) == 7
+    assert plan['tested_revision'] == revision
+    workflow.git(repo, 'apply', '--check', str(replacement / 'evidence.patch'))
+    workflow.git(repo, 'apply', str(replacement / 'evidence.patch'))
+    recipe_path = repo / path.relative_to(source)
+    recipe = yaml.safe_load(recipe_path.read_text())
+    assert recipe['benchmark_runs'] == ['results/forge-' + 'e' * 32 + '-aiperf/run.yaml']
+    assert {p.name for p in recipe_path.parent.joinpath('results').iterdir()} == {'forge-' + 'e' * 32 + '-aiperf'}
+    commit_evidence(repo)
+    assert len(workflow.load_admissions(repo)) == 1
+    state['pr']['head']['sha'] = workflow.git(repo, 'rev-parse', 'HEAD').stdout.decode().strip()
+    repeated, _ = prepare(open_intake, 'replacement-repeated', 124)
+    assert repeated['mode'] == 'unchanged'
+    assert repeated['files'] == repeated['deletions'] == []
+
+
+def test_replacement_refuses_to_delete_unrelated_files(open_intake):
+    _, output = prepare(open_intake)
+    repo = output / 'checkout'
+    run = next(repo.glob('models/**/results/*/run.yaml'))
+    unrelated = run.parent / 'notes.txt'
+    unrelated.write_text('user work')
+    recipe_path = next(repo.glob('models/**/recipe.yaml'))
+    recipe = yaml.safe_load(recipe_path.read_text())
+    keep = next(ref for ref in recipe['benchmark_runs'] if ref != str(run.relative_to(recipe_path.parent)))
+    admission = {'receipt': {'outputs': [{'recipe_path': str(recipe_path.relative_to(repo)),
+                                         'run_path': str(recipe_path.parent.relative_to(repo) / keep)}]}}
+    with pytest.raises(ValueError):
+        workflow.retain_selected_execution(repo, admission)
+    assert unrelated.read_text() == 'user work'
+    assert run.exists()
 
 
 @pytest.mark.parametrize('path', ['.github/workflows/evil.yml', 'tools/evil.py',
