@@ -1577,7 +1577,7 @@ def test_ingestion_uses_repo_scoped_app_token_and_bot_identity():
     assert 'FORGE_INGEST_GITHUB_TOKEN' not in text
 
 
-def test_attribution_cannot_remove_tested_evidence_references(intake, monkeypatch):
+def test_attribution_allows_replaced_evidence_references(intake, monkeypatch):
     repo, path, revision, client, parent, values = intake
     original_run = subprocess.run
     def run(command, **kwargs):
@@ -1588,6 +1588,8 @@ def test_attribution_cannot_remove_tested_evidence_references(intake, monkeypatc
             result.stdout = yaml.safe_dump(tested)
         return result
     monkeypatch.setattr(subprocess, 'run', run)
-    with pytest.raises(ValueError, match='removed tested benchmark references'):
-        import_parent(client, repo, 'd' * 32, revision, 34)
-    assert not (path.parent / 'results').exists()
+    import_parent(client, repo, 'd' * 32, revision, 34)
+    references = yaml.safe_load(path.read_text())['benchmark_runs']
+    assert references
+    assert 'results/tested-run/run.yaml' not in references
+    assert all((path.parent / reference).is_file() for reference in references)
