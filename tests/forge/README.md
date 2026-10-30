@@ -5,6 +5,48 @@ Run inference-playbook recipes through the Forge CI framework by posting
 
 ## Importing an existing PR322 run before merge
 
+### Maintainer workflow (open PR)
+
+After `benchmark-import-pr.yml` is merged to `main`, a repository maintainer
+can select **Import Forge evidence into open PR** in Actions. Supply the open
+PR number and the numeric comment ID from its successful Forge report URL
+(`...#issuecomment-<id>`). For PR #19's existing successful attempt:
+
+```bash
+gh workflow run benchmark-import-pr.yml --ref main \
+  -f pr_number=19 -f report_comment_id=6492689346
+```
+
+The protected `forge-evidence` environment supplies the MLflow credentials and
+evidence App configuration used by the post-merge importer. The App needs
+repository contents and pull-request write permissions. The workflow verifies
+the triggering maintainer, uses reviewed tooling from `main`, and validates
+schema, manifest drift, and catalog generation before publication. Candidate
+schemas/templates must match that tooling; merge reviewed changes first.
+
+For same-repository branches, publication creates a signed evidence-only commit
+on the existing PR. The commit atomically requires the exact prepared head: if
+someone pushes during import, retry the workflow. No branch is force-pushed.
+Fork PRs receive a downloadable patch and exact head SHA in the workflow
+artifact; the contributor applies and commits that patch. Oversized evidence
+also uses patch delivery. A patch is retained before attempting direct
+publication, including when App permissions prevent a write.
+
+Select each attempt explicitly. If deployment inputs change, fix the recipe,
+rerun Forge, and select the new successful report. Existing result files are
+immutable. Re-selecting an already imported execution re-reads its Forge
+metadata and KPIs and compares the regenerated evidence with the committed
+files. Matching evidence makes no commit; this requires MLflow access but no
+GPU rerun. A receipt alone does not establish the selected experiment's results.
+Evidence-only commits or unrelated tooling merges
+do not require another GPU run. The original tested SHA is preserved. Failures
+and delivery details appear in the Actions run summary.
+
+This is an explicit maintainer action, not an automatic reaction to a Forge
+comment. Required pre-merge evidence coverage policy is a separate gate.
+
+### Local import
+
 Forge PR322's bundle contract uses a `<model>/recipes/<recipe-folder>` selector
 and an explicit recipe-relative `/path manifests/<stack>-<version>/<file>.yaml`.
 The opaque-ID examples below describe older Forge versions. Pin the intended
