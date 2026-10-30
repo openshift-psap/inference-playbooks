@@ -1,0 +1,100 @@
+name: Import Forge evidence into open PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open recipe PR number
+        required: true
+        type: number
+      report_comment_id:
+        description: Successful Forge report comment ID from that PR
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: forge-open-pr-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  import:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment: forge-evidence
+    runs-on: ${{ fromJSON(vars.FORGE_INGEST_RUNNER || '["ubuntu-latest"]') }}
+    steps:
+      - name: Checkout trusted workflow revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install trusted dependencies
+        run: pip install -r trusted/tools/requirements.txt
+      - name: Install Kustomize
+        run: |
+          curl --fail --location --silent --show-error https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/kustomize.tar.gz"
+          echo "54e4031ddc4e7fc59e408da29e7c646e8e57b8088c51b84b3df0864f47b5148f  $RUNNER_TEMP/kustomize.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/kustomize.tar.gz" -C "$RUNNER_TEMP" kustomize
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Prepare and validate selected evidence
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ACTOR: ${{ github.triggering_actor }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          COMMENT_ID: ${{ inputs.report_comment_id }}
+          MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI }}
+          MLFLOW_WORKSPACE: ${{ vars.MLFLOW_WORKSPACE || 'forge-sandbox' }}
+          MLFLOW_USERNAME: ${{ secrets.MLFLOW_USERNAME }}
+          MLFLOW_PASSWORD: ${{ secrets.MLFLOW_PASSWORD }}
+          INSECURE_TLS: ${{ vars.MLFLOW_INSECURE_TLS }}
+        run: |
+          args=()
+          if [[ "$INSECURE_TLS" == "true" ]]; then args+=(--insecure); fi
+          python3 trusted/tools/open_pr_evidence.py prepare \
+            --repository "$REPOSITORY" --pr-number "$PR_NUMBER" \
+            --comment-id "$COMMENT_ID" --actor "$ACTOR" \
+            --output "$RUNNER_TEMP/forge-open-pr" "${args[@]}"
+      - name: Retain evidence patch and prepared-head metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: forge-evidence-pr-${{ inputs.pr_number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/forge-open-pr/evidence.patch
+            ${{ runner.temp }}/forge-open-pr/plan.json
+            ${{ runner.temp }}/forge-open-pr/summary.md
+          if-no-files-found: error
+          retention-days: 14
+      - name: Mint repository-scoped evidence App token
+        if: ${{ steps.prepare.outputs.publishable == 'true' }}
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.FORGE_INGEST_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FORGE_INGEST_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Publish to the original PR with an atomic head guard
+        if: ${{ steps.prepare.outputs.publishable == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          python3 trusted/tools/open_pr_evidence.py publish \
+            --plan "$RUNNER_TEMP/forge-open-pr/plan.json" --actor "$ACTOR"
+      - name: Report import outcome
+        if: ${{ always() }}
+        run: |
+          if [[ -f "$RUNNER_TEMP/forge-open-pr/summary.md" ]]; then
+            cat "$RUNNER_TEMP/forge-open-pr/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi

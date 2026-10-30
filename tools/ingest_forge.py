@@ -103,6 +103,15 @@ def main():
         run_id, comment_id, workspace = selected
         client = Client(tracking_uri, workspace, os.environ['MLFLOW_USERNAME'],
                         os.environ['MLFLOW_PASSWORD'], args.insecure)
+        # Same-PR evidence commits advance the final head beyond the tested SHA.
+        # A committed admission retains the original execution identity; validate
+        # its ancestry and current inputs instead of re-importing it after merge.
+        admission = admissions.get((origin(client.uri), workspace, run_id))
+        if admission:
+            revision = admission['receipt']['tested_revision']
+            if subprocess.run(['git', '-C', str(repo), 'merge-base', '--is-ancestor',
+                               revision, pr['head']['sha']], check=False).returncode:
+                raise ValueError('indexed tested revision is not in the recipe PR history')
         if admitted_execution(repo, admissions, client, run_id, revision, number, checked_inputs):
             print(f'PR {number}: selected execution already indexed; imported=0 indexed=1')
             continue

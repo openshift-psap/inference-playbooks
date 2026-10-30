@@ -1449,8 +1449,10 @@ def test_latest_only_thousand_reports_scale_and_privacy(intake, monkeypatch, cap
     before = {p: p.read_bytes() for p in repo.glob('models/**/*') if p.is_file()}
     reports = [forge_report(f'{i:032x}', comment_id=i) for i in range(1, 1001)]
     reports.append(forge_report(comment_id=1001, label='MLFlow Test Results', workspace=workspace))
+    # Same-PR evidence advances the merged PR head beyond the benchmarked SHA.
+    head_revision = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
     pr = {'merged_at': '2026-10-15', 'base': {'ref': 'main'},
-          'head': {'sha': revision, 'ref': 'recipe-branch'}}
+          'head': {'sha': head_revision, 'ref': 'recipe-branch'}}
     monkeypatch.setenv('GITHUB_REPOSITORY', 'org/repo')
     for key, value in {'MLFLOW_TRACKING_URI': client.uri, 'MLFLOW_WORKSPACE': 'forge-sandbox',
                        'MLFLOW_USERNAME': 'private-user', 'MLFLOW_PASSWORD': 'private-password'}.items():
@@ -1575,7 +1577,7 @@ def test_ingestion_uses_repo_scoped_app_token_and_bot_identity():
     assert 'FORGE_INGEST_GITHUB_TOKEN' not in text
 
 
-def test_attribution_cannot_remove_tested_evidence_references(intake, monkeypatch):
+def test_attribution_allows_replaced_evidence_references(intake, monkeypatch):
     repo, path, revision, client, parent, values = intake
     original_run = subprocess.run
     def run(command, **kwargs):
@@ -1586,6 +1588,8 @@ def test_attribution_cannot_remove_tested_evidence_references(intake, monkeypatc
             result.stdout = yaml.safe_dump(tested)
         return result
     monkeypatch.setattr(subprocess, 'run', run)
-    with pytest.raises(ValueError, match='removed tested benchmark references'):
-        import_parent(client, repo, 'd' * 32, revision, 34)
-    assert not (path.parent / 'results').exists()
+    import_parent(client, repo, 'd' * 32, revision, 34)
+    references = yaml.safe_load(path.read_text())['benchmark_runs']
+    assert references
+    assert 'results/tested-run/run.yaml' not in references
+    assert all((path.parent / reference).is_file() for reference in references)
