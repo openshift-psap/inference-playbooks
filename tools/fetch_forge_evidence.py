@@ -440,10 +440,8 @@ def tested_inputs(repo, relative, expected_revision, require_clean=None):
     tested = load_unique_yaml(subprocess.run(['git', '-C', str(repo), 'show', f'{expected_revision}:{relative}'],
                               check=True, capture_output=True, text=True).stdout)
     current = dict(recipe)
-    tested_references = tested.get('benchmark_runs', [])
-    current_references = current.get('benchmark_runs', [])
-    if any(reference not in current_references for reference in tested_references):
-        raise ValueError('merged recipe removed tested benchmark references')
+    # Evidence references are outputs, not deployment inputs. Replacement can
+    # remove earlier runs that were still indexed when this execution was tested.
     for data in (tested, current):
         data.pop('benchmark_runs', None)
     if tested != current:
@@ -496,7 +494,15 @@ def append_reference(text, reference):
     recipe = load_unique_yaml(text)
     if reference in recipe.get('benchmark_runs', []):
         return text
-    expected = {**recipe, 'benchmark_runs': [*recipe.get('benchmark_runs', []), reference]}
+    return set_references(text, [*recipe.get('benchmark_runs', []), reference])
+
+
+def set_references(text, references):
+    """Replace only the evidence index, preserving unrelated recipe text and values."""
+    recipe = load_unique_yaml(text)
+    if recipe.get('benchmark_runs') == references:
+        return text
+    expected = {**recipe, 'benchmark_runs': references}
     block = yaml.safe_dump({'benchmark_runs': expected['benchmark_runs']}, sort_keys=False)
     if 'benchmark_runs' in recipe:
         pattern = r'(?m)^benchmark_runs:[^\n]*(?:\n(?:[ \t]+[^\n]*|-[ \t]+[^\n]*|[ \t]*))*(?:\n|$)'

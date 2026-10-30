@@ -32,9 +32,19 @@ artifact; the contributor applies and commits that patch. Oversized evidence
 also uses patch delivery. A patch is retained before attempting direct
 publication, including when App permissions prevent a write.
 
-Select each attempt explicitly. If deployment inputs change, fix the recipe,
-rerun Forge, and select the new successful report. Existing result files are
-immutable. Re-selecting an already imported execution re-reads its Forge
+Select the latest successful attempt explicitly. If deployment inputs change,
+fix the recipe, rerun Forge, and select the new successful report. Each affected
+recipe retains only that execution: its new results and references replace the
+previous run's results, receipt, and references in the same atomic commit (or
+patch). All harnesses from the selected execution are retained; a harness absent
+from the new run is not carried forward from an older run. Other recipes are
+untouched. For runs still present in the current tree, conflicting evidence
+under the same ID fails rather than being overwritten. Removed runs are not
+checked against their earlier Git contents; historical-run restoration and its
+validation policy are future work. History remains in MLflow and Git, not in
+the current recipe tree.
+
+Re-selecting an already imported execution re-reads its Forge
 metadata and KPIs and compares the regenerated evidence with the committed
 files. Matching evidence makes no commit; this requires MLflow access but no
 GPU rerun. A receipt alone does not establish the selected experiment's results.
