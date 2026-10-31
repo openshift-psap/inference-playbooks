@@ -1,0 +1,47 @@
+# GLM-5.3 PCP P/D on RITS RoCE H100 (8 nodes), as a DisaggregatedSet:
+#   prefill (disaggregatedset.yaml) -- 4 nodes, DP4 x PCP8 (DCP8), TP1, EP32,
+#                                       DeepEP HT, CPU KV offload tier, and a
+#                                       per-rank ZMQ KV events publisher
+#   decode  (disaggregatedset.yaml) -- 4 nodes, DP16 x TP2, EP32, DeepEP LL,
+#                                       CUDA graphs, NIXL KV consumer
+# both cross-rail (per-rail NADs + install-crossrail-routes), NIXL KV transfer
+# on all 8 rails, on the same pinned llm-d-cuda-ubuntu:sha-bbeed78 build.
+#
+# Differences vs ../deployment-pcp-offloading:
+#   - The two LWSes are roles of one DisaggregatedSet (see the header of
+#     disaggregatedset.yaml).
+#   - Prefix-cache routing uses KV events, not the approx hash index: prefill
+#     publishes kv events and the EPP's precise-prefix-cache-producer
+#     subscribes (see router.values.yaml).
+#
+#   kubectl apply -k glm53-h100-experiments/deployment-pcp-canary
+#   kubectl kustomize glm53-h100-experiments/deployment-pcp-canary   # render only
+#
+# The EPP (InferencePool + Envoy) is a Helm release, see router.values.yaml:
+#
+#   helm upgrade --install glm53-e2e \
+#     oci://ghcr.io/llm-d/charts/llm-d-router-standalone --version v0.10.0 \
+#     -n glm52-canary -f glm53-h100-experiments/deployment-pcp-canary/router.values.yaml
+#   kubectl port-forward -n glm52-canary svc/glm53-e2e-epp 8000:80
+#
+# The set's LWSes (glm53-e2e-prefill / glm53-e2e-decode, so pods
+# glm53-e2e-prefill-0, glm53-e2e-decode-0, ...) and the Helm release
+# (glm53-e2e -> svc glm53-e2e-epp) use the same names as ../baseline-tp, so
+# ../justfile works unchanged. That also means the two can't run side by side:
+# tear one down before applying the other. The pods carry their own guide label
+# (glm53-pcp-canary), so the pool never selects a stray baseline pod. Takes
+# 8 H100 nodes with llm-d.ai/glm53-cache=ready, same as ../baseline-tp.
+#
+# Needs the DisaggregatedSet controller, the LeaderWorkerSet controller and
+# the Prometheus operator CRDs.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: glm52-canary
+
+resources:
+  - disaggregatedset.yaml
+  - podmonitor.yaml
+  # Startup patches for the installed vLLM (generated from patches/*.py by a
+  # configMapGenerator upstream; inlined for this submission).
+  - vllm-startup-patches.configmap.yaml

@@ -1,0 +1,788 @@
+# GLM-5.3 P/D for the RITS RoCE H100 canary, as a DisaggregatedSet instead of
+# two standalone LeaderWorkerSets. Two roles, vLLM config identical to
+# ../deployment-pcp-offloading:
+#
+#   prefill -- 4 nodes, DP4 x PCP8 (DCP8), TP1, EP32, DeepEP HT, DeepGEMM MoE,
+#              NIXL KV producer, host-RAM KV offload tier (MultiConnector:
+#              NixlConnector + OffloadingConnector/TieringOffloadingSpec,
+#              CPU_OFFLOAD_GIB_PER_RANK=512 out of /dev/shm, one DP rank per
+#              pod), and a per-rank KV events ZMQ publisher (see below).
+#   decode  -- 4 nodes, DP16 x TP2, EP32, DeepEP LL, CUDA graphs, NIXL KV
+#              consumer, disagg routing-proxy sidecar on 8000-8003.
+#
+# Both cross-rail (per-rail NADs + install-crossrail-routes), NIXL KV transfer
+# on all 8 rails, on the same pinned us.icr.io/llmd/llm-d-cuda build
+# (vllm_version is a NIXL compat-hash factor; pin by digest, amd64 manifest).
+#
+# Differences vs ../deployment-pcp-offloading:
+#   - The two LWSes are roles of one DisaggregatedSet (same shape as
+#     ../disagg-set-deployment), so the set rolls out as a unit and carries
+#     disaggregatedset.x-k8s.io/revision labels. The LWS names
+#     (glm53-e2e-prefill / glm53-e2e-decode) are unchanged, so the justfile
+#     and the Helm release name glm53-e2e keep working.
+#   - Prefill publishes KV cache events (--kv-events-config, topic
+#     kv@<pod ip>:8000@zai-org/GLM-5.3) and the EPP replaces
+#     approx-prefix-cache-producer with precise-prefix-cache-producer
+#     subscribing to that stream (see router.values.yaml), so the prefix index
+#     is exact block-level truth from vLLM rather than an approximate hash LRU.
+#     vLLM adds the global DP rank to the configured ZMQ port, so each pod
+#     configures tcp://*:$((5557 - START_RANK)) (same scheme as
+#     glm53-production) and every pod ends up bound on 5557, the single
+#     socketPort the EPP dials.
+#   - Events are in 512-token blocks: the scheduler's logical block is
+#     --block-size (KV_BLOCK_SIZE=64, pinned) x DCP (8). router.values.yaml
+#     hashes at 512 to match; glm53-production (no DCP) hashes at 64.
+#   - GPU prefix-cache events come from the scheduler's block pool. If this
+#     build's OffloadingConnector emits its own events, host-RAM tier
+#     stores/evictions arrive on the same stream with medium=CPU; verify with
+#     examples/features/kv_events/kv_events_subscriber.py.
+#
+# Startup patches to the installed vLLM come from the vllm-startup-patches
+# ConfigMap (patches/*.py via kustomization.yaml); see the header of each file.
+apiVersion: disaggregatedset.x-k8s.io/v1
+kind: DisaggregatedSet
+metadata:
+  name: glm53-e2e-pcp
+  namespace: glm52-canary
+spec:
+  roles:
+    - name: prefill
+      spec:
+        replicas: 1
+        leaderWorkerTemplate:
+          restartPolicy: RecreateGroupOnPodRestart
+          size: 4
+          workerTemplate:
+            metadata:
+              labels:
+                llm-d.ai/guide: glm53-pcp-canary
+                llm-d.ai/model: GLM-5.3
+                llm-d.ai/role: prefill
+                llm-d.ai/key: glm53-pcp-prefill-dp4pcp8
+              annotations:
+                # The InferencePool's targetPorts (router.values.yaml) are the union
+                # of both roles, 8000-8003, sized for decode's 4 local DP ranks.
+                # Prefill serves one rank on 8000 (DP_SIZE_LOCAL=1), so this narrows
+                # the EPP to that port. Keep in sync with DP_SIZE_LOCAL.
+                llm-d.ai/active-ports: "8000"
+                # One NAD per rail, same as ../deployment-pcp-offloading. Together
+                # with install-crossrail-routes below, this is what lets a NIC on
+                # rail i reach rail j on the peer -- multi-nic-h100 gave on-link
+                # /16s only.
+                k8s.v1.cni.cncf.io/networks: |-
+                  [
+                    {"name":"deepep-ll-port-1"},
+                    {"name":"deepep-ll-port-2"},
+                    {"name":"deepep-ll-port-3"},
+                    {"name":"deepep-ll-port-4"},
+                    {"name":"deepep-ll-port-5"},
+                    {"name":"deepep-ll-port-6"},
+                    {"name":"deepep-ll-port-7"},
+                    {"name":"deepep-ll-port-8"}
+                  ]
+            spec:
+              serviceAccountName: glm-5-2
+              terminationGracePeriodSeconds: 90
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                      - matchExpressions:
+                          - key: nvidia.com/gpu.product
+                            operator: In
+                            values: [NVIDIA-H100-80GB-HBM3]
+                          # Same exclusions as ../deployment-pcp-offloading.
+                          - key: kubernetes.io/hostname
+                            operator: NotIn
+                            values:
+                              - rits-roce-z6lst-worker-h100-3-gdr-pvkm2
+                              - rits-roce-z6lst-worker-h100-3-gdr-w58sv
+                          # Nodes with the GLM-5.3 weights already on the node-local cache.
+                          - key: rits.node-model-cache-enabled
+                            operator: In
+                            values: [""]
+                          - key: llm-d.ai/glm53-cache
+                            operator: In
+                            values: [ready]
+                  # Prefer nodes whose hostPath jit-cache already has DeepGEMM kernels.
+                  preferredDuringSchedulingIgnoredDuringExecution:
+                    - weight: 100
+                      preference:
+                        matchExpressions:
+                          - key: kubernetes.io/hostname
+                            operator: In
+                            values:
+                              - rits-roce-z6lst-worker-h100-3-gdr-mc-bzwn4
+                              - rits-roce-z6lst-worker-h100-3-gdr-mc-mpcv9
+                              - rits-roce-z6lst-worker-h100-3-gdr-mc-qtd4d
+                              - rits-roce-z6lst-worker-h100-3-gdr-mc-g7wzn
+                              - rits-roce-z6lst-worker-h100-3-gdr-mc-2l9mr
+                              - rits-roce-z6lst-worker-h100-3-gdr-mc-nfpxj
+                              - rits-roce-z6lst-worker-h100-3-gdr-mc-gf5ll
+                              - rits-roce-z6lst-worker-h100-3-gdr-mc-6s9lz
+              tolerations:
+                - key: nvidia.com/gpu
+                  operator: Exists
+                  effect: NoSchedule
+              # Per-rail default routes (tables 100-107 via rail gateway 10.N.0.1)
+              # so a NIC on rail i can reach rail j on the peer.
+              initContainers:
+                - name: install-crossrail-routes
+                  image: quay.io/dagray/rdma-tools:tiny
+                  imagePullPolicy: IfNotPresent
+                  command: [/bin/bash, -ceu]
+                  args:
+                    - |
+                      for rail in {0..7}; do
+                        iface="net$((rail + 1))"
+                        table="$((100 + rail))"
+                        gateway="10.${rail}.0.1"
+                        ip route replace default via "${gateway}" dev "${iface}" table "${table}"
+                      done
+                  securityContext:
+                    privileged: true
+                    runAsUser: 0
+                    runAsGroup: 0
+                    capabilities:
+                      add: [NET_ADMIN]
+                - name: verify-model-mount
+                  image: busybox:1.36
+                  imagePullPolicy: IfNotPresent
+                  command: [sh, -c]
+                  args:
+                    - until [ -f /model-cache/models/zai-org/GLM-5.3/config.json ]; do echo 'config.json not visible; waiting 10s'; sleep 10; done
+                  securityContext:
+                    seLinuxOptions:
+                      type: spc_t
+                  volumeMounts:
+                    - name: model-cache
+                      mountPath: /model-cache
+                      subPath: rits-models
+                      readOnly: true
+              containers:
+                - name: vllm
+                  image: us.icr.io/llmd/llm-d-cuda@sha256:43f1297937b36cd973a2cde4d5137a3ffaebc1de78c8e28c97e8a17515e07d1c
+                  imagePullPolicy: IfNotPresent
+                  command: [/bin/bash, -c]
+                  args:
+                    - |-
+                      set -euo pipefail
+
+                      find /dev/shm -type f -delete
+
+                      # One rank per pod, so no multi-port external LB / supervisor:
+                      # --data-parallel-rank puts each pod in external-LB mode with its
+                      # own API server on 8000.
+                      START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
+                      DP_RANK=${START_RANK}
+
+                      # Publish this rank's KV cache events over ZMQ for the EPP's
+                      # precise-prefix-cache-producer (replaces the approx producer).
+                      # Same scheme as glm53-production: vLLM adds the global DP rank
+                      # to the endpoint port, so subtract this pod's start rank. With
+                      # DP_SIZE_LOCAL=1 every pod binds one stream on 5557, the EPP's
+                      # socketPort. The topic identifies this pod's rank-0 API server
+                      # for pod discovery.
+                      KV_EVENTS_BASE=$(( 5557 - START_RANK ))
+                      KV_EVENTS_CONFIG=$(printf '%s' \
+                        '{"enable_kv_cache_events":true,"publisher":"zmq",' \
+                        '"endpoint":"tcp://*:'"${KV_EVENTS_BASE}"'",' \
+                        '"topic":"kv@'"${POD_IP}"':8000@zai-org/GLM-5.3",' \
+                        '"buffer_steps":10000,"hwm":100000,"max_queue_size":100000}')
+                      echo "kv-events-config: ${KV_EVENTS_CONFIG} (binds tcp://*:5557 after the +${START_RANK} DP-rank offset)"
+
+                      # CPU KV offload tier, as in ../deployment-pcp-offloading: the
+                      # NixlConnector kv_producer wrapped in a MultiConnector next to
+                      # an OffloadingConnector (TieringOffloadingSpec), giving the rank
+                      # a host-RAM second level behind its GPU prefix cache. One DP
+                      # rank per pod (DP_SIZE_LOCAL=1), so the pod maps exactly one
+                      # region of CPU_OFFLOAD_GIB_PER_RANK into /dev/shm.
+                      CPU_OFFLOAD_BYTES=$(( ${CPU_OFFLOAD_GIB_PER_RANK:-512} * 1024 * 1024 * 1024 ))
+                      KV_TRANSFER_CONFIG=$(printf '%s' \
+                        '{"kv_connector":"MultiConnector","kv_role":"kv_both",' \
+                        '"kv_load_failure_policy":"fail",' \
+                        '"kv_connector_extra_config":{"connectors":[' \
+                        '{"kv_connector":"NixlConnector","kv_role":"kv_producer",' \
+                        '"kv_load_failure_policy":"fail"},' \
+                        '{"kv_connector":"OffloadingConnector","kv_role":"kv_both",' \
+                        '"kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec",' \
+                        '"cpu_bytes_to_use":'"${CPU_OFFLOAD_BYTES}"'}}' \
+                        ']}}')
+                      echo "kv-transfer-config: ${KV_TRANSFER_CONFIG}"
+
+                      # Startup patches to the installed vLLM, from the vllm-startup-patches
+                      # ConfigMap (patches/*.py, see kustomization.yaml), applied in name
+                      # order. Each stops the container if its target code is missing, so
+                      # vLLM never serves unpatched; see the header of each file.
+                      for VLLM_PATCH in /vllm-patches/*.py; do
+                        echo "vllm startup patch: $(basename "$VLLM_PATCH")"
+                        python3 "$VLLM_PATCH"
+                      done
+
+                      exec vllm serve /model-cache/models/zai-org/GLM-5.3 \
+                        --release-weight-page-cache \
+                        --served-model-name zai-org/GLM-5.3 \
+                        --port 8000 \
+                        --trust-remote-code \
+                        --max-model-len 275000 \
+                        --kv-cache-dtype fp8 \
+                        --block-size "${KV_BLOCK_SIZE}" \
+                        --speculative-config '{"method":"mtp","num_speculative_tokens":1}' \
+                        --reasoning-parser glm45 \
+                        --tool-call-parser glm47 \
+                        --enable-auto-tool-choice \
+                        --enable-scale-out \
+                        --disable-access-log-for-endpoints=/health,/metrics,/v1/chat/completions/render,/v1/messages/render \
+                        --enable-expert-parallel \
+                        --tensor-parallel-size 1 \
+                        --prefill-context-parallel-size "${PCP_SIZE}" \
+                        --decode-context-parallel-size "${DCP_SIZE}" \
+                        --dcp-comm-backend ag_rs \
+                        --attention-config '{"sparse_mla_force_mqa":true}' \
+                        --data-parallel-size $(( LWS_GROUP_SIZE * DP_SIZE_LOCAL )) \
+                        --data-parallel-size-local "${DP_SIZE_LOCAL}" \
+                        --data-parallel-rank "${DP_RANK}" \
+                        --data-parallel-address "${LWS_LEADER_ADDRESS}" \
+                        --data-parallel-rpc-port 5555 \
+                        --moe-backend deep_gemm \
+                        --all2all-backend deepep_high_throughput \
+                        --safetensors-load-strategy lazy \
+                        --no-enable-flashinfer-autotune \
+                        --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
+                        --long-prefill-token-threshold "${LONG_PREFILL_TOKEN_THRESHOLD}" \
+                        --max-num-seqs "${MAX_NUM_SEQS}" \
+                        --kv-transfer-config "${KV_TRANSFER_CONFIG}" \
+                        --kv-events-config "${KV_EVENTS_CONFIG}" \
+                        --kv-cache-metrics \
+                        --kv-cache-metrics-sample 0.01 \
+                        --compilation-config '{"cudagraph_mode":"NONE"}' \
+                        --gpu-memory-utilization 0.9 \
+                        --enforce-eager
+                  env:
+                    - name: DP_SIZE_LOCAL
+                      value: "1"
+                    # Host-RAM KV offload tier for this pod's single DP rank; it
+                    # comes out of /dev/shm (the 1500Gi Memory emptyDir) and so out
+                    # of the pod's memory limit.
+                    - name: CPU_OFFLOAD_GIB_PER_RANK
+                      value: "512"
+                    - name: PCP_SIZE
+                      value: "8"
+                    # DCP scales the scheduler's logical block (and the kv events'
+                    # block_size) to KV_BLOCK_SIZE x DCP_SIZE = 512 tokens. Keep
+                    # the product in sync with blockSizeTokens in router.values.yaml.
+                    - name: DCP_SIZE
+                      value: "8"
+                    - name: KV_BLOCK_SIZE
+                      value: "64"
+                    - name: MAX_NUM_BATCHED_TOKENS
+                      value: "8192"
+                    - name: LONG_PREFILL_TOKEN_THRESHOLD
+                      value: "2048"
+                    - name: MAX_NUM_SEQS
+                      value: "4"
+                    - name: POD_IP
+                      valueFrom:
+                        fieldRef:
+                          fieldPath: status.podIP
+                    - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+                      valueFrom:
+                        fieldRef:
+                          fieldPath: status.podIP
+                    - name: HF_HOME
+                      value: /model-cache
+                    # Also the seed of vLLM's block-hash chain (NONE_HASH); the
+                    # EPP's precise-prefix-cache-producer must use the same seed.
+                    - name: PYTHONHASHSEED
+                      value: "0"
+                    - name: OMP_NUM_THREADS
+                      value: "1"
+                    - name: VLLM_SERVER_DEV_MODE
+                      value: "1"
+                    - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                      value: "120"
+                    - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+                      value: "1"
+                    - name: TORCH_CPP_LOG_LEVEL
+                      value: ERROR
+
+                    # JIT caches (hostPath)
+                    - name: TRITON_LIBCUDA_PATH
+                      value: /usr/lib64
+                    - name: VLLM_CACHE_ROOT
+                      value: /var/cache/vllm/vllm
+                    - name: CUDA_CACHE_PATH
+                      value: /var/cache/vllm/cuda
+                    - name: FLASHINFER_WORKSPACE_BASE
+                      value: /var/cache/vllm/flashinfer
+                    - name: DG_JIT_CACHE_DIR
+                      value: /var/cache/vllm/deep_gemm
+
+                    # Networking (cross-rail, per-rail NADs + routes, all 8 RoCE
+                    # HCAs on both NCCL and UCX).
+                    - name: GLOO_SOCKET_IFNAME
+                      value: eth0
+                    - name: NCCL_SOCKET_IFNAME
+                      value: eth0
+                    - name: NCCL_NET
+                      value: IB
+                    - name: NCCL_IB_DISABLE
+                      value: "0"
+                    - name: NCCL_IB_HCA
+                      value: mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8
+                    # NIC DeepEP v2 reads the RDMA rate from via ibstat. Its default,
+                    # mlx5_0, is not one of the NCCL_IB_HCA rails above.
+                    - name: EP_NIC_NAME
+                      value: mlx5_1
+                    - name: NCCL_IB_GID_INDEX
+                      value: "3"
+                    - name: NCCL_IB_ADDR_FAMILY
+                      value: AF_INET
+                    - name: UCX_TLS
+                      value: rc,cuda_copy,cuda_ipc
+                    - name: UCX_NET_DEVICES
+                      value: mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1,mlx5_8:1
+                    - name: UCX_IB_GID_INDEX
+                      value: "3"
+                    - name: NVIDIA_GDRCOPY
+                      value: enabled
+                    - name: NVSHMEM_REMOTE_TRANSPORT
+                      value: ibgda
+                    - name: NVSHMEM_IB_ENABLE_IBGDA
+                      value: "true"
+                    - name: NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME
+                      value: eth0
+                    - name: NVSHMEM_SYMMETRIC_SIZE
+                      value: 4G
+                    - name: NVSHMEM_IB_ADDR_RANGE
+                      value: 0.0.0.0/0
+                    - name: NVSHMEM_ENABLE_NIC_PE_MAPPING
+                      value: "0"
+                    - name: NVSHMEM_IB_GID_INDEX
+                      value: "3"
+                    - name: NVSHMEM_HCA_PREFIX
+                      value: mlx5
+                  ports:
+                    - {name: vllm-rank0, containerPort: 8000, protocol: TCP}
+                    # ZMQ KV events publisher for the EPP's precise-prefix-cache-producer.
+                    # Every pod binds 5557 (KV_EVENTS_PORT pre-subtracts the DP rank).
+                    - {name: kv-events, containerPort: 5557, protocol: TCP}
+                  # No supervisor in this mode; probe the rank's API server directly.
+                  startupProbe:
+                    httpGet:
+                      path: /health
+                      port: vllm-rank0
+                    periodSeconds: 1
+                    timeoutSeconds: 5
+                    failureThreshold: 2700
+                  livenessProbe:
+                    httpGet:
+                      path: /health
+                      port: vllm-rank0
+                    periodSeconds: 30
+                    timeoutSeconds: 5
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: vllm-rank0
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                  resources:
+                    limits:
+                      cpu: "64"
+                      memory: 1500Gi
+                      ephemeral-storage: 128Gi
+                      nvidia.com/gpu: "8"
+                      nvidia.com/roce_gdr: "8"
+                    requests:
+                      cpu: "64"
+                      memory: 1500Gi
+                      ephemeral-storage: 128Gi
+                      nvidia.com/gpu: "8"
+                      nvidia.com/roce_gdr: "8"
+                  securityContext:
+                    privileged: true
+                    runAsUser: 0
+                    runAsGroup: 0
+                    capabilities:
+                      add: [IPC_LOCK, SYS_RAWIO]
+                  volumeMounts:
+                    - name: dshm
+                      mountPath: /dev/shm
+                    - name: jit-cache
+                      mountPath: /var/cache/vllm
+                    - name: model-cache
+                      mountPath: /model-cache
+                      subPath: rits-models
+                      readOnly: true
+                    - name: dev-infiniband
+                      mountPath: /dev/infiniband
+                    - name: vllm-patches
+                      mountPath: /vllm-patches
+                      readOnly: true
+              volumes:
+                - name: dshm
+                  emptyDir:
+                    medium: Memory
+                    sizeLimit: 1000Gi
+                - name: model-cache
+                  persistentVolumeClaim:
+                    claimName: glm52-canary-model-cache-rox-pvc
+                    readOnly: true
+                # Node-local so JIT kernels survive pod restarts on the same node.
+                # Versioned to the image: kernels from another build aren't reusable.
+                - name: jit-cache
+                  hostPath:
+                    path: /mnt/local/jit-cache-llm-d-cuda-ubuntu-sha-bbeed78
+                    type: DirectoryOrCreate
+                - name: dev-infiniband
+                  hostPath:
+                    path: /dev/infiniband
+                    type: Directory
+                - name: vllm-patches
+                  configMap:
+                    name: vllm-startup-patches
+    - name: decode
+      spec:
+        replicas: 1
+        leaderWorkerTemplate:
+          restartPolicy: RecreateGroupOnPodRestart
+          size: 4
+          workerTemplate:
+            metadata:
+              labels:
+                llm-d.ai/guide: glm53-pcp-canary
+                llm-d.ai/model: GLM-5.3
+                llm-d.ai/role: decode
+                llm-d.ai/key: glm53-pcp-decode-dp16tp2
+              annotations:
+                # One NAD per rail. Together with install-crossrail-routes below, this
+                # is what lets DeepEP LL (NVSHMEM IBGDA) reach every rail on the peer.
+                k8s.v1.cni.cncf.io/networks: |-
+                  [
+                    {"name":"deepep-ll-port-1"},
+                    {"name":"deepep-ll-port-2"},
+                    {"name":"deepep-ll-port-3"},
+                    {"name":"deepep-ll-port-4"},
+                    {"name":"deepep-ll-port-5"},
+                    {"name":"deepep-ll-port-6"},
+                    {"name":"deepep-ll-port-7"},
+                    {"name":"deepep-ll-port-8"}
+                  ]
+            spec:
+              serviceAccountName: glm-5-2
+              terminationGracePeriodSeconds: 90
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                      - matchExpressions:
+                          - key: nvidia.com/gpu.product
+                            operator: In
+                            values: [NVIDIA-H100-80GB-HBM3]
+                          - key: kubernetes.io/hostname
+                            operator: NotIn
+                            values:
+                              - rits-roce-z6lst-worker-h100-3-gdr-pvkm2
+                              - rits-roce-z6lst-worker-h100-3-gdr-w58sv
+                          # Nodes with the GLM-5.3 weights already on the node-local cache.
+                          - key: rits.node-model-cache-enabled
+                            operator: In
+                            values: [""]
+                          - key: llm-d.ai/glm53-cache
+                            operator: In
+                            values: [ready]
+              tolerations:
+                - key: nvidia.com/gpu
+                  operator: Exists
+                  effect: NoSchedule
+              initContainers:
+                # Per-rail default routes so a NIC on rail i can reach rail j on the peer.
+                - name: install-crossrail-routes
+                  image: quay.io/dagray/rdma-tools:tiny
+                  imagePullPolicy: IfNotPresent
+                  command: [/bin/bash, -ceu]
+                  args:
+                    - |
+                      for rail in {0..7}; do
+                        iface="net$((rail + 1))"
+                        table="$((100 + rail))"
+                        gateway="10.${rail}.0.1"
+                        ip route replace default via "${gateway}" dev "${iface}" table "${table}"
+                      done
+                  securityContext:
+                    privileged: true
+                    runAsUser: 0
+                    runAsGroup: 0
+                    capabilities:
+                      add: [NET_ADMIN]
+                - name: verify-model-mount
+                  image: busybox:1.36
+                  imagePullPolicy: IfNotPresent
+                  command: [sh, -c]
+                  args:
+                    - until [ -f /model-cache/models/zai-org/GLM-5.3/config.json ]; do echo 'config.json not visible; waiting 10s'; sleep 10; done
+                  securityContext:
+                    seLinuxOptions:
+                      type: spc_t
+                  volumeMounts:
+                    - name: model-cache
+                      mountPath: /model-cache
+                      subPath: rits-models
+                      readOnly: true
+                # Native sidecar: owns 8000-8003 (what the InferencePool routes to),
+                # sends the prompt to the EPP-chosen prefill rank, then hands off to
+                # local vLLM rank N on 8200+N. --data-parallel-size is the LOCAL rank
+                # count. If DP_SIZE_LOCAL changes, update it, the ports below and the
+                # pool's targetPorts.
+                - name: routing-proxy
+                  image: ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.10.0
+                  imagePullPolicy: IfNotPresent
+                  restartPolicy: Always
+                  args:
+                    - --port=8000
+                    - --vllm-port=8200
+                    - --data-parallel-size=4
+                    - --kv-connector=nixlv2
+                    - --zap-log-level=1
+                    - --secure-proxy=false
+                  ports:
+                    - {name: rank0, containerPort: 8000, protocol: TCP}
+                    - {name: rank1, containerPort: 8001, protocol: TCP}
+                    - {name: rank2, containerPort: 8002, protocol: TCP}
+                    - {name: rank3, containerPort: 8003, protocol: TCP}
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    runAsNonRoot: true
+              containers:
+                - name: vllm
+                  # Same build and digest as the prefill role; see the note there.
+                  image: us.icr.io/llmd/llm-d-cuda@sha256:43f1297937b36cd973a2cde4d5137a3ffaebc1de78c8e28c97e8a17515e07d1c
+                  imagePullPolicy: IfNotPresent
+                  command: [/bin/bash, -c]
+                  args:
+                    - |-
+                      set -euo pipefail
+
+                      find /dev/shm -type f -delete
+
+                      # Startup patches to the installed vLLM, from the vllm-startup-patches
+                      # ConfigMap (patches/*.py, see kustomization.yaml), applied in name
+                      # order. Each stops the container if its target code is missing, so
+                      # vLLM never serves unpatched; see the header of each file.
+                      for VLLM_PATCH in /vllm-patches/*.py; do
+                        echo "vllm startup patch: $(basename "$VLLM_PATCH")"
+                        python3 "$VLLM_PATCH"
+                      done
+
+                      START_RANK=$(( LWS_WORKER_INDEX * DP_SIZE_LOCAL ))
+
+                      # LL keeps one RDMA queue entry per in-flight dispatch token; the
+                      # live decode LWS sizes this as (batch + 1) * 2.
+                      export NVSHMEM_QP_DEPTH=$(( (MAX_NUM_BATCHED_TOKENS + 1) * 2 ))
+
+                      exec vllm serve /model-cache/models/zai-org/GLM-5.3 \
+                        --release-weight-page-cache \
+                        --served-model-name zai-org/GLM-5.3 \
+                        --port 8200 \
+                        --trust-remote-code \
+                        --max-model-len 275000 \
+                        --kv-cache-dtype fp8 \
+                        --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${SPEC_TOKENS}}" \
+                        --reasoning-parser glm45 \
+                        --tool-call-parser glm47 \
+                        --enable-auto-tool-choice \
+                        --disable-access-log-for-endpoints=/health,/metrics \
+                        --enable-expert-parallel \
+                        --tensor-parallel-size "${TP_SIZE}" \
+                        --data-parallel-size $(( LWS_GROUP_SIZE * DP_SIZE_LOCAL )) \
+                        --data-parallel-size-local "${DP_SIZE_LOCAL}" \
+                        --data-parallel-start-rank "${START_RANK}" \
+                        --data-parallel-address "${LWS_LEADER_ADDRESS}" \
+                        --data-parallel-rpc-port 5555 \
+                        --data-parallel-multi-port-external-lb \
+                        --data-parallel-supervisor-port 8208 \
+                        --moe-backend deep_gemm \
+                        --all2all-backend deepep_low_latency \
+                        --enable-ep-weight-filter \
+                        --safetensors-load-strategy lazy \
+                        --no-enable-flashinfer-autotune \
+                        --max-num-seqs "${MAX_NUM_SEQS}" \
+                        --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
+                        --long-prefill-token-threshold "${MAX_NUM_BATCHED_TOKENS}" \
+                        --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail"}'
+                  env:
+                    # 8 GPUs per pod = DP_SIZE_LOCAL x TP_SIZE.
+                    - name: TP_SIZE
+                      value: "2"
+                    - name: DP_SIZE_LOCAL
+                      value: "4"
+                    # Per DP rank. Decode steps are max_num_seqs x (1 + SPEC_TOKENS)
+                    # tokens, so 32 = 8 x 4.
+                    - name: MAX_NUM_SEQS
+                      value: "8"
+                    - name: SPEC_TOKENS
+                      value: "3"
+                    - name: MAX_NUM_BATCHED_TOKENS
+                      value: "32"
+                    - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+                      valueFrom:
+                        fieldRef:
+                          fieldPath: status.podIP
+                    - name: HF_HOME
+                      value: /model-cache
+                    - name: PYTHONHASHSEED
+                      value: "0"
+                    - name: OMP_NUM_THREADS
+                      value: "1"
+                    - name: OPENBLAS_NUM_THREADS
+                      value: "1"
+                    - name: MKL_NUM_THREADS
+                      value: "1"
+                    - name: VLLM_SERVER_DEV_MODE
+                      value: "1"
+                    - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                      value: "120"
+                    - name: VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
+                      value: "1"
+                    - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+                      value: "1"
+                    - name: VLLM_SKIP_P2P_CHECK
+                      value: "1"
+                    - name: TORCH_CPP_LOG_LEVEL
+                      value: ERROR
+
+                    # JIT caches (hostPath, versioned to the image)
+                    - name: TRITON_LIBCUDA_PATH
+                      value: /usr/lib64
+                    - name: VLLM_CACHE_ROOT
+                      value: /var/cache/vllm/vllm
+                    - name: CUDA_CACHE_PATH
+                      value: /var/cache/vllm/cuda
+                    - name: CCACHE_DIR
+                      value: /var/cache/vllm/ccache
+                    - name: FLASHINFER_WORKSPACE_BASE
+                      value: /var/cache/vllm/flashinfer
+                    - name: DG_JIT_CACHE_DIR
+                      value: /var/cache/vllm/deep_gemm
+
+                    # Networking (same as prefill: cross-rail, per-rail NADs + routes,
+                    # all 8 RoCE HCAs on both NCCL and UCX, NVSHMEM IBGDA for DeepEP LL).
+                    - name: GLOO_SOCKET_IFNAME
+                      value: eth0
+                    - name: NCCL_SOCKET_IFNAME
+                      value: eth0
+                    - name: NCCL_NET
+                      value: IB
+                    - name: NCCL_IB_DISABLE
+                      value: "0"
+                    - name: NCCL_IB_HCA
+                      value: mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8
+                    - name: NCCL_IB_GID_INDEX
+                      value: "3"
+                    - name: NCCL_IB_ADDR_FAMILY
+                      value: AF_INET
+                    - name: UCX_TLS
+                      value: rc,cuda_copy,cuda_ipc
+                    - name: UCX_NET_DEVICES
+                      value: mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1,mlx5_8:1
+                    - name: UCX_IB_GID_INDEX
+                      value: "3"
+                    - name: NVIDIA_GDRCOPY
+                      value: enabled
+                    - name: NVSHMEM_REMOTE_TRANSPORT
+                      value: ibgda
+                    - name: NVSHMEM_IB_ENABLE_IBGDA
+                      value: "true"
+                    - name: NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME
+                      value: eth0
+                    - name: NVSHMEM_SYMMETRIC_SIZE
+                      value: 4G
+                    - name: NVSHMEM_IB_ADDR_RANGE
+                      value: 0.0.0.0/0
+                    - name: NVSHMEM_ENABLE_NIC_PE_MAPPING
+                      value: "0"
+                    - name: NVSHMEM_IB_GID_INDEX
+                      value: "3"
+                    - name: NVSHMEM_HCA_PREFIX
+                      value: mlx5
+                  ports:
+                    - {name: vllm-rank0, containerPort: 8200, protocol: TCP}
+                    - {name: vllm-rank1, containerPort: 8201, protocol: TCP}
+                    - {name: vllm-rank2, containerPort: 8202, protocol: TCP}
+                    - {name: vllm-rank3, containerPort: 8203, protocol: TCP}
+                    - name: supervisor
+                      containerPort: 8208
+                  startupProbe:
+                    httpGet:
+                      path: /health
+                      port: supervisor
+                    periodSeconds: 1
+                    failureThreshold: 5400
+                  livenessProbe:
+                    httpGet:
+                      path: /health
+                      port: supervisor
+                    periodSeconds: 30
+                    timeoutSeconds: 5
+                  readinessProbe:
+                    httpGet:
+                      path: /readyz
+                      port: supervisor
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                  resources:
+                    limits:
+                      cpu: "64"
+                      memory: 1500Gi
+                      ephemeral-storage: 128Gi
+                      nvidia.com/gpu: "8"
+                      nvidia.com/roce_gdr: "8"
+                    requests:
+                      cpu: "64"
+                      memory: 1500Gi
+                      ephemeral-storage: 128Gi
+                      nvidia.com/gpu: "8"
+                      nvidia.com/roce_gdr: "8"
+                  securityContext:
+                    privileged: true
+                    runAsUser: 0
+                    runAsGroup: 0
+                    capabilities:
+                      add: [IPC_LOCK, SYS_RAWIO]
+                  volumeMounts:
+                    - name: dshm
+                      mountPath: /dev/shm
+                    - name: jit-cache
+                      mountPath: /var/cache/vllm
+                    - name: model-cache
+                      mountPath: /model-cache
+                      subPath: rits-models
+                      readOnly: true
+                    - name: dev-infiniband
+                      mountPath: /dev/infiniband
+                    - name: vllm-patches
+                      mountPath: /vllm-patches
+                      readOnly: true
+              volumes:
+                - name: dshm
+                  emptyDir:
+                    medium: Memory
+                    sizeLimit: 1500Gi
+                - name: model-cache
+                  persistentVolumeClaim:
+                    claimName: glm52-canary-model-cache-rox-pvc
+                    readOnly: true
+                # Node-local so JIT kernels survive pod restarts on the same node.
+                # Versioned to the image: kernels from another build aren't reusable.
+                - name: jit-cache
+                  hostPath:
+                    path: /mnt/local/jit-cache-llm-d-cuda-ubuntu-sha-bbeed78
+                    type: DirectoryOrCreate
+                - name: dev-infiniband
+                  hostPath:
+                    path: /dev/infiniband
+                    type: Directory
+                - name: vllm-patches
+                  configMap:
+                    name: vllm-startup-patches
