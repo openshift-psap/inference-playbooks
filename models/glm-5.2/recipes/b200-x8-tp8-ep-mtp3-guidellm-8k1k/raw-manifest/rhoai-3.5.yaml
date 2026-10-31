@@ -1,0 +1,210 @@
+# GLM 5.2 aggregated B200 LLMInferenceService for Red Hat OpenShift AI 3.5.
+#
+# Source:
+# - https://github.com/robertgshaw2-redhat/llm-d-models/blob/main/glm5.2/aggregated/base/glm.yaml
+# - https://github.com/robertgshaw2-redhat/llm-d-models/blob/main/glm5.2/aggregated/gke-b200/kustomization.yaml
+#
+# Status:
+# - Runtime validated on an internal RHOAI 3.5 cluster, 2026-09-10.
+# - Derived from the RHOAI 3.4 source-faithful recipe that passed direct
+#   runtime smoke on an internal cluster.
+# - Uses RHOAI 3.5 LLMInferenceServiceConfig refs.
+# - Gateway /v1/models and /v1/chat/completions returned HTTP 200 through
+#   the generated RHOAI 3.5 HTTPRoute.
+#
+# Validated previously on an internal RHOAI 3.4 cluster, 2026-08-31:
+# - KServe LLMInferenceService v1alpha2
+# - upstream vLLM image used in the source URLs above: docker.io/vllm/vllm-openai:v0.27.0
+# - B200 node, 8 GPUs, tensor parallel size 8
+# - InstantTensor installed to writable /opt/pydeps
+# - /v1/models and /v1/chat/completions returned HTTP 200
+#
+# Warning:
+# - This is source-faithful to the source URLs above, not yet a product-native Red Hat image path.
+# - InstantTensor is installed at pod startup because no prebuilt Red Hat-compatible
+#   image with the needed GLM 5.2 / InstantTensor support has been validated yet.
+# - Future preferred path: use a custom/approved image with InstantTensor already
+#   included, then remove the initContainer and PYTHONPATH workaround.
+# - In the validated RHOAI 3.5 environment, the generated workload Service
+#   advertised HTTPS upstream protocol, so this custom upstream vLLM command
+#   serves with the mounted KServe TLS certs.
+#
+# Before runtime:
+# - create an HF token secret named llm-d-hf-token with key HF_TOKEN
+# - create/cache PVCs named glm-5-2-hf-cache and glm-5-2-jit-cache, or replace
+#   those names below with equivalent OpenShift storage
+# - set replicas to 1 only when one B200 node has 8 free GPUs
+# - cache option A, shown here: use a PVC as the Hugging Face cache so model
+#   files survive pod restarts and avoid repeat downloads
+# - cache option B: use `uri: hf://RedHatAI/GLM-5.2-NVFP4-FP8` and remove the
+#   hf-cache PVC volume/mount/env if you want KServe storage-initializer to
+#   fetch from Hugging Face instead
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: glm-5-2-aggregated-b200
+  labels:
+    app.kubernetes.io/name: glm-5-2
+    app.kubernetes.io/component: aggregated-b200
+    llm-d.ai/model: glm5.2
+    llm-d.ai/profile: aggregated-b200
+spec:
+  baseRefs:
+    - name: v3-5-0-kserve-config-llm-template
+    - name: v3-5-0-kserve-config-llm-single-node-template-nvidia-cuda
+    - name: v3-5-0-kserve-config-llm-scheduler
+    - name: v3-5-0-kserve-config-llm-router-route
+  replicas: 0
+  model:
+    # PVC cache option, validated on an internal RHOAI 3.4 cluster: pvc:// satisfies KServe's
+    # required model URI without launching storage-initializer. vLLM serves MODEL
+    # directly and uses this PVC as the Hugging Face cache.
+    #
+    # Hugging Face initializer option, not used in the PVC-cache validation:
+    # uri: hf://RedHatAI/GLM-5.2-NVFP4-FP8
+    # If using hf://, remove the hf-cache PVC volume, hf-cache mount, and
+    # HF_HUB_CACHE override unless you intentionally also want a mounted cache.
+    uri: pvc://glm-5-2-hf-cache
+    name: RedHatAI/GLM-5.2-NVFP4-FP8
+  parallelism:
+    tensor: 8
+  router:
+    route: {}
+    scheduler: {}
+  template:
+    nodeSelector:
+      nvidia.com/gpu.product: NVIDIA-B200
+    initContainers:
+      # Runtime workaround: this reproduces the source manifest's InstantTensor dependency on
+      # OpenShift without writing to /usr/local. Prefer a custom/approved image
+      # with InstantTensor / GLM 5.2 NVFP4-FP8 loader support already built in.
+      - name: install-instanttensor
+        image: docker.io/vllm/vllm-openai:v0.27.0
+        command:
+          - /bin/bash
+          - -lc
+          - python3 -m pip install --no-cache-dir --no-deps --index-url https://pypi.org/simple --target /opt/pydeps instanttensor==0.1.9
+        volumeMounts:
+          - name: pydeps
+            mountPath: /opt/pydeps
+    containers:
+      - name: main
+        image: docker.io/vllm/vllm-openai:v0.27.0
+        imagePullPolicy: IfNotPresent
+        command:
+          - /bin/bash
+          - -c
+        args:
+          - |-
+            set -euo pipefail
+
+            export MAX_CG_SIZE=$(( MAX_NUM_SEQS * (SPEC_TOKENS + 1) ))
+
+            exec vllm serve "${MODEL}" \
+              --port 8000 \
+              --disable-access-log-for-endpoints=/health,/metrics,/v1/models \
+              --max-num-seqs "${MAX_NUM_SEQS}" \
+              --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
+              --max-cudagraph-capture-size "${MAX_CG_SIZE}" \
+              --long-prefill-token-threshold "${LONG_PREFILL_TOKEN_THRESHOLD}" \
+              --tensor-parallel-size 8 \
+              --enable-expert-parallel \
+              --moe-backend "${MOE_BACKEND}" \
+              --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${SPEC_TOKENS}}" \
+              --kv-cache-dtype fp8 \
+              --load-format instanttensor \
+              --enable-ssl-refresh \
+              --ssl-certfile /var/run/kserve/tls/tls.crt \
+              --ssl-keyfile /var/run/kserve/tls/tls.key
+        env:
+          - name: MODEL
+            value: RedHatAI/GLM-5.2-NVFP4-FP8
+          - name: MOE_BACKEND
+            value: auto
+          - name: MAX_NUM_SEQS
+            value: "64"
+          - name: MAX_NUM_BATCHED_TOKENS
+            value: "8192"
+          - name: LONG_PREFILL_TOKEN_THRESHOLD
+            value: "4096"
+          - name: SPEC_TOKENS
+            value: "3"
+          - name: PYTHONPATH
+            value: /opt/pydeps
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: llm-d-hf-token
+                key: HF_TOKEN
+          - name: HF_HUB_OFFLINE
+            value: "0"
+          - name: TRANSFORMERS_OFFLINE
+            value: "0"
+          - name: VLLM_USE_V2_MODEL_RUNNER
+            value: "1"
+          - name: TORCH_CPP_LOG_LEVEL
+            value: ERROR
+          - name: HF_HUB_CACHE
+            value: /var/cache/huggingface
+          - name: VLLM_CACHE_ROOT
+            value: /var/cache/vllm/vllm
+          - name: FLASHINFER_WORKSPACE_BASE
+            value: /var/cache/vllm/flashinfer
+          - name: CUDA_CACHE_PATH
+            value: /var/cache/vllm/cuda
+        resources:
+          requests:
+            cpu: "64"
+            memory: 512Gi
+            ephemeral-storage: 1Ti
+            nvidia.com/gpu: "8"
+          limits:
+            memory: 512Gi
+            ephemeral-storage: 1Ti
+            nvidia.com/gpu: "8"
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: hf-cache
+            mountPath: /var/cache/huggingface
+          - name: jit-cache
+            mountPath: /var/cache/vllm
+          - name: pydeps
+            mountPath: /opt/pydeps
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTPS
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 270
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTPS
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTPS
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 2Gi
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: glm-5-2-hf-cache
+      - name: jit-cache
+        persistentVolumeClaim:
+          claimName: glm-5-2-jit-cache
+      - name: pydeps
+        emptyDir: {}
