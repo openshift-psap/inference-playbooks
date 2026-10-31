@@ -21,7 +21,7 @@ class ManifestDriftTests(unittest.TestCase):
         self.repo = Path(self.temporary.name)
         for directory in ("schema", "templates"):
             shutil.copytree(REPO / directory, self.repo / directory)
-        source_recipe = sorted(REPO.glob("models/gemma-4/recipes/*/recipe.yaml"))[0]
+        source_recipe = REPO / "models/gemma-4/recipes/h200-x1-tp1-guidellm-8k1k/recipe.yaml"
         self.directory = self.repo / source_recipe.parent.relative_to(REPO)
         self.directory.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source_recipe.parent, self.directory)

@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: inference-playbooks
+    app.kubernetes.io/name: gemma-4-b200-x8-base-single-gpu-8k1k
+  name: gemma-4-b200-x8-base-single-gpu-8k1k
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gemma-4-b200-x8-base-single-gpu-8k1k
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gemma-4-b200-x8-base-single-gpu-8k1k
+    spec:
+      containers:
+      - args:
+        - google/gemma-4-26B-A4B-it
+        - --served-model-name=google/gemma-4-26B-A4B-it
+        - --language-model-only
+        command:
+        - /bin/bash
+        - -c
+        - |
+          vllm serve "$@"
+        - --
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: HF_TOKEN
+              name: hf-token
+        - name: HOME
+          value: /tmp
+        image: docker.io/vllm/vllm-openai:v0.31.0
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 30
+          timeoutSeconds: 10
+        name: vllm
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 10
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: "8"
+            memory: 64Gi
+            nvidia.com/gpu: "1"
+          requests:
+            cpu: "8"
+            memory: 32Gi
+            nvidia.com/gpu: "1"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 30
+        volumeMounts:
+        - mountPath: /home/nobody/.cache
+          name: hf-cache
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - emptyDir: {}
+        name: hf-cache
+      - emptyDir: {}
+        name: tmp
