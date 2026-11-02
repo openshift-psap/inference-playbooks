@@ -8,6 +8,31 @@ from playwright.sync_api import expect
 REPO = Path(__file__).resolve().parents[2]
 
 
+def test_mixed_workload_discovery_and_filtered_evidence(benchmark_page):
+    page = benchmark_page
+    entry = {'id': 'mixed', 'model_id': 'synthetic', 'validation': {},
+             'platform': {'stack': 'vllm', 'version': 'v1'},
+             'workload_profile': 'guidellm-8k1k', 'evidence': []}
+    workloads = [{'harness': 'guidellm', 'key': 'IP-8k/1k'},
+                 {'harness': 'aiperf', 'key': 'aiperf-agentx-128k'}]
+    for harness in ('guidellm', 'aiperf'):
+        entry['evidence'].append({'run': {'run_id': harness, 'harness': harness,
+            'platform': entry['platform'], 'workload': {'expectations': {'workloads': workloads}}},
+            'result': {'metrics': {}}})
+    page.evaluate('(entry) => { window.testEntry = entry; CATALOG = {entries: [entry]}; state.modelId = entry.model_id; }', entry)
+    for selected, runs in [('agentic', ['aiperf']), ('8k1k', ['guidellm']), ('', ['guidellm', 'aiperf'])]:
+        assert page.evaluate('selected => { state.filters = {workload: selected}; return matchingEntries().map(e => e.id); }', selected) == ['mixed']
+        page.evaluate('document.getElementById("app").replaceChildren(renderBenchmark(testEntry))')
+        assert page.locator('.evidence-detail > summary').all_text_contents() == [f'Run: {run}' for run in runs]
+    # A different platform or unknown workload must not confer agentic coverage.
+    page.evaluate('testEntry.evidence[1].run.platform = {stack: "rhoai", version: "v1"}')
+    assert not page.evaluate('matchesWorkload(testEntry, "agentic")')
+    page.evaluate('testEntry.evidence[1].run.platform = testEntry.platform; testEntry.evidence[1].run.workload.expectations.workloads[1].key = "unknown"')
+    assert not page.evaluate('matchesWorkload(testEntry, "agentic")')
+    page.evaluate('testEntry.evidence = []')
+    assert page.evaluate('matchesWorkload(testEntry, "8k1k")')
+
+
 @pytest.fixture
 def benchmark_page(page):
     page.set_content('<div id="app"></div>')

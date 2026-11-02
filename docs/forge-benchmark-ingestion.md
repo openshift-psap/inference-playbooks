@@ -1,5 +1,15 @@
 # Forge benchmark evidence ingestion
 
+The importer supports Forge bundle contract v1 (namespace placement only) and
+v2 (namespace placement plus an explicitly recorded CI node-selector override
+for a Deployment). For v2, execution configuration and bundle metadata must
+agree, authored selectors cannot conflict, and an authored `nodeName` is not
+allowed. Source/submitted bundle checksums and complete document comparison
+still reject any other launch changes. Unknown versions remain unsupported.
+CI placement is validated at import time only: it is not copied into recipe
+inputs, rendered manifests, or catalog fields. Existing execution references
+retain the audit trail without publishing private node-selector values.
+
 This page describes post-merge ingestion and backfill. For importing directly
 into an open recipe PR, see the [maintainer workflow](../tests/forge/README.md#maintainer-workflow-open-pr).
 

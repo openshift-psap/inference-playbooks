@@ -1,0 +1,140 @@
+schema_version: 2
+evidence_source: forge-kpis
+run_id: forge-ccd5da6688354217b516728a799cd12b-guidellm
+recipe_id: gemma-4-b200-x8-nvfp4-single-gpu-8k1k
+deployment_scope: single-node
+hardware_profile: hardware-profiles/nvidia-b200-8x-r1.yaml
+hardware_profile_revision: 1
+platform: &id001
+  stack: vllm
+  version: v0.31.0
+harness: guidellm
+result: result.json
+forge:
+  mlflow_tracking_uri: https://mlflow.apps.psap-automation.ibm.rhperfscale.org
+  mlflow_workspace: forge-inference-playbooks
+  mlflow_experiment_id: '495'
+  mlflow_parent_run_id: ccd5da6688354217b516728a799cd12b
+  mlflow_benchmark_run_id: ccd5da6688354217b516728a799cd12b
+  mlflow_run_url: https://mlflow.apps.psap-automation.ibm.rhperfscale.org/#/experiments/495/runs/ccd5da6688354217b516728a799cd12b?workspace=forge-inference-playbooks
+  pr_number: 92
+  tested_revision: bff852e5bc1dbd5b81ec0840a16295cf4b7a95cd
+  kpis_artifact_path: 01__test/002__postprocessing/kpis/kpis.json
+  kpis_checksum: sha256:4349580f152650e78e4f16114a175368aba74764862d971c09deafc4fb25d238
+  completeness: full-sweep
+  pr_comment_id: 6546217429
+  expected_concurrencies:
+    aiperf:
+    - 4
+    - 8
+    - 16
+    - 32
+    - 64
+    guidellm:
+    - 1
+    - 4
+    - 16
+    - 32
+    - 64
+    - 128
+command: /usr/bin/python3 /app/forge/projects/inference_playbooks/orchestration/ci.py
+  test
+environment:
+  model_revision: main
+  image_digest: sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b
+  platform: *id001
+workload:
+  tests:
+  - phase: benchmark
+    model_name: google/gemma-4-26B-A4B-it
+    product_version: v0.31.0
+    deployment_profile: nvfp4-single-gpu
+    guidellm_loadshape: IP-8k/1k
+    gpu_type: NVIDIA-B200
+    platform: OCP
+    test_harness: forge-inference-playbooks
+    benchmark_key: IP-8k/1k
+    benchmark_tool: guidellm
+    served_model: RedHatAI/gemma-4-26B-A4B-it-NVFP4
+    quantization: NVFP4
+    cluster: b200
+    guidellm_version: 0.7.4
+    prompt_toks: '8000'
+    output_toks: '1000'
+    turns: '1'
+    prefix_tokens: ''
+    prefix_count: ''
+    request_type: /v1/chat/completions
+    guidellm_start_time_ms: '1793448797343'
+    guidellm_end_time_ms: '1793450646275'
+    runtime_args: ''
+    mlflow_run_id: ''
+    mlflow_experiment_id: ''
+  expectations:
+    version: 1
+    forge_revision: d3590baad96f0456ebeaa8999aac968e177161db
+    profile_source:
+      uri: https://raw.githubusercontent.com/openshift-psap/forge/d3590baad96f0456ebeaa8999aac968e177161db/projects/rhaiis/orchestration/config.d/workloads.yaml
+      checksum: sha256:de1302b1486a49d70f5a00413d46a15c8b00a61278d9078e1679d6930c883024
+    workloads:
+    - key: IP-8k/1k
+      harness: guidellm
+      profile_concurrencies:
+      - 1
+      - 4
+      - 16
+      - 32
+      - 64
+      - 128
+      invocations:
+      - test_run_id: 001__inference_playbooks_test_dir/002__benchmark_IP-8k-1k
+        artifact_path: 01__test/001__inference_playbooks_test_dir/002__benchmark_IP-8k-1k/001__run_guidellm_benchmark/src/guidellm-job.yaml
+        checksum: sha256:0603550cb937901969ef17f34571eabe0c4c37b17b87068d67b59eefae4ea224
+        concurrencies:
+        - 1
+        - 4
+        - 16
+        - 32
+        - 64
+        - 128
+    - key: aiperf-agentx-128k
+      harness: aiperf
+      profile_concurrencies:
+      - 4
+      - 8
+      - 16
+      - 32
+      - 64
+      invocations:
+      - test_run_id: 001__inference_playbooks_test_dir/003__benchmark_aiperf-agentx-128k_concurrency-4
+        artifact_path: 01__test/001__inference_playbooks_test_dir/003__benchmark_aiperf-agentx-128k_concurrency-4/001__run_aiperf_benchmark/src/aiperf-job.yaml
+        checksum: sha256:64ce8de73133ba47fea45acb74ab1e344fa63efd1805056868976b926ca11340
+        concurrencies:
+        - 4
+      - test_run_id: 001__inference_playbooks_test_dir/004__benchmark_aiperf-agentx-128k_concurrency-8
+        artifact_path: 01__test/001__inference_playbooks_test_dir/004__benchmark_aiperf-agentx-128k_concurrency-8/001__run_aiperf_benchmark/src/aiperf-job.yaml
+        checksum: sha256:2444618232eeb7050c87968fdbcf0c08eaaf86091645ab9cc2057aa61687ba02
+        concurrencies:
+        - 8
+      - test_run_id: 001__inference_playbooks_test_dir/005__benchmark_aiperf-agentx-128k_concurrency-16
+        artifact_path: 01__test/001__inference_playbooks_test_dir/005__benchmark_aiperf-agentx-128k_concurrency-16/001__run_aiperf_benchmark/src/aiperf-job.yaml
+        checksum: sha256:0ba556d0b4c4e6f6b341101a5b25b6106079e4ce27edf53fedb9fb84ccaf70c4
+        concurrencies:
+        - 16
+      - test_run_id: 001__inference_playbooks_test_dir/006__benchmark_aiperf-agentx-128k_concurrency-32
+        artifact_path: 01__test/001__inference_playbooks_test_dir/006__benchmark_aiperf-agentx-128k_concurrency-32/001__run_aiperf_benchmark/src/aiperf-job.yaml
+        checksum: sha256:ebabea8da6220c5d6b0bddbd31be49658f2675efc1f750f0e2f5bf38fe8992cb
+        concurrencies:
+        - 32
+      - test_run_id: 001__inference_playbooks_test_dir/007__benchmark_aiperf-agentx-128k_concurrency-64
+        artifact_path: 01__test/001__inference_playbooks_test_dir/007__benchmark_aiperf-agentx-128k_concurrency-64/001__run_aiperf_benchmark/src/aiperf-job.yaml
+        checksum: sha256:aa6a6aa8289bf6c805a9cad9d98cd39ebe76232ff7bb6f5b3e1ac2f83c29979d
+        concurrencies:
+        - 64
+artifacts:
+- type: raw-output
+  path: kpis.json
+  checksum: sha256:4349580f152650e78e4f16114a175368aba74764862d971c09deafc4fb25d238
+- type: profile-snapshot
+  uri: https://raw.githubusercontent.com/openshift-psap/forge/d3590baad96f0456ebeaa8999aac968e177161db/projects/rhaiis/orchestration/config.d/workloads.yaml
+  checksum: sha256:de1302b1486a49d70f5a00413d46a15c8b00a61278d9078e1679d6930c883024

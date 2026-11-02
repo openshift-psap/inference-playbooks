@@ -1,0 +1,8 @@
+image_usage:
+  kind: default
+  variant: cuda
+engine:
+  name: vllm
+  image: docker.io/vllm/vllm-openai:v0.31.0
+  version: 0.31.0
+  source: https://github.com/vllm-project/vllm/releases/tag/v0.31.0

@@ -101,6 +101,12 @@ jobs:
                 shown++;
               }
               if (warnings.length > shown) body += `\n${warnings.length - shown} more annotations are linked in the CI run.\n`;
+              body += '\n### How to resolve\n\n' +
+                '- **Unused/obsolete:** remove the file and update references; Git history retains it.\n' +
+                '- **Required by this recipe:** use a supported location and declare its ownership. For generated manifests, change recipe inputs and rerender rather than moving or editing outputs.\n' +
+                '- **Intentionally shared:** retain it with maintainer agreement and define how it will be validated. A helper Job does not automatically need its own serving recipe.\n\n' +
+                'Moving a file merely to silence the warning is not a resolution. These warnings remain advisory; maintainer agreement here is not a benchmark exception approval.\n\n' +
+                `[Placement and validation guidance](https://github.com/${owner}/${repo}/blob/main/docs/recipe-evidence.md#resolving-a-file-flow-warning)\n`;
             } else {
               body += '## ✅ Playbook file-flow warnings cleared\n\n' +
                 'The latest successful recipe check reports no new file-flow warnings.\n';

@@ -29,6 +29,37 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, allow_nan=False, separators=(',', ':'))
 
 
+def apply_ci_placement(metadata, config, deployment):
+    """Replay only the placement allowed by Forge's versioned launch contract."""
+    version = metadata.get('contract_version')
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError('unsupported Forge bundle contract version')
+    deploy = config.get('deploy', {})
+    selector = deploy.get('node_selector') if isinstance(deploy, dict) else None
+    if version == 1:
+        if selector or 'ci_node_selector' in metadata or 'submission_mode' in metadata:
+            raise ValueError('Forge bundle v1 cannot declare CI placement overrides')
+        return
+    recorded = metadata.get('ci_node_selector')
+    if (metadata.get('submission_mode') != 'ci-node-selector-override' or
+            not isinstance(recorded, dict) or not recorded or any(
+                not isinstance(key, str) or not key or not isinstance(value, str)
+                for key, value in recorded.items())):
+        raise ValueError('invalid Forge bundle CI node selector metadata')
+    if canonical(selector) != canonical(recorded):
+        raise ValueError('Forge bundle CI node selector disagrees with execution configuration')
+    if deployment.get('kind') != 'Deployment':
+        raise ValueError('Forge bundle CI node selector supports Deployment only')
+    spec = deployment.get('spec', {}).get('template', {}).get('spec')
+    if not isinstance(spec, dict) or 'nodeName' in spec:
+        raise ValueError('Forge bundle CI node selector requires a pod template without nodeName')
+    authored = spec.get('nodeSelector', {})
+    if not isinstance(authored, dict) or any(
+            key in authored and authored[key] != value for key, value in recorded.items()):
+        raise ValueError('Forge bundle CI node selector conflicts with authored placement')
+    spec['nodeSelector'] = {**authored, **recorded}
+
+
 def read_bundle(repo, config, revision, artifact):
     """Bind complete source/submission artifacts to the explicitly tested Git tree."""
     selector = config.get('recipe')
@@ -43,7 +74,7 @@ def read_bundle(repo, config, revision, artifact):
             r'manifests/[A-Za-z0-9._-]+/[^/]+\.ya?ml', selection):
         raise ValueError('invalid Forge bundle manifest selection')
     metadata = yaml_data(artifact(SOURCE + '/bundle-metadata.yaml'))
-    if not isinstance(metadata, dict) or type(metadata.get('contract_version')) is not int or metadata['contract_version'] != 1:
+    if not isinstance(metadata, dict) or type(metadata.get('contract_version')) is not int or metadata['contract_version'] not in (1, 2):
         raise ValueError('unsupported Forge bundle contract version')
     if metadata.get('recipe_path') != relative or metadata.get('recipe_revision') != revision:
         raise ValueError('Forge bundle recipe path/revision attribution mismatch')
@@ -102,10 +133,11 @@ def read_bundle(repo, config, revision, artifact):
         object_metadata['namespace'] = namespace
     elif object_metadata['namespace'] != namespace:
         raise ValueError('Forge bundle explicit namespace mismatch')
+    apply_ci_placement(metadata, config, expected[0])
     for name, wanted in (('source', documents), ('submitted', expected)):
         raw = artifact(f'{SOURCE}/{name}-bundle.yaml')
         if hashlib.sha256(raw.encode()).hexdigest() != metadata.get(f'{name}_bundle_sha256'):
             raise ValueError('Forge bundle artifact checksum mismatch')
         if canonical(yaml_data(raw, multiple=True)) != canonical(wanted):
-            raise ValueError('Forge bundle differs from Git source beyond namespace placement')
+            raise ValueError('Forge bundle differs from Git source beyond declared placement')
     return path, recipe, platforms[0], expected[0], metadata

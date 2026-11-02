@@ -38,6 +38,9 @@ def clone_recipe(repo, name):
     destination = original.parent.parent / name
     shutil.copytree(original.parent, destination)
     recipe = yaml.safe_load(original.read_text())
+    # Synthetic identities must not inherit the source recipe's measured runs.
+    recipe.pop('benchmark_runs', None)
+    recipe['maturity'] = 'day-zero'
     recipe['recipe_id'] = name
     path = destination / 'recipe.yaml'
     path.write_text(yaml.safe_dump(recipe))
@@ -79,6 +82,8 @@ def test_quantization_is_explicit_not_inferred_from_checkpoint(repo, quantizatio
     path = gemma_path(repo)
     recipe = yaml.safe_load(path.read_text())
     recipe['serving']['model'] = 'synthetic/checkpoint-FP8'
+    recipe.pop('benchmark_runs', None)
+    recipe['maturity'] = 'day-zero'
     if quantization:
         recipe['quantization'] = quantization
     else:

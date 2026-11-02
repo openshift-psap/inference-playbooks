@@ -12,7 +12,7 @@ from test_forge_evidence import (commit_evidence, distributed_fixture, intake, k
                                  parent_intake, variant_intake)
 from fetch_forge_evidence import execution_values, import_parent
 from forge_admission import admitted_execution, load_admissions
-from forge_bundle_contract import SOURCE, SUPPORTED
+from forge_bundle_contract import SOURCE, SUPPORTED, apply_ci_placement
 from normalize_kpis import normalize
 from validate import validate_benchmark_run
 
@@ -124,6 +124,77 @@ def test_bundle_import_replay_and_receipt(bundle_intake):
     assert admitted_execution(repo, load_admissions(repo), client, 'd' * 32, revision, 34, {})
 
 
+@pytest.mark.parametrize('mutation', [None, 'image', 'selector', 'config'])
+def test_v2_bundle_import_placement_only(bundle_intake, mutation):
+    repo, path, revision, client, _, artifacts, _, selected = bundle_intake
+    if yaml.safe_load(selected.read_text())['kind'] != 'Deployment':
+        pytest.skip('v2 producer supports Deployment only')
+    before = selected.read_bytes()
+    selector = {'kubernetes.io/hostname': 'private-test-node'}
+    key = SOURCE + '/bundle-metadata.yaml'
+    metadata = yaml.safe_load(artifacts[key])
+    metadata.update(contract_version=2, submission_mode='ci-node-selector-override', ci_node_selector=selector)
+    config_key = SOURCE.rsplit('/', 1)[0] + '/config.yaml'
+    config = yaml.safe_load(artifacts[config_key])
+    config['inference_playbooks']['deploy'] = {'node_selector': selector if mutation != 'config' else {'other': 'node'}}
+    artifacts[config_key] = yaml.safe_dump(config)
+    submitted = yaml.safe_load(artifacts[SOURCE + '/submitted-bundle.yaml'])
+    spec = submitted['spec']['template']['spec']
+    spec['nodeSelector'] = selector if mutation != 'selector' else {'other': 'node'}
+    if mutation == 'image':
+        spec['containers'][0]['image'] = 'example.org/other:latest'
+    text = yaml.safe_dump(submitted)
+    artifacts[SOURCE + '/submitted-bundle.yaml'] = text
+    metadata['submitted_bundle_sha256'] = hashlib.sha256(text.encode()).hexdigest()
+    artifacts[key] = yaml.safe_dump(metadata)
+    if mutation:
+        with pytest.raises(ValueError, match='placement|selector'):
+            import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+        assert not (path.parent / 'results').exists()
+    else:
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
+        assert selected.read_bytes() == before
+        for output in (path.parent / 'results').rglob('*'):
+            if output.is_file():
+                assert 'private-test-node' not in output.read_text()
+        for reference in yaml.safe_load(path.read_text())['benchmark_runs']:
+            run_path = path.parent / reference
+            assert validate_benchmark_run(repo, run_path, yaml.safe_load(run_path.read_text()))[0] == []
+        commit_evidence(repo)
+        client.request = client.run = client.kpis = lambda *a, **kw: pytest.fail('receipt contacted MLflow')
+        assert admitted_execution(repo, load_admissions(repo), client, 'd' * 32, revision, 34, {})
+
+
+@pytest.mark.parametrize('failure', ['mode', 'empty', 'value', 'key', 'nodeName', 'conflict', 'lws', 'llmisvc', 'v1', 'bool'])
+def test_ci_placement_rejects_unsupported_transformations(failure):
+    selector = {'zone': 'test'}
+    metadata = {'contract_version': 2, 'submission_mode': 'ci-node-selector-override', 'ci_node_selector': selector}
+    config = {'deploy': {'node_selector': selector}}
+    spec = {}
+    deployment = {'kind': 'Deployment', 'spec': {'template': {'spec': spec}}}
+    if failure == 'mode': metadata['submission_mode'] = 'unknown'
+    elif failure == 'empty': selector.clear()
+    elif failure == 'value': selector['zone'] = 1
+    elif failure == 'key': selector[''] = 'test'
+    elif failure == 'nodeName': spec['nodeName'] = 'test'
+    elif failure == 'conflict': spec['nodeSelector'] = {'zone': 'different'}
+    elif failure == 'lws': deployment['kind'] = 'LeaderWorkerSet'
+    elif failure == 'llmisvc': deployment['kind'] = 'LLMInferenceService'
+    elif failure == 'v1': metadata['contract_version'] = 1
+    elif failure == 'bool': metadata['contract_version'] = True
+    with pytest.raises(ValueError):
+        apply_ci_placement(metadata, config, deployment)
+
+
+def test_ci_placement_preserves_matching_authored_selectors():
+    spec = {'nodeSelector': {'zone': 'test', 'gpu': 'true'}}
+    deployment = {'kind': 'Deployment', 'spec': {'template': {'spec': spec}}}
+    selector = {'zone': 'test'}
+    apply_ci_placement({'contract_version': 2, 'submission_mode': 'ci-node-selector-override',
+                        'ci_node_selector': selector}, {'deploy': {'node_selector': selector}}, deployment)
+    assert spec['nodeSelector'] == {'zone': 'test', 'gpu': 'true'}
+
+
 @pytest.mark.parametrize('failure', ['version', 'recipe', 'revision', 'producer', 'inventory', 'checksum',
                                     'submitted', 'source', 'namespace', 'manifest', 'yaml', 'tag-conflict'])
 def test_bundle_rejects_invalid_attribution_before_writing(bundle_intake, failure):
@@ -131,7 +202,7 @@ def test_bundle_rejects_invalid_attribution_before_writing(bundle_intake, failur
     key = SOURCE + '/bundle-metadata.yaml'
     metadata = yaml.safe_load(artifacts[key])
     if failure == 'version':
-        metadata['contract_version'] = 2
+        metadata['contract_version'] = 999
     elif failure == 'recipe':
         metadata['recipe_id'] = 'different'
     elif failure == 'revision':
