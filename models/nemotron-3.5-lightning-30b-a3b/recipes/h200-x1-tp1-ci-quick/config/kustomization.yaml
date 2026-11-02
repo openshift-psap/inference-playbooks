@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../manifests/vllm-v0.31.0/deployment.yaml
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick
+    patch: |-
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1800
+      - op: remove
+        path: /spec/template/spec/securityContext/runAsUser
+      - op: add
+        path: /spec/template/metadata/annotations
+        value:
+          openshift.io/required-scc: restricted-v2
+      - op: remove
+        path: /spec/template/spec/containers/0/env/0
+      - op: add
+        path: /spec/template/spec/containers/0/resources/requests/ephemeral-storage
+        value: 40Gi
+      - op: add
+        path: /spec/template/spec/containers/0/resources/limits/ephemeral-storage
+        value: 100Gi

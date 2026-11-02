@@ -1,0 +1,13 @@
+schema_version: 2
+model_id: nemotron-3.5-lightning-30b-a3b
+name: NVIDIA Nemotron 3.5 Lightning 30B-A3B
+family: Nemotron 3.5
+parameters: 30B-A3B
+source: huggingface
+huggingface_id: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+model_type: nemotron_h
+architectures:
+  - NemotronHForCausalLM
+quantizations:
+  - name: FP8
+    huggingface_id: RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8

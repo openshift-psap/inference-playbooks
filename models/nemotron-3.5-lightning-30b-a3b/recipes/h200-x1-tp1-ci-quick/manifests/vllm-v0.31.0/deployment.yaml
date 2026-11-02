@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: inference-playbooks
+    app.kubernetes.io/name: nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick
+  name: nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick
+spec:
+  progressDeadlineSeconds: 1800
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick
+  template:
+    metadata:
+      annotations:
+        openshift.io/required-scc: restricted-v2
+      labels:
+        app.kubernetes.io/name: nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick
+    spec:
+      containers:
+      - args:
+        - RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8
+        - --served-model-name=RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8
+        - --revision=bff279eb543e15f7c0e3f922661e66a1b78ac2e0
+        - --max-model-len=16384
+        - --max-num-seqs=16
+        - --gpu-memory-utilization=0.85
+        - --enforce-eager
+        - --mamba-backend=flashinfer
+        command:
+        - /bin/bash
+        - -c
+        - |
+          vllm serve "$@"
+        - --
+        env:
+        - name: HOME
+          value: /tmp
+        - name: HF_HOME
+          value: /home/nobody/.cache/huggingface
+        - name: XDG_CACHE_HOME
+          value: /home/nobody/.cache
+        - name: VLLM_CACHE_ROOT
+          value: /home/nobody/.cache/vllm
+        - name: TRITON_CACHE_DIR
+          value: /home/nobody/.cache/triton
+        image: docker.io/vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 30
+          timeoutSeconds: 10
+        name: vllm
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 10
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: "8"
+            ephemeral-storage: 100Gi
+            memory: 128Gi
+            nvidia.com/gpu: "1"
+          requests:
+            cpu: "8"
+            ephemeral-storage: 40Gi
+            memory: 64Gi
+            nvidia.com/gpu: "1"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 30
+        volumeMounts:
+        - mountPath: /home/nobody/.cache
+          name: hf-cache
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - emptyDir: {}
+        name: hf-cache
+      - emptyDir: {}
+        name: tmp
