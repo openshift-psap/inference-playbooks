@@ -1,0 +1,23 @@
+{
+  "forge_revision": "93b85db135425516eb000de62d2483c62cdacacc",
+  "harness_image": "quay.io/rh-ee-thibrahi/inference-playbooks-guidellm@sha256:c1a66d1131dee8852d87c9383ebc2dddb27d2ec730953b967b82c9976c7a0d22",
+  "inputs": {
+    "hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml": "sha256:d5ea515d8a947aad80e3971c067b1493345848edd53cd8df7b64782d513f4eaf",
+    "models/nemotron-3.5-lightning-30b-a3b/model.yaml": "sha256:6b2589346e64e167672c4f8c8c07a63fb3f15dae80b28701804a1cf819a05897",
+    "models/nemotron-3.5-lightning-30b-a3b/recipes/h200-x1-tp1-ci-quick/config/kustomization.yaml": "sha256:0e68cfc48f0a6bcdd6172c6910a94ed47d75fcd0a2884df768e9254fe0e1d636",
+    "models/nemotron-3.5-lightning-30b-a3b/recipes/h200-x1-tp1-ci-quick/manifests/vllm-v0.31.0/deployment.yaml": "sha256:37226342c80654021b3672bd0649600ef096b05c7c2107ef94c9758f7072df78",
+    "models/nemotron-3.5-lightning-30b-a3b/recipes/h200-x1-tp1-ci-quick/platforms/vllm-v0.31.0.yaml": "sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "models/nemotron-3.5-lightning-30b-a3b/recipes/h200-x1-tp1-ci-quick/recipe.yaml": "sha256:938b2481e75925bfbc0923e9d9417d39ab13565db8ac3f60cb90a39f5f55633c"
+  },
+  "manifest_path": "models/nemotron-3.5-lightning-30b-a3b/recipes/h200-x1-tp1-ci-quick/manifests/vllm-v0.31.0/deployment.yaml",
+  "platform": {
+    "stack": "vllm",
+    "version": "v0.31.0"
+  },
+  "recipe_path": "models/nemotron-3.5-lightning-30b-a3b/recipes/h200-x1-tp1-ci-quick/recipe.yaml",
+  "run_id": "contributor-d8ddfa46e2444135adc30b10f8df96e6",
+  "runner_image": "quay.io/rh-ee-thibrahi/inference-playbooks-runner@sha256:aeb597892d3c173970515db4ebbf82f4bb6aa0a31681ca9ecbb1303eb59b72e5",
+  "schema_version": 1,
+  "tested_revision": "35f36b83990a9bfe8c9c12b67374fbb5633e0460",
+  "workload": "guidellm-smoke"
+}

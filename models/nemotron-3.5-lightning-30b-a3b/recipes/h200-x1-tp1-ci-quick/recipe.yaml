@@ -1,0 +1,71 @@
+schema_version: 4
+recipe_id: nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick
+model_id: nemotron-3.5-lightning-30b-a3b
+platforms:
+  - stack: vllm
+    version: v0.31.0
+    overrides: platforms/vllm-v0.31.0.yaml
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+workload_profile: guidellm-8k1k
+deployment_mode: tp1
+optimization_intent: smoke-test plumbing
+maturity: day-zero
+quantization: FP8
+serving:
+  image: docker.io/vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3
+  image_usage:
+    kind: default
+    variant: cuda
+    note: Upstream vLLM v0.31.0 CUDA image, resolved to an immutable digest.
+  engine:
+    name: vllm
+    version: 0.31.0
+    image: docker.io/vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3
+    source: https://github.com/vllm-project/vllm/releases/tag/v0.31.0
+  config_overrides: true
+  model: RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8
+  parallelism:
+    mode: tp
+    tp: 1
+  resources:
+    requests:
+      cpu: '8'
+      memory: 64Gi
+    limits:
+      cpu: '8'
+      memory: 128Gi
+  port: 8000
+  env:
+    - {name: HOME, value: /tmp}
+    - {name: HF_HOME, value: /home/nobody/.cache/huggingface}
+    - {name: XDG_CACHE_HOME, value: /home/nobody/.cache}
+    - {name: VLLM_CACHE_ROOT, value: /home/nobody/.cache/vllm}
+    - {name: TRITON_CACHE_DIR, value: /home/nobody/.cache/triton}
+  args:
+    - flag: --revision
+      value: bff279eb543e15f7c0e3f922661e66a1b78ac2e0
+      required: true
+      why: Pin the tested quantized checkpoint to its exact Hugging Face revision.
+    - flag: --max-model-len
+      value: '16384'
+      required: true
+      why: Bound this initial configuration while allowing the nominal 8k/1k profile.
+    - flag: --max-num-seqs
+      value: '16'
+      required: true
+      why: Bound concurrency for the initial single-GPU smoke configuration.
+    - flag: --gpu-memory-utilization
+      value: '0.85'
+      required: true
+      why: Leave GPU-memory headroom for this unoptimized smoke configuration.
+    - flag: --enforce-eager
+      required: true
+      why: Avoid CUDA-graph capture during the initial workflow smoke test.
+    - flag: --mamba-backend
+      value: flashinfer
+      required: true
+      why: Follow the checkpoint model card's recommended Mamba backend.
+deployment:
+  scope: single-node
+benchmark_runs:
+- results/contributor-d8ddfa46e2444135adc30b10f8df96e6-guidellm/run.yaml

@@ -1,0 +1,45 @@
+# Build with Podman --squash-all, as documented in ../../guides/README.md.
+# Do not retain the superseded upstream schema example in inherited layers.
+# The base digest pins all unchanged dependencies.
+FROM ghcr.io/vllm-project/guidellm@sha256:15372f9f3f407366495470706b7a07f64addcce5d134a49cab64149b44ab1233
+
+LABEL org.opencontainers.image.source="https://github.com/openshift-psap/inference-playbooks" \
+      org.opencontainers.image.version="v0.7.4-transformers5.15.0" \
+      org.opencontainers.image.description="GuideLLM 0.7.4 with pinned Nemotron 3.5 tokenizer compatibility"
+
+USER 0:0
+COPY requirements.lock /tmp/nemotron35-guidellm-requirements.lock
+RUN python -m pip install --no-cache-dir --no-deps --only-binary=:all: --require-hashes \
+      -r /tmp/nemotron35-guidellm-requirements.lock && \
+    python -m pip check && \
+    python -c 'import importlib.metadata as m; assert m.version("guidellm") == "0.7.4"; assert m.version("transformers") == "5.15.0"; assert m.version("safetensors") == "0.8.0"'
+
+# Replace only upstream's credential-shaped schema example, never auth defaults.
+# The official v0.7.4 source was verified byte-for-byte before this adjustment.
+RUN python - <<'PY'
+import ast
+import hashlib
+from pathlib import Path
+import guidellm
+path = Path(guidellm.__file__).parent / "backends/openai/http.py"
+source = path.read_text()
+matches = []
+for node in ast.walk(ast.parse(source)):
+    if not isinstance(node, ast.AnnAssign) or not isinstance(node.target, ast.Name) or node.target.id != "api_key":
+        continue
+    if not isinstance(node.value, ast.Call) or not isinstance(node.value.func, ast.Name) or node.value.func.id != "Field":
+        continue
+    for keyword in node.value.keywords:
+        if keyword.arg != "examples" or not isinstance(keyword.value, ast.List):
+            continue
+        for value in keyword.value.elts:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str) and hashlib.sha256(value.value.encode()).hexdigest() == "64ac13b77c5cf5fefef0c094525e609b143d3443c6dda69d6e502bf83af9e35f":
+                matches.append(ast.get_source_segment(source, value))
+assert len(matches) == 1 and source.count(matches[0]) == 1, "unexpected upstream schema example"
+path.write_text(source.replace(matches[0], repr("example-api-key")))
+for bytecode in path.parent.glob("__pycache__/http.*.pyc"):
+    bytecode.unlink()
+PY
+
+# Preserve the upstream runtime user, entrypoint, and command.
+USER 1001:0

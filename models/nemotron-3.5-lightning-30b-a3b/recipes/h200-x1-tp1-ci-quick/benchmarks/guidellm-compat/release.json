@@ -1,0 +1,16 @@
+{
+  "image": "quay.io/rh-ee-thibrahi/inference-playbooks-guidellm",
+  "tag": "v0.7.4-transformers5.15.0",
+  "digest": "sha256:c1a66d1131dee8852d87c9383ebc2dddb27d2ec730953b967b82c9976c7a0d22",
+  "source_revision": "4999fb9e313be3b11f57faec36d1fd7d863cb6be",
+  "scanned_image_id": "sha256:8f7e70aed1e44e2699e4de6f18d1bc28a2de7f6f141604c02599c2780d4712c2",
+  "secret_scanner": "docker.io/aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c",
+  "secret_scan": "passed",
+  "anonymous_pull_verified": true,
+  "tokenizer_probe": {
+    "model": "RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8",
+    "revision": "bff279eb543e15f7c0e3f922661e66a1b78ac2e0",
+    "tokenizer_class": "TokenizersBackend",
+    "vocab_size": 131072
+  }
+}
