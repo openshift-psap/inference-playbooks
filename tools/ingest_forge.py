@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from fetch_forge_evidence import Client, import_parent
+from fetch_forge_evidence import Client, import_parent, verify_pr_revision
 from forge_admission import admitted_execution, load_admissions, origin
 
 
@@ -103,20 +103,20 @@ def main():
         run_id, comment_id, workspace = selected
         client = Client(tracking_uri, workspace, os.environ['MLFLOW_USERNAME'],
                         os.environ['MLFLOW_PASSWORD'], args.insecure)
-        # Same-PR evidence commits advance the final head beyond the tested SHA.
-        # A committed admission retains the original execution identity; validate
-        # its ancestry and current inputs instead of re-importing it after merge.
-        admission = admissions.get((origin(client.uri), workspace, run_id))
-        if admission:
-            revision = admission['receipt']['tested_revision']
-            if subprocess.run(['git', '-C', str(repo), 'merge-base', '--is-ancestor',
-                               revision, pr['head']['sha']], check=False).returncode:
-                raise ValueError('indexed tested revision is not in the recipe PR history')
+        # Preserve metadata-only receipt hits even when a later merge of main
+        # advanced the PR head after testing. Never relabel existing evidence.
+        key = origin(client.uri), workspace, run_id
+        known = getattr(admissions, 'known_sources', {}).get(key)
+        if known is not None:
+            if known[0] != number:
+                raise ValueError('indexed Forge execution PR/revision attribution mismatch')
+            revision = verify_pr_revision(repo, known[1], pr['head']['sha'])
         if admitted_execution(repo, admissions, client, run_id, revision, number, checked_inputs):
             print(f'PR {number}: selected execution already indexed; imported=0 indexed=1')
             continue
         import_parent(client, repo, run_id, revision, number, comment_id,
-                      require_parent=True, admissions=admissions)
+                      require_parent=True, admissions=admissions,
+                      pr_head_revision=pr['head']['sha'] if known is None else None)
         print(f'PR {number}: selected execution imported; imported=1 indexed=0')
 
 

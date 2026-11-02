@@ -10,7 +10,7 @@ import yaml
 
 from test_forge_evidence import (commit_evidence, distributed_fixture, intake, kpis,
                                  parent_intake, variant_intake)
-from fetch_forge_evidence import import_parent
+from fetch_forge_evidence import execution_values, import_parent
 from forge_admission import admitted_execution, load_admissions
 from forge_bundle_contract import SOURCE, SUPPORTED
 from normalize_kpis import normalize
@@ -165,7 +165,8 @@ def test_bundle_rejects_invalid_attribution_before_writing(bundle_intake, failur
     assert not (path.parent / 'results').exists()
 
 
-def test_import_after_main_merge_preserves_original_tested_sha(bundle_intake):
+@pytest.mark.parametrize('postmerge_selection', [False, True])
+def test_import_after_main_merge_preserves_original_tested_sha(bundle_intake, postmerge_selection):
     repo, path, revision, client, _, _, _, selected = bundle_intake
     # Model PR19: benchmark A; land importer changes on main; merge main into PR.
     git(repo, 'branch', 'tooling-main')
@@ -180,13 +181,31 @@ def test_import_after_main_merge_preserves_original_tested_sha(bundle_intake):
         'merge', '--no-ff', 'tooling-main', '-m', 'Merge importer changes')
     assert git(repo, 'rev-parse', 'HEAD') != revision
     git(repo, 'merge-base', '--is-ancestor', revision, 'HEAD')
-    import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
+    head = git(repo, 'rev-parse', 'HEAD')
+    import_parent(client, repo, 'd' * 32, head if postmerge_selection else revision, 34, 123,
+                  require_parent=True, **({'pr_head_revision': head} if postmerge_selection else {}))
     for reference in yaml.safe_load(path.read_text())['benchmark_runs']:
         assert yaml.safe_load((path.parent / reference).read_text())['forge']['tested_revision'] == revision
     before = {p: p.read_bytes() for p in (path.parent / 'results').rglob('*') if p.is_file()}
     commit_evidence(repo)
     import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
     assert before == {p: p.read_bytes() for p in (path.parent / 'results').rglob('*') if p.is_file()}
+
+
+def test_postmerge_complete_tags_cannot_bypass_bundle_validation(bundle_intake):
+    repo, path, revision, client, parent, artifacts, _, _ = bundle_intake
+    values = execution_values(client, 'd' * 32, repo, revision, 34)
+    parent['data']['tags'] = [{'key': key, 'value': value} for key, value in values.items()]
+    (repo / 'tooling-update.txt').write_text('Unrelated tooling update\n')
+    commit_evidence(repo)
+    head = git(repo, 'rev-parse', 'HEAD')
+    key = SOURCE + '/bundle-metadata.yaml'
+    metadata = yaml.safe_load(artifacts[key])
+    metadata['contract_version'] = 999
+    artifacts[key] = yaml.safe_dump(metadata)
+    with pytest.raises(ValueError, match='unsupported Forge bundle contract'):
+        import_parent(client, repo, 'd' * 32, head, 34, require_parent=True, pr_head_revision=head)
+    assert not (path.parent / 'results').exists()
 
 
 @pytest.mark.parametrize('change', ['add', 'remove', 'model', 'profile', 'recipe'])
