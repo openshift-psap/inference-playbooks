@@ -127,6 +127,7 @@ def test_platform_versions_and_colliding_filter_dimensions(repo):
 
 
 def test_profile_identity_is_not_erased_by_accelerator_group(repo):
+    original_id = yaml.safe_load(gemma_path(repo).read_text())['recipe_id']
     path, recipe = clone_recipe(repo, 'synthetic-other-profile')
     profile = yaml.safe_load((repo / recipe['hardware_profile']).read_text())
     profile['profile_id'] = 'synthetic-profile'
@@ -135,7 +136,7 @@ def test_profile_identity_is_not_erased_by_accelerator_group(repo):
     recipe['hardware_profile'] = 'hardware-profiles/synthetic-profile.yaml'
     path.write_text(yaml.safe_dump(recipe))
     render_recipe(repo, path)
-    entries = [entry for entry in catalog(repo)['entries'] if entry['model_id'] == 'gemma-4']
+    entries = [entry for entry in catalog(repo)['entries'] if entry['recipe_id'] in (original_id, recipe['recipe_id'])]
     assert len({entry['hardware']['accelerator_key'] for entry in entries}) == 1
     assert len({entry['hardware']['path'] for entry in entries}) == 2
 

@@ -1,0 +1,2076 @@
+{
+  "schema_version": "2",
+  "tests": [
+    {
+      "run_id": "001__inference_playbooks_test_dir/002__benchmark_IP-8k-1k",
+      "labels": {
+        "phase": "benchmark",
+        "model_name": "moonshotai/Kimi-K3",
+        "product_version": "v0.29.0",
+        "deployment_profile": "pp2-tp8",
+        "guidellm_loadshape": "IP-8k/1k",
+        "gpu_type": "NVIDIA-H200",
+        "platform": "OCP",
+        "test_harness": "forge-inference-playbooks",
+        "benchmark_key": "IP-8k/1k",
+        "benchmark_tool": "guidellm",
+        "served_model": "/models/Kimi-K3",
+        "cluster": "janus",
+        "guidellm_version": "0.7.4",
+        "prompt_toks": "8000",
+        "output_toks": "1000",
+        "turns": "1",
+        "prefix_tokens": "",
+        "prefix_count": "",
+        "request_type": "/v1/chat/completions",
+        "guidellm_start_time_ms": "1793247756868",
+        "guidellm_end_time_ms": "1793249799317",
+        "runtime_args": "",
+        "mlflow_run_id": "",
+        "mlflow_experiment_id": ""
+      },
+      "metadata": {
+        "timestamp": "2026-10-29T09:09:22Z",
+        "run_id": "001__inference_playbooks_test_dir/002__benchmark_IP-8k-1k"
+      },
+      "kpis": [
+        {
+          "kpi_id": "playbooks_output_tok_per_sec",
+          "values": [
+            [
+              1.0,
+              55.65794403892944
+            ],
+            [
+              4.0,
+              147.58862068965536
+            ],
+            [
+              16.0,
+              223.3333333333337
+            ],
+            [
+              128.0,
+              429.988862876247
+            ],
+            [
+              64.0,
+              429.2269642857243
+            ],
+            [
+              32.0,
+              535.4300000000001
+            ]
+          ],
+          "name": "playbooks_output_tok_per_sec",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: output_tok_per_sec",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens/s",
+          "y_help": "Performance metric: output_tok_per_sec"
+        },
+        {
+          "kpi_id": "playbooks_total_tok_per_sec",
+          "values": [
+            [
+              1.0,
+              513.9779440389294
+            ],
+            [
+              4.0,
+              1360.7886206896571
+            ],
+            [
+              16.0,
+              2029.6533333333302
+            ],
+            [
+              128.0,
+              3907.8288628762302
+            ],
+            [
+              64.0,
+              3907.066964285812
+            ],
+            [
+              32.0,
+              4875.99
+            ]
+          ],
+          "name": "playbooks_total_tok_per_sec",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: total_tok_per_sec",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens/s",
+          "y_help": "Performance metric: total_tok_per_sec"
+        },
+        {
+          "kpi_id": "playbooks_measured_concurrency",
+          "values": [
+            [
+              1.0,
+              0.9999210254351298
+            ],
+            [
+              4.0,
+              3.9654748018582664
+            ],
+            [
+              16.0,
+              13.575669592221576
+            ],
+            [
+              128.0,
+              100.68656901121139
+            ],
+            [
+              64.0,
+              57.00443965832392
+            ],
+            [
+              32.0,
+              29.708411251703893
+            ]
+          ],
+          "name": "playbooks_measured_concurrency",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: measured_concurrency",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "count",
+          "y_help": "Performance metric: measured_concurrency"
+        },
+        {
+          "kpi_id": "playbooks_measured_rps",
+          "values": [
+            [
+              1.0,
+              0.05333333333333333
+            ],
+            [
+              4.0,
+              0.14666666666666664
+            ],
+            [
+              16.0,
+              0.22
+            ],
+            [
+              128.0,
+              0.4266666666666667
+            ],
+            [
+              64.0,
+              0.42666666666666675
+            ],
+            [
+              32.0,
+              0.5333333333333334
+            ]
+          ],
+          "name": "playbooks_measured_rps",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: measured_rps",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "req/s",
+          "y_help": "Performance metric: measured_rps"
+        },
+        {
+          "kpi_id": "playbooks_intended_concurrency",
+          "values": [
+            [
+              1.0,
+              1.0
+            ],
+            [
+              4.0,
+              4.0
+            ],
+            [
+              16.0,
+              16.0
+            ],
+            [
+              128.0,
+              128.0
+            ],
+            [
+              64.0,
+              64.0
+            ],
+            [
+              32.0,
+              32.0
+            ]
+          ],
+          "name": "playbooks_intended_concurrency",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: intended_concurrency",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "count",
+          "y_help": "Performance metric: intended_concurrency"
+        },
+        {
+          "kpi_id": "playbooks_completed_requests",
+          "values": [
+            [
+              1.0,
+              18.0
+            ],
+            [
+              4.0,
+              45.0
+            ],
+            [
+              16.0,
+              67.0
+            ],
+            [
+              128.0,
+              129.0
+            ],
+            [
+              64.0,
+              129.0
+            ],
+            [
+              32.0,
+              161.0
+            ]
+          ],
+          "name": "playbooks_completed_requests",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: completed_requests",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "count",
+          "y_help": "Performance metric: completed_requests"
+        },
+        {
+          "kpi_id": "playbooks_failed_requests",
+          "values": [
+            [
+              1.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0
+            ],
+            [
+              16.0,
+              0.0
+            ],
+            [
+              128.0,
+              0.0
+            ],
+            [
+              64.0,
+              0.0
+            ],
+            [
+              32.0,
+              0.0
+            ]
+          ],
+          "name": "playbooks_failed_requests",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: failed_requests",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "count",
+          "y_help": "Performance metric: failed_requests"
+        },
+        {
+          "kpi_id": "playbooks_ttft_median",
+          "values": [
+            [
+              1.0,
+              0.9432282447814941
+            ],
+            [
+              4.0,
+              1.7556641101837158
+            ],
+            [
+              16.0,
+              2.378359317779541
+            ],
+            [
+              128.0,
+              41.71647787094116
+            ],
+            [
+              64.0,
+              2.9544286727905273
+            ],
+            [
+              32.0,
+              2.1727495193481445
+            ]
+          ],
+          "name": "playbooks_ttft_median",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_median",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_median"
+        },
+        {
+          "kpi_id": "playbooks_ttft_p95",
+          "values": [
+            [
+              1.0,
+              1.9357821941375732
+            ],
+            [
+              4.0,
+              2.5318667888641357
+            ],
+            [
+              16.0,
+              9.74275827407837
+            ],
+            [
+              128.0,
+              78.60094976425171
+            ],
+            [
+              64.0,
+              37.779388189315796
+            ],
+            [
+              32.0,
+              16.324857234954834
+            ]
+          ],
+          "name": "playbooks_ttft_p95",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_p95",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_p95"
+        },
+        {
+          "kpi_id": "playbooks_ttft_p99",
+          "values": [
+            [
+              1.0,
+              1.9357821941375732
+            ],
+            [
+              4.0,
+              3.913933277130127
+            ],
+            [
+              16.0,
+              11.454397678375244
+            ],
+            [
+              128.0,
+              81.81621980667114
+            ],
+            [
+              64.0,
+              40.795109272003174
+            ],
+            [
+              32.0,
+              20.649447917938232
+            ]
+          ],
+          "name": "playbooks_ttft_p99",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_p99"
+        },
+        {
+          "kpi_id": "playbooks_ttft_p1",
+          "values": [
+            [
+              1.0,
+              0.9411797523498535
+            ],
+            [
+              4.0,
+              0.9566302299499512
+            ],
+            [
+              16.0,
+              0.9657807350158691
+            ],
+            [
+              128.0,
+              1.3417472839355469
+            ],
+            [
+              64.0,
+              1.1065309047698975
+            ],
+            [
+              32.0,
+              0.9978923797607422
+            ]
+          ],
+          "name": "playbooks_ttft_p1",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_p1",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_p1"
+        },
+        {
+          "kpi_id": "playbooks_ttft_p999",
+          "values": [
+            [
+              1.0,
+              1.9357821941375732
+            ],
+            [
+              4.0,
+              3.913933277130127
+            ],
+            [
+              16.0,
+              11.454397678375244
+            ],
+            [
+              128.0,
+              82.20652890205383
+            ],
+            [
+              64.0,
+              41.219008684158325
+            ],
+            [
+              32.0,
+              20.776973724365234
+            ]
+          ],
+          "name": "playbooks_ttft_p999",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_p999",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_p999"
+        },
+        {
+          "kpi_id": "playbooks_ttft_mean",
+          "values": [
+            [
+              1.0,
+              1.0022718906402588
+            ],
+            [
+              4.0,
+              1.7126140011681454
+            ],
+            [
+              16.0,
+              3.322468892851872
+            ],
+            [
+              128.0,
+              41.76285449109337
+            ],
+            [
+              64.0,
+              12.057253793228504
+            ],
+            [
+              32.0,
+              4.047861906312267
+            ]
+          ],
+          "name": "playbooks_ttft_mean",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_mean",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_mean"
+        },
+        {
+          "kpi_id": "playbooks_tpot_median",
+          "values": [
+            [
+              1.0,
+              0.007920915126800538
+            ],
+            [
+              4.0,
+              0.012055355310440063
+            ],
+            [
+              16.0,
+              0.026696067810058594
+            ],
+            [
+              128.0,
+              0.11998934125900268
+            ],
+            [
+              64.0,
+              0.0655971429347992
+            ],
+            [
+              32.0,
+              0.05555726027488708
+            ]
+          ],
+          "name": "playbooks_tpot_median",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_median",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_median"
+        },
+        {
+          "kpi_id": "playbooks_tpot_p95",
+          "values": [
+            [
+              1.0,
+              0.018412908554077147
+            ],
+            [
+              4.0,
+              0.018042592287063598
+            ],
+            [
+              16.0,
+              0.05810498595237732
+            ],
+            [
+              128.0,
+              0.22660957884788513
+            ],
+            [
+              64.0,
+              0.12902785325050353
+            ],
+            [
+              32.0,
+              0.06966255474090575
+            ]
+          ],
+          "name": "playbooks_tpot_p95",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_p95",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_p95"
+        },
+        {
+          "kpi_id": "playbooks_tpot_p99",
+          "values": [
+            [
+              1.0,
+              0.018412908554077147
+            ],
+            [
+              4.0,
+              0.02885765600204468
+            ],
+            [
+              16.0,
+              0.06882001829147338
+            ],
+            [
+              128.0,
+              0.25766366386413575
+            ],
+            [
+              64.0,
+              0.1509354021549225
+            ],
+            [
+              32.0,
+              0.07381975698471069
+            ]
+          ],
+          "name": "playbooks_tpot_p99",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_p99"
+        },
+        {
+          "kpi_id": "playbooks_tpot_p1",
+          "values": [
+            [
+              1.0,
+              0.0057887032032012935
+            ],
+            [
+              4.0,
+              0.00589583158493042
+            ],
+            [
+              16.0,
+              0.014370423078536988
+            ],
+            [
+              128.0,
+              0.10050404810905457
+            ],
+            [
+              64.0,
+              0.03148724913597107
+            ],
+            [
+              32.0,
+              0.049125466346740726
+            ]
+          ],
+          "name": "playbooks_tpot_p1",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_p1",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_p1"
+        },
+        {
+          "kpi_id": "playbooks_tpot_p999",
+          "values": [
+            [
+              1.0,
+              0.018412908554077147
+            ],
+            [
+              4.0,
+              0.02885765600204468
+            ],
+            [
+              16.0,
+              0.06882001829147338
+            ],
+            [
+              128.0,
+              0.26987097215652467
+            ],
+            [
+              64.0,
+              0.16163836526870728
+            ],
+            [
+              32.0,
+              0.07432530093193054
+            ]
+          ],
+          "name": "playbooks_tpot_p999",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_p999",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_p999"
+        },
+        {
+          "kpi_id": "playbooks_itl_median",
+          "values": [
+            [
+              1.0,
+              0.006985151970589363
+            ],
+            [
+              4.0,
+              0.01024338385244986
+            ],
+            [
+              16.0,
+              0.023110111435135087
+            ],
+            [
+              128.0,
+              0.08546798460715048
+            ],
+            [
+              64.0,
+              0.051982882979873184
+            ],
+            [
+              32.0,
+              0.053417798873779176
+            ]
+          ],
+          "name": "playbooks_itl_median",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_median",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_median"
+        },
+        {
+          "kpi_id": "playbooks_itl_p95",
+          "values": [
+            [
+              1.0,
+              0.01748847126125454
+            ],
+            [
+              4.0,
+              0.01630323140828817
+            ],
+            [
+              16.0,
+              0.05590205388264852
+            ],
+            [
+              128.0,
+              0.1920434104071723
+            ],
+            [
+              64.0,
+              0.12127410398947226
+            ],
+            [
+              32.0,
+              0.055456229277678556
+            ]
+          ],
+          "name": "playbooks_itl_p95",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_p95",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_p95"
+        },
+        {
+          "kpi_id": "playbooks_itl_p99",
+          "values": [
+            [
+              1.0,
+              0.01748847126125454
+            ],
+            [
+              4.0,
+              0.0269639773650451
+            ],
+            [
+              16.0,
+              0.0585129814701634
+            ],
+            [
+              128.0,
+              0.1939561319303465
+            ],
+            [
+              64.0,
+              0.12146726790610494
+            ],
+            [
+              32.0,
+              0.05606506870792912
+            ]
+          ],
+          "name": "playbooks_itl_p99",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_p99"
+        },
+        {
+          "kpi_id": "playbooks_itl_p1",
+          "values": [
+            [
+              1.0,
+              0.004849994504773939
+            ],
+            [
+              4.0,
+              0.004169058155369115
+            ],
+            [
+              16.0,
+              0.01147088107165393
+            ],
+            [
+              128.0,
+              0.03988502977846621
+            ],
+            [
+              64.0,
+              0.0253681804802086
+            ],
+            [
+              32.0,
+              0.04704739691855552
+            ]
+          ],
+          "name": "playbooks_itl_p1",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_p1",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_p1"
+        },
+        {
+          "kpi_id": "playbooks_itl_p999",
+          "values": [
+            [
+              1.0,
+              0.01748847126125454
+            ],
+            [
+              4.0,
+              0.0269639773650451
+            ],
+            [
+              16.0,
+              0.0585129814701634
+            ],
+            [
+              128.0,
+              0.19401815512755494
+            ],
+            [
+              64.0,
+              0.12147755737419243
+            ],
+            [
+              32.0,
+              0.05685956628472955
+            ]
+          ],
+          "name": "playbooks_itl_p999",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_p999",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_p999"
+        },
+        {
+          "kpi_id": "playbooks_itl_mean",
+          "values": [
+            [
+              1.0,
+              0.007595217818261484
+            ],
+            [
+              4.0,
+              0.011003747515147525
+            ],
+            [
+              16.0,
+              0.025684056561949213
+            ],
+            [
+              128.0,
+              0.0885986272445712
+            ],
+            [
+              64.0,
+              0.05620878501345834
+            ],
+            [
+              32.0,
+              0.05147250676585118
+            ]
+          ],
+          "name": "playbooks_itl_mean",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_mean",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_mean"
+        },
+        {
+          "kpi_id": "playbooks_request_latency_median",
+          "values": [
+            [
+              1.0,
+              18.413387298583984
+            ],
+            [
+              4.0,
+              28.025087118148804
+            ],
+            [
+              16.0,
+              60.868003606796265
+            ],
+            [
+              128.0,
+              235.048255443573
+            ],
+            [
+              64.0,
+              123.85642123222351
+            ],
+            [
+              32.0,
+              55.55757546424866
+            ]
+          ],
+          "name": "playbooks_request_latency_median",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: request_latency_median",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: request_latency_median"
+        },
+        {
+          "kpi_id": "playbooks_request_latency_min",
+          "values": [
+            [
+              1.0,
+              18.406680583953857
+            ],
+            [
+              4.0,
+              23.89627766609192
+            ],
+            [
+              16.0,
+              57.97670888900757
+            ],
+            [
+              128.0,
+              192.9963984489441
+            ],
+            [
+              64.0,
+              122.5608434677124
+            ],
+            [
+              32.0,
+              49.11940264701843
+            ]
+          ],
+          "name": "playbooks_request_latency_min",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: request_latency_min",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: request_latency_min"
+        },
+        {
+          "kpi_id": "playbooks_request_latency_max",
+          "values": [
+            [
+              1.0,
+              19.407397270202637
+            ],
+            [
+              4.0,
+              30.014827489852905
+            ],
+            [
+              16.0,
+              70.05274486541748
+            ],
+            [
+              128.0,
+              276.27049922943115
+            ],
+            [
+              64.0,
+              162.9023835659027
+            ],
+            [
+              32.0,
+              74.3256311416626
+            ]
+          ],
+          "name": "playbooks_request_latency_max",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: request_latency_max",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: request_latency_max"
+        },
+        {
+          "kpi_id": "playbooks_prompt_token_count_mean",
+          "values": [
+            [
+              1.0,
+              8088.0
+            ],
+            [
+              4.0,
+              8088.0
+            ],
+            [
+              16.0,
+              8088.0
+            ],
+            [
+              128.0,
+              8088.0
+            ],
+            [
+              64.0,
+              8088.0
+            ],
+            [
+              32.0,
+              8088.0
+            ]
+          ],
+          "name": "playbooks_prompt_token_count_mean",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: prompt_token_count_mean",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens",
+          "y_help": "Performance metric: prompt_token_count_mean"
+        },
+        {
+          "kpi_id": "playbooks_prompt_token_count_p99",
+          "values": [
+            [
+              1.0,
+              8088.0
+            ],
+            [
+              4.0,
+              8088.0
+            ],
+            [
+              16.0,
+              8088.0
+            ],
+            [
+              128.0,
+              8088.0
+            ],
+            [
+              64.0,
+              8088.0
+            ],
+            [
+              32.0,
+              8088.0
+            ]
+          ],
+          "name": "playbooks_prompt_token_count_p99",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: prompt_token_count_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens",
+          "y_help": "Performance metric: prompt_token_count_p99"
+        },
+        {
+          "kpi_id": "playbooks_output_token_count_mean",
+          "values": [
+            [
+              1.0,
+              1000.0
+            ],
+            [
+              4.0,
+              1000.0
+            ],
+            [
+              16.0,
+              1000.0
+            ],
+            [
+              128.0,
+              1000.0
+            ],
+            [
+              64.0,
+              1000.0
+            ],
+            [
+              32.0,
+              1000.0
+            ]
+          ],
+          "name": "playbooks_output_token_count_mean",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: output_token_count_mean",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens",
+          "y_help": "Performance metric: output_token_count_mean"
+        },
+        {
+          "kpi_id": "playbooks_output_token_count_p99",
+          "values": [
+            [
+              1.0,
+              1000.0
+            ],
+            [
+              4.0,
+              1000.0
+            ],
+            [
+              16.0,
+              1000.0
+            ],
+            [
+              128.0,
+              1000.0
+            ],
+            [
+              64.0,
+              1000.0
+            ],
+            [
+              32.0,
+              1000.0
+            ]
+          ],
+          "name": "playbooks_output_token_count_p99",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: output_token_count_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens",
+          "y_help": "Performance metric: output_token_count_p99"
+        }
+      ]
+    },
+    {
+      "run_id": "001__inference_playbooks_test_dir/003__benchmark_aiperf-agentx-128k_concurrency-4",
+      "labels": {
+        "phase": "benchmark",
+        "benchmark_tool": "aiperf",
+        "concurrency": "4"
+      },
+      "metadata": {
+        "timestamp": "2026-10-29T09:09:22.986460+00:00",
+        "run_id": "001__inference_playbooks_test_dir/003__benchmark_aiperf-agentx-128k_concurrency-4"
+      },
+      "kpis": [
+        {
+          "kpi_id": "aiperf_request_count_avg",
+          "value": 191.0,
+          "name": "AI Perf Request count avg",
+          "unit": "requests",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_throughput_avg",
+          "value": 0.10437151334236089,
+          "name": "AI Perf Request throughput avg",
+          "unit": "requests/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_output_token_throughput_avg",
+          "value": 56.38520735199742,
+          "name": "AI Perf Output token throughput avg",
+          "unit": "tokens/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_avg",
+          "value": 813.2490342722514,
+          "name": "AI Perf Time to first token avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p50",
+          "value": 558.229443,
+          "name": "AI Perf Time to first token p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p90",
+          "value": 1249.160372,
+          "name": "AI Perf Time to first token p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p95",
+          "value": 2167.0925905,
+          "name": "AI Perf Time to first token p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p99",
+          "value": 5568.523205699997,
+          "name": "AI Perf Time to first token p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_avg",
+          "value": 19.312688130202176,
+          "name": "AI Perf Inter token latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p50",
+          "value": 18.09770382,
+          "name": "AI Perf Inter token latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p90",
+          "value": 21.46683911542497,
+          "name": "AI Perf Inter token latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p95",
+          "value": 22.528117839207045,
+          "name": "AI Perf Inter token latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p99",
+          "value": 29.874921370703877,
+          "name": "AI Perf Inter token latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_avg",
+          "value": 9860.096164293192,
+          "name": "AI Perf Request latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p50",
+          "value": 6418.442161999999,
+          "name": "AI Perf Request latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p90",
+          "value": 23123.530106,
+          "name": "AI Perf Request latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p95",
+          "value": 32052.060241,
+          "name": "AI Perf Request latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p99",
+          "value": 48364.67877299992,
+          "name": "AI Perf Request latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        }
+      ]
+    },
+    {
+      "run_id": "001__inference_playbooks_test_dir/004__benchmark_aiperf-agentx-128k_concurrency-8",
+      "labels": {
+        "phase": "benchmark",
+        "benchmark_tool": "aiperf",
+        "concurrency": "8"
+      },
+      "metadata": {
+        "timestamp": "2026-10-29T09:09:22.986460+00:00",
+        "run_id": "001__inference_playbooks_test_dir/004__benchmark_aiperf-agentx-128k_concurrency-8"
+      },
+      "kpis": [
+        {
+          "kpi_id": "aiperf_request_count_avg",
+          "value": 238.0,
+          "name": "AI Perf Request count avg",
+          "unit": "requests",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_throughput_avg",
+          "value": 0.13005458867057335,
+          "name": "AI Perf Request throughput avg",
+          "unit": "requests/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_output_token_throughput_avg",
+          "value": 82.93220463940435,
+          "name": "AI Perf Output token throughput avg",
+          "unit": "tokens/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_avg",
+          "value": 957.3105776806723,
+          "name": "AI Perf Time to first token avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p50",
+          "value": 573.619818,
+          "name": "AI Perf Time to first token p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p90",
+          "value": 2544.1279757,
+          "name": "AI Perf Time to first token p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p95",
+          "value": 3169.062029299997,
+          "name": "AI Perf Time to first token p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p99",
+          "value": 4618.09415395,
+          "name": "AI Perf Time to first token p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_avg",
+          "value": 24.412542479560354,
+          "name": "AI Perf Inter token latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p50",
+          "value": 21.29968208220007,
+          "name": "AI Perf Inter token latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p90",
+          "value": 38.30166506768154,
+          "name": "AI Perf Inter token latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p95",
+          "value": 44.30934199764957,
+          "name": "AI Perf Inter token latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p99",
+          "value": 53.94564133900053,
+          "name": "AI Perf Inter token latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_avg",
+          "value": 13646.768764214285,
+          "name": "AI Perf Request latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p50",
+          "value": 8244.572559,
+          "name": "AI Perf Request latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p90",
+          "value": 30842.060139300018,
+          "name": "AI Perf Request latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p95",
+          "value": 46556.59400339996,
+          "name": "AI Perf Request latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p99",
+          "value": 66754.83210385998,
+          "name": "AI Perf Request latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        }
+      ]
+    },
+    {
+      "run_id": "001__inference_playbooks_test_dir/005__benchmark_aiperf-agentx-128k_concurrency-16",
+      "labels": {
+        "phase": "benchmark",
+        "benchmark_tool": "aiperf",
+        "concurrency": "16"
+      },
+      "metadata": {
+        "timestamp": "2026-10-29T09:09:22.986460+00:00",
+        "run_id": "001__inference_playbooks_test_dir/005__benchmark_aiperf-agentx-128k_concurrency-16"
+      },
+      "kpis": [
+        {
+          "kpi_id": "aiperf_request_count_avg",
+          "value": 283.0,
+          "name": "AI Perf Request count avg",
+          "unit": "requests",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_throughput_avg",
+          "value": 0.15464476139533773,
+          "name": "AI Perf Request throughput avg",
+          "unit": "requests/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_output_token_throughput_avg",
+          "value": 86.79997342431459,
+          "name": "AI Perf Output token throughput avg",
+          "unit": "tokens/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_avg",
+          "value": 1147.0385286572437,
+          "name": "AI Perf Time to first token avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p50",
+          "value": 602.043294,
+          "name": "AI Perf Time to first token p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p90",
+          "value": 2807.8861472000003,
+          "name": "AI Perf Time to first token p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p95",
+          "value": 4176.7845968,
+          "name": "AI Perf Time to first token p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p99",
+          "value": 7813.277351060009,
+          "name": "AI Perf Time to first token p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_avg",
+          "value": 25.71365974710104,
+          "name": "AI Perf Inter token latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p50",
+          "value": 21.7153223902439,
+          "name": "AI Perf Inter token latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p90",
+          "value": 42.39734412130282,
+          "name": "AI Perf Inter token latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p95",
+          "value": 45.31810379506809,
+          "name": "AI Perf Inter token latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p99",
+          "value": 64.99373966718728,
+          "name": "AI Perf Inter token latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_avg",
+          "value": 11772.562648749117,
+          "name": "AI Perf Request latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p50",
+          "value": 6000.448950999999,
+          "name": "AI Perf Request latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p90",
+          "value": 28416.2582276,
+          "name": "AI Perf Request latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p95",
+          "value": 44909.01256429998,
+          "name": "AI Perf Request latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p99",
+          "value": 71305.41491035999,
+          "name": "AI Perf Request latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        }
+      ]
+    },
+    {
+      "run_id": "001__inference_playbooks_test_dir/006__benchmark_aiperf-agentx-128k_concurrency-32",
+      "labels": {
+        "phase": "benchmark",
+        "benchmark_tool": "aiperf",
+        "concurrency": "32"
+      },
+      "metadata": {
+        "timestamp": "2026-10-29T09:09:22.986460+00:00",
+        "run_id": "001__inference_playbooks_test_dir/006__benchmark_aiperf-agentx-128k_concurrency-32"
+      },
+      "kpis": [
+        {
+          "kpi_id": "aiperf_request_count_avg",
+          "value": 175.0,
+          "name": "AI Perf Request count avg",
+          "unit": "requests",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_error_request_count_avg",
+          "value": 1.0,
+          "name": "AI Perf Error request count avg",
+          "unit": "requests",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_throughput_avg",
+          "value": 0.09510862656149424,
+          "name": "AI Perf Request throughput avg",
+          "unit": "requests/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_output_token_throughput_avg",
+          "value": 46.06029262693256,
+          "name": "AI Perf Output token throughput avg",
+          "unit": "tokens/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_avg",
+          "value": 137389.6231479543,
+          "name": "AI Perf Time to first token avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p50",
+          "value": 147047.679054,
+          "name": "AI Perf Time to first token p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p90",
+          "value": 190119.1981336,
+          "name": "AI Perf Time to first token p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p95",
+          "value": 209610.699107,
+          "name": "AI Perf Time to first token p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p99",
+          "value": 226211.51383611994,
+          "name": "AI Perf Time to first token p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_avg",
+          "value": 360.15382383863476,
+          "name": "AI Perf Inter token latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p50",
+          "value": 320.4486510703518,
+          "name": "AI Perf Inter token latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p90",
+          "value": 492.2033456770344,
+          "name": "AI Perf Inter token latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p95",
+          "value": 597.6116789990904,
+          "name": "AI Perf Inter token latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p99",
+          "value": 1710.383855539655,
+          "name": "AI Perf Inter token latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_avg",
+          "value": 284873.68627015426,
+          "name": "AI Perf Request latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p50",
+          "value": 238506.74088199998,
+          "name": "AI Perf Request latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p90",
+          "value": 461598.7875327999,
+          "name": "AI Perf Request latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p95",
+          "value": 557235.5950331998,
+          "name": "AI Perf Request latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p99",
+          "value": 896465.9574814795,
+          "name": "AI Perf Request latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        }
+      ]
+    },
+    {
+      "run_id": "001__inference_playbooks_test_dir/007__benchmark_aiperf-agentx-128k_concurrency-64",
+      "labels": {
+        "phase": "benchmark",
+        "benchmark_tool": "aiperf",
+        "concurrency": "64"
+      },
+      "metadata": {
+        "timestamp": "2026-10-29T09:09:22.986460+00:00",
+        "run_id": "001__inference_playbooks_test_dir/007__benchmark_aiperf-agentx-128k_concurrency-64"
+      },
+      "kpis": [
+        {
+          "kpi_id": "aiperf_request_count_avg",
+          "value": 181.0,
+          "name": "AI Perf Request count avg",
+          "unit": "requests",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_throughput_avg",
+          "value": 0.09836945898831946,
+          "name": "AI Perf Request throughput avg",
+          "unit": "requests/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_output_token_throughput_avg",
+          "value": 43.172235987044935,
+          "name": "AI Perf Output token throughput avg",
+          "unit": "tokens/sec",
+          "higher_is_better": true,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_avg",
+          "value": 398998.410240337,
+          "name": "AI Perf Time to first token avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p50",
+          "value": 450658.287936,
+          "name": "AI Perf Time to first token p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p90",
+          "value": 575119.1213519999,
+          "name": "AI Perf Time to first token p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p95",
+          "value": 589685.147136,
+          "name": "AI Perf Time to first token p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_time_to_first_token_p99",
+          "value": 612520.3921917999,
+          "name": "AI Perf Time to first token p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_avg",
+          "value": 373.2104107181671,
+          "name": "AI Perf Inter token latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p50",
+          "value": 326.71065635910225,
+          "name": "AI Perf Inter token latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p90",
+          "value": 536.9102101025641,
+          "name": "AI Perf Inter token latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p95",
+          "value": 708.5235704512195,
+          "name": "AI Perf Inter token latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_inter_token_latency_p99",
+          "value": 2234.6183287907666,
+          "name": "AI Perf Inter token latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_avg",
+          "value": 526592.988522989,
+          "name": "AI Perf Request latency avg",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p50",
+          "value": 527905.6510439999,
+          "name": "AI Perf Request latency p50",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p90",
+          "value": 726513.653192,
+          "name": "AI Perf Request latency p90",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p95",
+          "value": 833955.7693919999,
+          "name": "AI Perf Request latency p95",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        },
+        {
+          "kpi_id": "aiperf_request_latency_p99",
+          "value": 1302729.439318199,
+          "name": "AI Perf Request latency p99",
+          "unit": "ms",
+          "higher_is_better": false,
+          "is_curve": false,
+          "help": ""
+        }
+      ]
+    }
+  ]
+}

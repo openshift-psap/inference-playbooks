@@ -42,7 +42,9 @@ def test_invalid_urls_model_switch_and_ambiguity(page, served):
     model = next(model for model in served[1]['models'] if model['id'] == 'gemma-4')
     page.get_by_role('radio', name=model['name'], exact=True).check()
     expect(page.locator('.configuration-summary')).to_contain_text('1 GPU (no tensor sharding)')
-    expect(page.locator('.configuration-summary')).to_contain_text('8 H200 GPUs per node')
+    selected = page.locator('input[name="catalog-recipe"]:checked').input_value()
+    hardware = next(entry['hardware']['data']['accelerators'] for entry in served[1]['entries'] if entry['id'] == selected)
+    expect(page.locator('.configuration-summary')).to_contain_text(f"{hardware['count_per_node']} {hardware['model']} GPUs per node")
 
 
 def test_empty_catalog_and_model_without_recipes(page, served):
