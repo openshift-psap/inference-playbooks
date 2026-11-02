@@ -1,5 +1,8 @@
 # Portable contributor benchmarks
 
+**First run?** Follow the [step-by-step Gemma/GuideLLM walkthrough](contributor-benchmark-walkthrough.md)
+for a complete example, command explanations, and troubleshooting.
+
 Contributors prepare a pinned recipe package themselves, run it on their own
 cluster, and return **two files**: `evidence.tar.gz` and
 `evidence.tar.gz.sha256`. Maintainers review and import the results; they do not

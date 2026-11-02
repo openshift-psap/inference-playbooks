@@ -20,7 +20,9 @@ to explore deployment configurations and available benchmark evidence.
 ## Target Workloads
 
 To prepare and run a recipe yourself with pinned Forge and returnable evidence,
-use the [portable contributor runner guide](docs/contributor-benchmarks.md).
+start with the [step-by-step contributor benchmark walkthrough](docs/contributor-benchmark-walkthrough.md).
+See the [portable contributor runner reference](docs/contributor-benchmarks.md)
+for supported inputs, permissions, and maintainer import details.
 Preparation defaults to the published
 `quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2` release, pinned by digest.
 The manually applied Jobs below are a separate workflow.
