@@ -78,6 +78,29 @@ are readable warnings on stderr. They **do not fail validation** or downgrade
 existing errors. Unchanged/modified legacy files are not reflagged. `--current`
 has no comparison baseline, so it skips this additions-only advisory.
 
+### Resolving a file-flow warning
+
+Choose the remedy based on the file's purpose:
+
+- **Unused or obsolete:** remove it and update links or commands that reference
+  it. Git history preserves the previous file.
+- **Required by this recipe:** use the supported repository layout and declare
+  its ownership. Generated deployment manifests come from recipe inputs and the
+  renderer; change the inputs and rerender instead of hand-editing outputs.
+  Initial raw intake belongs in `raw-manifest/` and still requires conversion
+  before merge. Do not move a helper into a directory solely to hide a warning.
+- **Intentionally shared:** explain why it is shared, obtain maintainer
+  agreement, and define its validation ownership. A download or preparation Job
+  is not automatically a standalone serving recipe. If no supported validation
+  path exists, agree on that tooling work rather than imply the file is checked.
+
+For example, PR #19's warning concerned an older PVC download Job described in
+its storage guide as outside the current node-local NVMe deployment. If it is
+still unused, remove the Job and update the guide's reference in a follow-up PR.
+
+Warnings remain advisory. Placement review does not approve benchmark workload
+exceptions or establish benchmark qualification.
+
 ### Visible PR conversation feedback
 
 After a PR's `Recipe evidence` run completes, `file-flow-comment.yml` posts one

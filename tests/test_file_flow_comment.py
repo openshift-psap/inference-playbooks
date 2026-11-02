@@ -98,6 +98,17 @@ def test_identical_feedback_does_not_rewrite_the_comment(publication):
     assert publish(publication) == []
 
 
+def test_warning_guidance_is_actionable_and_only_shown_for_warnings(publication):
+    body = publish(publication)[0]['body']
+    for text in ('### How to resolve', '**Unused/obsolete:**', '**Required by this recipe:**',
+                 '**Intentionally shared:**', 'rerender', 'maintainer agreement',
+                 'not a benchmark exception approval', '#resolving-a-file-flow-warning'):
+        assert text in body
+    previous_comment(publication)
+    publication['annotations'] = []
+    assert 'How to resolve' not in publish(publication)[0]['body']
+
+
 def test_user_marker_does_not_authorize_editing_user_comments(publication):
     previous_comment(publication, type='User', login='contributor')
     assert publish(publication)[0]['method'] == 'create'
