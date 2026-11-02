@@ -160,6 +160,88 @@ to reconcile recorded run-owned resources; never force-delete unrelated objects.
 
 ## Maintainer: validate, review, and import
 
+### Recommended: prepare a review, then publish it
+
+Run the maintainer tool from a **trusted checkout**, using the Python environment
+above, Git, and an authenticated GitHub CLI (`gh`) for publication. The first
+version requires a single credential-free GitHub SSH/HTTPS `origin` push URL
+matching `--github-repo`; publication through a differently named fork is not
+supported. Git commit identity/signing and normal repository hooks remain yours.
+
+The archive is intake data, not a file to commit to the PR. Receive the archive
+and checksum through an approved channel. MLflow can be that channel: download
+both artifacts with your normal MLflow client first. This command accepts local
+files; it does not add MLflow credentials, downloads, or uploads to the runner.
+
+Choose an already available **maintainer-reviewed base** containing the tested
+recipe/configuration. The tested Git commit must also exist locally. The tool
+never fetches or checks out a ref supplied by the bundle. For a new/changed
+recipe, review its source PR first and use that trusted recipe branch as the
+local `--base` and corresponding GitHub `--pr-base`. Until the runner lands on
+main, use its reviewed branch rather than a main checkout lacking its schema.
+
+```sh
+python3 tools/maintain_contributor.py prepare /received/evidence.tar.gz \
+  --checksum-file /received/evidence.tar.gz.sha256 \
+  --base origin/main --pr-base main \
+  --worktree "$HOME/playbooks-reviews/received-run-001" \
+  --github-repo openshift-psap/inference-playbooks
+```
+
+Preparation requires a clean source checkout and a new worktree path. It creates
+an isolated `evidence/<contributor-run-id>` branch, reuses the importer's complete
+validation/import plan, and stages **only** the expected result files and recipe
+reference. It runs schema/reference/replay validation, targeted manifest drift,
+and catalog generation using the trusted checkout's tools, not tools from the
+bundle or selected base. It does **not** acknowledge human review, upload,
+commit, push, open a PR, change maturity, or merge anything.
+
+The printed summary identifies the tested commit, platform/workload, pinned
+images, and checksum. It points to private native JSON review files and gives
+the staged-diff command. Review both:
+
+```sh
+git -C "$HOME/playbooks-reviews/received-run-001" diff --cached
+# Inspect request.json, runtime.json, kpis.json, result.json, and native exports
+# at the paths in the summary. Do not execute any returned content.
+```
+
+Check privacy, input/model/image provenance, actual workload coverage, missing
+metrics, errors/incomplete requests, and whether native exports and KPIs are
+consistent. Machine validation is not that review, nor independent execution
+attestation. Only after review:
+
+```sh
+python3 tools/maintain_contributor.py publish \
+  "$HOME/playbooks-reviews/received-run-001" --reviewed
+```
+
+Publication rechecks the archive, import plan, exact staged/file hashes, branch,
+base commit, origin destination, and validators. A read-only GitHub comparison
+requires the PR base to contain the selected review base, preventing accidental
+publication of source commits outside the staged review. It commits the reviewed diff,
+pushes only its evidence branch without force, and opens or reuses a matching PR.
+It never auto-merges or approves it. Changes to the review require a fresh review;
+the tool will not silently stage unrelated edits or overwrite existing work.
+
+The copied archive, native review files, and a versioned **local workflow receipt**
+live under the worktree's private Git metadata, outside tracked files. Keep that
+metadata for retrying publication. It is not a new bundle/evidence schema or a
+signed attestation. Push/PR failures preserve the local commit for retry; a lost
+PR response is reconciled against the existing PR rather than creating another.
+Validation failures preserve the review for inspection and revalidation. Unknown
+HEAD changes or interrupted preparation without a complete receipt stop for manual
+inspection; no reset, forced branch removal, or directory deletion is performed.
+
+For bulky exports, add `--s3-prefix s3://TEAM_OWNED_BUCKET/accepted/contributor-evidence`
+to **prepare**. Native exports remain available privately for review; the staged
+run plans a checksummed archive URI. No upload occurs until reviewed publication.
+The existing importer's conditional S3 upload/checksum/retry logic runs before
+commit/push, so upload failure does not publish a dangling reference. You cannot
+silently change the storage destination between review and publication.
+
+### Manual low-level import
+
 Use a clean, trusted feature worktree based on `main`, with the tested commit
 available in Git. Confirm the checksum through the contributor's delivery channel;
 a supplied checksum is an integrity check, **not an execution attestation**.
