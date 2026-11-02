@@ -12,6 +12,8 @@ retain the audit trail without publishing private node-selector values.
 
 This page describes post-merge ingestion and backfill. For importing directly
 into an open recipe PR, see the [maintainer workflow](../tests/forge/README.md#maintainer-workflow-open-pr).
+Bot commit signing and PR-wide signature verification are described under
+[commit signatures and PR verification](#commit-signatures-and-pr-verification-issue-100).
 
 `benchmark-ingest.yml` finds merged recipe PRs on a `main` push, or backfills
 one merged PR through `workflow_dispatch`. It selects only the latest explicit
@@ -227,6 +229,158 @@ HTTP requests include `X-MLflow-Workspace`, have timeouts/size limits, and
 reject redirects to avoid credential leakage. The bot workflow checks out
 trusted `main`, never executes code from the recipe PR head, and uses unique
 import branches so unrelated pending imports are not overwritten.
+
+## Commit signatures and PR verification (issue #100)
+
+**Status: implementation is under review in the same PR as this page; the live
+acceptance matrix below is not yet complete, and issue #100 stays open until it
+is recorded.** Do not cite this section as proof that evidence publication is
+signed until every row has passed on the live repository. The change adds
+signature coverage; it does not weaken an existing signature requirement.
+
+### Observed gap in PR #99
+
+The initial bot commit `9d1d95296ba9c2eab7f4602b60fe5ea61a942f21` on PR #99
+reported `verified=false` with reason `unsigned`. The later maintainer follow-up
+`c9168c9c4e3b55ac0781166bc6bd9a20aca69b5e` reported `verified=true` with a valid
+SSH signature. PR #99 merged on 2026-11-02T16:42:46Z as squash commit
+`4fdfc3abd09bc0dd8a4ed6b763324bdfbd5b02bc`.
+
+The post-merge workflow supplied `author` and `committer` to
+`create-pull-request` but omitted `sign-commits` (which defaults to false).
+Those identity inputs do not sign commits. The maintainer's SSH signature
+was valid; the initial bot commit was the unsigned entry in that PR's history.
+
+This shows that checking only the PR head is insufficient: the head was signed,
+while the earlier bot commit was not. The squash-merge signature is evaluated
+separately and is not evidence about the PR's head commits. GitHub's
+[rule suite 4861109655](https://api.github.com/repos/openshift-psap/inference-playbooks/rulesets/rule-suites/4861109655)
+reports `pass` for the active `required_signatures` and `pull_request` rules on
+the verified squash commit, rather than a bypass. Its tree matches the final
+PR tree, preserving both the evidence and the maintainer fix.
+
+The existing open-PR publisher is independently confirmed: [run 41051697419](https://github.com/openshift-psap/inference-playbooks/actions/runs/41051697419)
+published `4254fc090d3a308b39edd2d95750c667d52b343d` to PR #19, with GitHub
+`verified=true`, reason `valid`. PR #19 nevertheless contains an older unsigned
+contributor commit (`08e193196d7fcaafd0e789a23023da75de21b5a0`); signing a new
+import does not repair earlier history.
+
+### Publication contract
+
+- **Post-merge path** (`benchmark-ingest.yml`): use trusted
+  `tools/post_merge_evidence.py` to prepare from the existing evidence branch
+  (or the trusted main revision for a new branch), then append an App-authenticated
+  `createCommitOnBranch` commit with an atomic expected-head guard. Only evidence
+  paths are published; maintainer changes remain in the branch history. An
+  identical import creates no commit. A concurrent branch change fails rather
+  than being overwritten. Repeating an import after its PR is closed or merged
+  does not reopen it; new evidence for that branch requires a fresh dispatch
+  from current `main`.
+- **Open-PR path** (`benchmark-import-pr.yml`): keep the existing
+  `createCommitOnBranch` GraphQL publication. GitHub already signs that commit
+  and `expectedHeadOid` still provides the atomic head guard; it must not be
+  replaced with an unsigned push.
+- **Patch delivery** (fork or oversized evidence): the contributor applies and
+  commits the patch in their own environment. The resulting commit is signed
+  only if the contributor signs it; it is not treated as a bot publication and
+  is not exempt from the PR signature check.
+
+The former `create-pull-request` action supports `sign-commits: true`, but its
+update path rebuilds and force-updates the automation branch. That can discard
+maintainer fixes on repeat imports. The append-only publisher addresses both
+signing and preservation; it does not reattribute existing maintainer commits.
+
+A commit-message trailer such as `Signed-off-by` or `Co-authored-by`, an
+artifact, or a workflow summary is not a cryptographic signature and is never
+accepted as one. The only accepted evidence is GitHub's commit verification
+reporting `verified: true` for a valid key. There is no allow-unsigned override,
+skip label, or fallback that treats an unverified commit as acceptable.
+
+### Verification tool contract
+
+Use `tools/verify_pr_signatures.py`:
+
+```sh
+python3 tools/verify_pr_signatures.py --repository OWNER/REPO --pr-number N
+```
+
+It is read-only and uses a read-only token (`contents: read`, plus
+`pull-requests: read` for PR lookup). It lists **all** commits on the PR, follows
+pagination, and fails if the API reports a truncated or incomplete list rather
+than silently auditing a subset. For each commit it requires GitHub verification
+`verified: true` with a valid-signature reason and reports the SHA, author, and
+reason. Any unsigned, unverified, unknown, or missing result fails the run with a
+nonzero exit status; API, permission, and pagination errors also fail closed.
+The tool never commits, pushes, approves, or merges, and it has no bypass flag.
+Verification runs after publication, including no-op repeats with an existing
+PR. A failure reports the problematic history; it does not roll back or erase
+the already-published evidence.
+
+`commit-signatures.yml` wires this check into automatic PR verification on open,
+`synchronize`, reopen, ready-for-review, and edit events, so every push re-audits the full
+commit list. That workflow runs tooling from the trusted default branch with a
+read-only token and never checks out or executes PR code. It would have reported
+#99's unsigned commit after the maintainer follow-up. This adds a visible CI
+check for all PRs; it does not change required checks or repository protection
+settings. An outdated event head or a head/base change during verification fails
+rather than reporting success for a different history.
+
+### Live acceptance matrix
+
+Each row must be exercised on the live repository and recorded with the
+workflow run URL, resulting commit SHA, and GitHub verification result in the
+PR or evidence artifact. Status is **pending** for every row until then.
+
+| Path | Scenario | Expected | Status |
+| --- | --- | --- | --- |
+| Post-merge | Initial evidence PR | Bot commit `verified: true` | Pending live validation |
+| Post-merge | Different selected execution | New import commit signed; prior valid evidence preserved | Pending live validation |
+| Post-merge | Repeat of an admitted execution | No new commit; verification still passes | Pending live validation |
+| Post-merge | Maintainer signed follow-up on the evidence PR | Follow-up `verified: true`; full history passes | Pending live validation |
+| Post-merge | Automation update after maintainer fix | Fix preserved; every resulting commit verified | Pending live validation |
+| Open PR (`createCommitOnBranch`) | Initial publication | Commit `verified: true`, head guard holds | Pending live validation |
+| Open PR (`createCommitOnBranch`) | Replacement | Replacement commit signed; atomic head guard holds | Pending live validation |
+| Open PR (`createCommitOnBranch`) | Repeat / no-op | No commit created; verification passes | Pending live validation |
+| Open PR (`createCommitOnBranch`) | Maintainer signed follow-up on the PR | Follow-up `verified: true`; full history passes | Pending live validation |
+| Open PR (`createCommitOnBranch`) | Automation update after maintainer fix | Fix preserved; every resulting commit verified | Pending live validation |
+
+### Rollout and remediation
+
+For maintainer follow-ups, configure a GPG or SSH signing key and register it
+as a signing key on GitHub, then use `git commit -S` (or repository-local
+`git config commit.gpgsign true`). After pushing, run the verifier above;
+local signing success alone does not establish GitHub verification. See
+[GitHub's signing guide](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits).
+
+Both publication workflows are restricted to `main` (and `forge-evidence` is
+restricted to the `main` branch policy), so this fix cannot be live-tested from a
+PR branch. A check on this PR is not acceptance evidence for the new gate
+either; merge the reviewed tooling first, then run the matrix on disposable or
+active evidence PRs. Do not publish evidence to `main`. A no-op scenario must
+show that no commit was created, not merely that verification did not run.
+
+Remediation for an open PR that already contains an unsigned commit preserves
+its evidence and context:
+
+- keep the PR, artifacts, run IDs, and tested revision;
+- adding a signed follow-up does **not** repair an unsigned ancestor. Preserve
+  the old head in a backup ref, record the affected SHAs in the PR, and coordinate
+  with contributors before replacing history;
+- in a separate local branch, replay/re-sign the affected commits with a
+  GitHub-registered signing key, preserving original authorship. Compare the
+  final tree to the saved head (`git diff OLD_HEAD NEW_HEAD` must be empty),
+  including evidence checksums and maintainer fixes;
+- update the same PR branch only after explicit maintainer approval, using a
+  lease against the recorded old head. Keep the PR discussion and explain SHA
+  replacements; reviews may need renewal. If history replacement is prohibited,
+  create a signed replacement PR and cross-link both PRs instead;
+- re-run the full-history verifier and required checks before merge;
+- do not suppress or waive the finding while remediation is pending.
+
+PR #99 is already merged; its finding is recorded here for the audit trail and
+is not rewritten retroactively. Future imports must use the signed paths above,
+and the PR verification gate stays in place even if an individual commit is
+later found to have been signed by an unexpected but valid key.
 
 ## Local/offline use
 

@@ -1668,12 +1668,13 @@ def test_ingestion_workflow_is_standalone():
     assert 'catalog.py' not in text
     assert 'catalog/**' not in text
     assert 'site/' not in text
-    assert 'python3 tools/validate.py --current' in text
+    assert 'trusted/tools/validate.py' in text
+    assert '--current' in text
     assert 'ref: main' in text
     assert "github.ref == 'refs/heads/main'" in text
 
 
-def test_ingestion_uses_repo_scoped_app_token_and_bot_identity():
+def test_ingestion_uses_repo_scoped_app_token_and_trusted_publisher():
     text = (REPO / '.github/workflows/benchmark-ingest.yml').read_text()
     job = yaml.safe_load(text)['jobs']['ingest']
     assert job['permissions'] == {'contents': 'read', 'pull-requests': 'read'}
@@ -1689,14 +1690,14 @@ def test_ingestion_uses_repo_scoped_app_token_and_bot_identity():
         'permission-contents': 'write',
         'permission-pull-requests': 'write',
     }
-    publish = next(step for step in steps if step.get('name') == 'Open evidence import PR')
-    assert publish['with']['token'] == '${{ steps.app-token.outputs.token }}'
-    assert publish['with']['author'] == '${{ steps.bot-identity.outputs.author }}'
-    assert publish['with']['committer'] == publish['with']['author']
-    identity = next(step for step in steps if step.get('id') == 'bot-identity')
-    assert identity['env']['GH_TOKEN'] == '${{ steps.app-token.outputs.token }}'
-    assert 'gh api "users/$bot_login"' in identity['run']
-    fetch = next(step for step in steps if step.get('name') == 'Fetch and normalize attributed evidence')
+    publish = next(step for step in steps if step.get('id') == 'evidence-pr')
+    assert publish['env']['GH_TOKEN'] == '${{ steps.app-token.outputs.token }}'
+    assert 'trusted/tools/post_merge_evidence.py publish' in publish['run']
+    assert not any(step.get('uses', '').startswith('peter-evans/create-pull-request@') for step in steps)
+    checkout = next(step for step in steps if step.get('uses', '').startswith('actions/checkout@'))
+    assert checkout['with']['path'] == 'trusted'
+    assert checkout['with']['persist-credentials'] is False
+    fetch = next(step for step in steps if 'ingest_forge.py' in step.get('run', ''))
     assert fetch['env']['GH_TOKEN'] == '${{ github.token }}'
     assert steps.index(mint) < steps.index(publish)
     assert 'FORGE_INGEST_GITHUB_TOKEN' not in text
