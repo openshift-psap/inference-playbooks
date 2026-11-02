@@ -14,7 +14,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tools'))
 
-from contributor_bundle import (FORGE_REVISION, LEGACY_FORGE_REVISION, checksum, json_bytes,
+from contributor_bundle import (FORGE_REVISION, LEGACY_FORGE_REVISION, NAMESPACE_ONLY_FORGE_REVISIONS, checksum, json_bytes,
                                 json_load, read_archive, relative, replay, shareable, validate_request, write_archive,
                                 validate_harness_invocation)
 from contributor_security import UIDAdmissionRejected, admit_manifest, check_runtime_uids, effective_uids
@@ -103,7 +103,7 @@ def evidence(source, tmp_path):
 
 def test_prepare_is_pinned_scoped_and_portable(evidence, tmp_path):
     repo, root, request, files, bundle, digest = evidence
-    assert request['forge_revision'] == '93b85db135425516eb000de62d2483c62cdacacc'
+    assert request['forge_revision'] == 'df3c14a5eab5e8f502402f51c48765b35067fca8'
     launcher = (tmp_path / 'package/run.sh').read_text()
     assert '--user "$(id -u):$(id -g)"' in launcher
     assert request['runner_image'] in launcher
@@ -281,8 +281,8 @@ def test_pin_is_consistent_with_image_and_guide():
 
 def test_published_runner_default_matches_release_metadata():
     release = json_load(preparation.RELEASE_FILE.read_bytes())
-    assert release['version'] == 'v0.1.1'
-    assert release['tag'] == 'quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.1'
+    assert release['version'] == 'v0.1.2'
+    assert release['tag'] == 'quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2'
     assert release['forge_revision'] == FORGE_REVISION
     assert preparation.released_runner_image() == release['image']
     assert release['image'].startswith('quay.io/rh-ee-thibrahi/inference-playbooks-runner@sha256:')
@@ -329,9 +329,10 @@ def test_unknown_forge_pin_is_rejected(evidence):
         validate_request(request, files)
 
 
-def test_current_runner_refuses_legacy_request_before_preflight(evidence, tmp_path):
+@pytest.mark.parametrize('revision', sorted((NAMESPACE_ONLY_FORGE_REVISIONS - {FORGE_REVISION}) | {LEGACY_FORGE_REVISION}))
+def test_current_runner_refuses_legacy_request_before_preflight(evidence, tmp_path, revision):
     _, _, request, _, _, _ = evidence
-    request['forge_revision'] = LEGACY_FORGE_REVISION
+    request['forge_revision'] = revision
     forge = tmp_path / 'forge'
     forge.mkdir()
     (forge / 'REVISION').write_text(FORGE_REVISION)
@@ -392,8 +393,10 @@ def test_prepare_rejects_incompatible_forge_bundles(source, tmp_path, change):
 
 
 @pytest.mark.parametrize('change', ['name', 'uid', 'env', 'label'])
-def test_new_pin_rejects_old_launch_rewrites(evidence, tmp_path, change):
+@pytest.mark.parametrize('revision', sorted(NAMESPACE_ONLY_FORGE_REVISIONS))
+def test_new_pin_rejects_old_launch_rewrites(evidence, tmp_path, change, revision):
     repo, _, request, files, _, _ = evidence
+    request['forge_revision'] = revision
     runtime = json_load(files['runtime.json'])
     launch = runtime['launch']
     if change == 'name':
@@ -409,6 +412,17 @@ def test_new_pin_rejects_old_launch_rewrites(evidence, tmp_path, change):
     digest = write_archive(path, request, 'succeeded', files)
     with pytest.raises(ValueError, match='namespace-only'):
         import_bundle(repo, path, digest)
+
+
+@pytest.mark.parametrize('revision', sorted(NAMESPACE_ONLY_FORGE_REVISIONS - {FORGE_REVISION}))
+def test_previous_namespace_only_pin_remains_importable_and_replayable(evidence, tmp_path, revision):
+    repo, _, request, files, _, _ = evidence
+    request['forge_revision'] = revision
+    path = tmp_path / 'previous.tar.gz'
+    digest = write_archive(path, request, 'succeeded', files)
+    assert import_bundle(repo, path, digest, apply=True, reviewed=True)['applied']
+    run_path = next(repo.glob('models/*/recipes/*/results/*/run.yaml'))
+    assert validate_benchmark_run(repo, run_path, yaml.safe_load(run_path.read_text()))[0] == []
 
 
 def test_legacy_pin_bundle_remains_importable_and_replayable(evidence, tmp_path):

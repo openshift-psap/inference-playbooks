@@ -28,7 +28,7 @@ python3 tools/validate.py --current
 ```
 
 The default runner is the published Linux AMD64 image
-**`quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.1`**. You do not need to
+**`quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2`**. You do not need to
 build or publish an image. Preparation reads the release's immutable digest from
 [`benchmarks/runner/release.json`](../benchmarks/runner/release.json), not from a
 moving tag. The launcher pulls that digest when you run the package; anonymous
@@ -215,14 +215,15 @@ under durable retention, not an expiring intake policy.
 
 ### Supported inputs and evidence limits
 
-- Default runner release: `quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.1`,
+- Default runner release: `quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2`,
   pinned in host-side `benchmarks/runner/release.json` to
-  `sha256:aeb597892d3c173970515db4ebbf82f4bb6aa0a31681ca9ecbb1303eb59b72e5`.
-  The image records source commit `5f8720ae84923f77db2db88572cec106bcf71e3d`.
+  `sha256:4b8dc7e0d2f05a40949992a322a103e6650ad9136616edd60ab26e55b811ce88`.
+  The image records source commit `92c37ef84658daf997df2000c403a4abca8a033f`.
   Release metadata is recorded after publication; it is not embedded into its
   own image. The runtime uses the digest captured in each request.
-- Runner: Linux AMD64, Python 3.12, OpenShift CLI 4.19.0, Forge PR #322 commit
-  `93b85db135425516eb000de62d2483c62cdacacc`. Archives/base image are pinned and
+- Runner: Linux AMD64, Python 3.12, OpenShift CLI 4.19.0, Forge cleanup fix
+  `df3c14a5eab5e8f502402f51c48765b35067fca8`, based on PR #322 and published
+  on `thameem-abbas/forge` branch `fix/guidellm-failure-cleanup`. Archives/base image are pinned and
   checksummed; Python dependencies are hash-locked.
 - One platform and one self-contained manifest containing one Deployment,
   LeaderWorkerSet, or PVC-backed LLMInferenceService. Authored Services, companion
@@ -267,9 +268,14 @@ namespace. It preserves authored serving names and refuses preexisting conflicts
 
 **Serving resources** use create-only requests, UID-owned Pod capture, and
 UID-preconditioned cleanup. Endpoint discovery does not synthesize a Service.
-These guarantees do **not** extend to all benchmark helper resources: the pinned
-harness helpers still use apply and name-based cleanup. Existing model PVCs and
-Secrets are prerequisites, not cleanup targets.
+GuideLLM helper finalizers also use recorded create-response UIDs, run after
+diagnostics on handled failures/timeouts, and report cleanup errors separately.
+Helper creation refuses unexpected conflicts rather than applying over them.
+These guarantees do **not** extend to all helper lifecycle operations: GuideLLM's
+pre-run cleanup and AIPerf helpers retain their existing name-based behavior.
+The shared Forge DSL bypasses `@always` on Ctrl-C/SIGTERM, so interruption or host
+failure can still require administrator recovery. Existing model PVCs and Secrets
+are prerequisites, not cleanup targets.
 
 Deployment/LWS Pod probes preserve authored UIDs. UID rejection fails without a
 UID-omitted retry; correct and commit the recipe before preparing another package.
@@ -308,8 +314,10 @@ separate sharing requires privacy review.
 ### Legacy packages and archive format
 
 Bundles pinned to `768a285851ade70d0d5737f9bd90564350410469` remain importable and
-replayable under historical launch rules, including bounded UID omission. New
-packages use the current pin; this runner refuses old-pin execution. Keep the
+replayable under historical launch rules, including bounded UID omission. Bundles
+pinned to `93b85db135425516eb000de62d2483c62cdacacc` remain importable/replayable
+under the unchanged namespace-only, preserve-UID contract. New packages use the
+cleanup-fixed current pin; this runner refuses old-pin execution. Keep the
 old reviewed runner for an unfinished attempt, or prepare a fresh package/run ID.
 Never relabel historical measurements.
 
@@ -336,6 +344,9 @@ Run from the repository root. These tests use synthetic data, not model evidence
 python3 -m pytest tests/test_contributor.py tests/test_contributor_monitor.py tests/test_runner_image_security.py -q
 podman build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:test .
 python3 tools/scan_runner_image.py localhost/contributor-runner:test
+podman run --rm --network none --entrypoint python \
+  -v "$PWD/tests/contributor_guidellm_cleanup_smoke.py:/cleanup-smoke.py:ro,Z" \
+  localhost/contributor-runner:test /cleanup-smoke.py
 podman run --rm --network none --entrypoint python \
   -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,z" \
   localhost/contributor-runner:test /smoke.py

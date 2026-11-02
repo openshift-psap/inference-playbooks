@@ -18,7 +18,8 @@ from forge_model_identity import kpi_labels, validate_model_identity
 from normalize_kpis import normalize
 from recipe_evidence import load_unique_yaml, load_unique_yaml_all
 
-FORGE_REVISION = '93b85db135425516eb000de62d2483c62cdacacc'
+FORGE_REVISION = 'df3c14a5eab5e8f502402f51c48765b35067fca8'
+NAMESPACE_ONLY_FORGE_REVISIONS = frozenset({FORGE_REVISION, '93b85db135425516eb000de62d2483c62cdacacc'})
 LEGACY_FORGE_REVISION = '768a285851ade70d0d5737f9bd90564350410469'
 MAX_FILES = 1024
 IMAGE = r'[^\s/@]+(?:/[^\s/@]+)+@sha256:[a-f0-9]{64}'
@@ -159,7 +160,7 @@ def validate_request(request: dict, files: dict[str, bytes]):
     shareable(request)
     if not re.fullmatch(r'[a-f0-9]{40}', request['tested_revision']):
         raise ValueError('tested revision must be an immutable Git commit')
-    if request['forge_revision'] not in {FORGE_REVISION, LEGACY_FORGE_REVISION}:
+    if request['forge_revision'] not in NAMESPACE_ONLY_FORGE_REVISIONS | {LEGACY_FORGE_REVISION}:
         raise ValueError('unsupported Forge revision')
     for key in ('runner_image', 'harness_image'):
         registry = request[key].split('/')[0]
@@ -200,7 +201,7 @@ def validate_request(request: dict, files: dict[str, bytes]):
         raise ValueError('benchmark workload differs from recipe')
     profile = load_unique_yaml(files['inputs/' + recipe['hardware_profile']].decode())
     model = load_unique_yaml(files[f'inputs/models/{recipe["model_id"]}/model.yaml'].decode())
-    if request['forge_revision'] == FORGE_REVISION:
+    if request['forge_revision'] in NAMESPACE_ONLY_FORGE_REVISIONS:
         portable_manifest(request, files)
     return recipe, model, profile
 
