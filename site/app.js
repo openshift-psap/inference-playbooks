@@ -54,15 +54,28 @@ function renderRecipeTechnical(entry) {
   for (const spec of entry.specs) technical.append(node('p', `${spec.label}: ${spec.state === 'resolved' ? JSON.stringify(spec.value) : 'Unverified source note — inspect final artifacts'} (${spec.source})`));
   return technical;
 }
+function workloadGroup(key) {
+  return { 'guidellm-8k1k': '8k1k', 'IP-8k/1k': '8k1k', 'aiperf-agentx-128k': 'agentic', 'aiperf-agentx-unlimited-context': 'agentic' }[key] || null;
+}
+function evidenceWorkloads(item, entry) {
+  if (item.run.platform?.stack !== entry.platform.stack || item.run.platform?.version !== entry.platform.version) return [];
+  // Execution snapshots include every harness: only use this run's workloads.
+  return (item.run.workload?.expectations?.workloads || [])
+    .filter(workload => workload.harness === item.run.harness)
+    .map(workload => workloadGroup(workload.key)).filter(Boolean);
+}
+function matchesWorkload(entry, value) {
+  return workloadGroup(entry.workload_profile) === value || entry.evidence.some(item => evidenceWorkloads(item, entry).includes(value));
+}
 function dimension(entry, key) {
   if (key === 'platform') return { vllm: 'vllm', rhoai: 'rhoai/rhaii', rhaii: 'rhoai/rhaii', 'llm-d': 'llm-d' }[entry.platform.stack] || null;
   if (key === 'version') return entry.platform.version;
   if (key === 'gpu_model') return String(entry.hardware.data.accelerators.model || '').toUpperCase();
-  if (key === 'workload') return { 'guidellm-8k1k': '8k1k', 'aiperf-agentx-128k': 'agentic', 'aiperf-agentx-unlimited-context': 'agentic' }[entry.workload_profile] || null;
+  if (key === 'workload') return workloadGroup(entry.workload_profile);
   return entry[key];
 }
 function matchingEntries() {
-  return modelEntries().filter(entry => Object.entries(state.filters).every(([key, value]) => !value || dimension(entry, key) === value));
+  return modelEntries().filter(entry => Object.entries(state.filters).every(([key, value]) => !value || (key === 'workload' ? matchesWorkload(entry, value) : dimension(entry, key) === value)));
 }
 function updateUrl() {
   const url = new URL(location.href);
@@ -524,10 +537,12 @@ function renderBenchmark(entry) {
   destroyCharts();
   const panel = node('div');
   if (!entry.evidence.length) { panel.append(node('div', 'No committed benchmark evidence for this recipe', 'banner')); return panel; }
+  const evidence = entry.evidence.filter(item => !state.filters.workload || evidenceWorkloads(item, entry).includes(state.filters.workload));
+  if (!evidence.length) { panel.append(node('div', 'No benchmark evidence identified for this workload and platform', 'banner')); return panel; }
 
   // Group evidence by harness
   const groups = new Map();
-  for (const item of entry.evidence) {
+  for (const item of evidence) {
     const key = harnessKey(item);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
