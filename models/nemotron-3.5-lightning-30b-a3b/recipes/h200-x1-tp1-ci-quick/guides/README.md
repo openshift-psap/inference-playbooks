@@ -44,8 +44,11 @@ serve the model. The failed attempt is not performance evidence.
 The [compatibility image](../benchmarks/guidellm-compat/Containerfile) preserves
 the audited GuideLLM 0.7.4 base digest and changes only Transformers to 5.15.0
 and its required Safetensors dependency to 0.8.0. The replacement wheels are
-hash-locked; `pip check` verifies the complete installed environment. No model
-files are rewritten, and nothing is installed dynamically in benchmark Jobs.
+hash-locked; `pip check` verifies the complete installed environment. The only
+source adjustment replaces a public, credential-shaped API-key schema example
+with an obvious placeholder after verifying its upstream provenance. It does
+not change authentication defaults or disable secret scanning. No model files
+are rewritten, and nothing is installed dynamically in benchmark Jobs.
 
 Build the image from `benchmarks/guidellm-compat/`, scan it before publication,
 then pass its published immutable digest as `--harness-image` during preparation.
