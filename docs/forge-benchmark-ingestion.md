@@ -1,5 +1,8 @@
 # Forge benchmark evidence ingestion
 
+This page describes post-merge ingestion and backfill. For importing directly
+into an open recipe PR, see the [maintainer workflow](../tests/forge/README.md#maintainer-workflow-open-pr).
+
 `benchmark-ingest.yml` finds merged recipe PRs on a `main` push, or backfills
 one merged PR through `workflow_dispatch`. It selects only the latest explicit
 successful `psap-forge-bot[bot]` report, ordered by GitHub `created_at` then ID.
@@ -19,9 +22,11 @@ Current Forge executions publish consolidated KPIs on the selected parent at
 `01__test/<ordinal>__postprocessing/kpis/kpis.json`. Import these without
 enumerating children; ignore `historical_data` archives, never substitute them.
 Legacy executions without consolidated parent KPIs retain direct-child intake.
-The selected execution must match the final recipe PR head. For tagless current
-executions, use recorded `FORGE_FOREIGN_TESTING_PULL_PULL_SHA`, not the Forge
-checkout's `PULL_PULL_SHA`. This is the CI-requested/tested recipe context, not
+The selected execution's tested revision must be the final recipe PR head or
+an ancestor of it, with unchanged recipe and deployment inputs. Evidence and
+receipts retain the actual tested SHA, not the final head or squash-merge SHA.
+For tagless current executions, use recorded `FORGE_FOREIGN_TESTING_PULL_PULL_SHA`,
+not the Forge checkout's `PULL_PULL_SHA`. This is the CI-requested/tested recipe context, not
 an independent attestation of the actual checkout. A missing/malformed primary link,
 empty execution, attribution mismatch, unsupported/malformed artifact, or
 permission/network error fails ingestion. **There is no fallback to older
@@ -44,7 +49,8 @@ output and attest a completed discovery snapshot, not future server immutability
 Legacy evidence without a receipt requires normal selected-execution discovery
 and validation once before admission; immutable evidence and original comment
 provenance are preserved. Direct `fetch_forge_evidence.py` still accepts child
-links but does not create ingestion receipts.
+links but does not create ingestion receipts; its explicit `--tested-revision`
+must still match the recorded revision exactly.
 
 The standalone ingestion change (PR1) adds the evidence tools, schemas,
 offline validator replay, tests, and workflow without depending on site/catalog
@@ -57,12 +63,13 @@ to `main`; ingestion itself does not publish the site or promote recipe maturity
 
 ## Execution metadata
 
-Consolidated parent imports do not require custom `playbooks.*` tags. When these
-tags are incomplete, intake reads existing parent artifacts to populate the
-unchanged benchmark-run fields:
+Consolidated parent imports do not require custom `playbooks.*` tags. Intake
+always checks the recorded execution artifacts, including the versioned bundle
+contract for current producers. Complete tags must agree with those artifacts;
+they cannot bypass validation. Recorded inputs supply the benchmark-run fields:
 
 - `01__test/000__ci_metadata/fournos_fjob.yaml`: foreign recipe PR number and
-  requested/tested recipe SHA from `spec.env`, checked against the final PR SHA.
+  requested/tested recipe SHA from `spec.env`, checked against the final PR history.
 - `01__test/001__inference_playbooks_test_dir/config.yaml`: explicit recipe and
   manifest selection, matched to the tested recipe, model, profile, and platform.
 - `01__test/run.log`: the recorded common Forge test invocation. It is not

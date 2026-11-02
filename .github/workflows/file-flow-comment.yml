@@ -1,0 +1,119 @@
+name: PR file-flow warnings
+
+on:
+  workflow_run:
+    workflows: [Recipe evidence]
+    types: [completed]
+
+# The PR workflow stays read-only, including for forks. This trusted publisher
+# consumes GitHub API metadata only: no checkout, artifacts, or PR code execution.
+permissions:
+  actions: read
+  checks: read
+  pull-requests: write
+
+concurrency:
+  group: file-flow-comment-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  comment:
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update the PR conversation warning
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const source = context.payload.workflow_run;
+            const {data: run} = await github.rest.actions.getWorkflowRun({owner, repo, run_id: source.id});
+            if (run.event !== 'pull_request' || run.status !== 'completed' ||
+                run.repository.full_name !== `${owner}/${repo}` ||
+                run.path !== '.github/workflows/recipe-evidence.yml' ||
+                run.run_attempt !== source.run_attempt || !/^[a-f0-9]{40}$/.test(run.head_sha)) {
+              core.info('Not a current, completed recipe PR run; no comment changes.');
+              return;
+            }
+            const {data: latest} = await github.rest.actions.listWorkflowRuns({
+              owner, repo, workflow_id: run.workflow_id, head_sha: run.head_sha,
+              event: 'pull_request', per_page: 1
+            });
+            if (latest.workflow_runs[0]?.id !== run.id) {
+              core.info('A newer recipe run exists; no comment changes.');
+              return;
+            }
+
+            // GitHub often leaves workflow_run.pull_requests empty for fork PRs.
+            const candidates = run.pull_requests.length ? run.pull_requests :
+              (await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner, repo, commit_sha: run.head_sha, per_page: 100
+              })).data;
+            const matches = [];
+            for (const number of new Set(candidates.map(pr => pr.number))) {
+              const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
+              if (pr.state === 'open' && pr.base.repo.full_name === `${owner}/${repo}` &&
+                  pr.head.sha === run.head_sha) matches.push(pr);
+            }
+            if (matches.length !== 1) {
+              core.info('No unique open PR at this exact head; no comment changes.');
+              return;
+            }
+            const pr = matches[0];
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner, repo, run_id: run.id, filter: 'latest', per_page: 100
+            });
+            const job = jobs.find(job => job.name === 'hardware-profiles');
+            const check = job?.check_run_url?.match(/\/check-runs\/(\d+)$/);
+            if (!check) return;
+            const annotations = await github.paginate(github.rest.checks.listAnnotations, {
+              owner, repo, check_run_id: Number(check[1]), per_page: 100
+            });
+            const warnings = annotations.filter(item =>
+              item.annotation_level === 'warning' && item.title === 'Playbook file flow');
+            // An early CI failure is not evidence that previous warnings cleared.
+            if (!warnings.length && job.conclusion !== 'success') return;
+
+            const marker = '<!-- inference-playbooks:file-flow -->';
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pr.number, per_page: 100
+            });
+            const previous = comments.find(comment => comment.user.type === 'Bot' &&
+              comment.user.login === 'github-actions[bot]' && comment.body.startsWith(marker));
+            if (!warnings.length && !previous) return; // No noise on clean PRs.
+            // Annotation text is untrusted PR output. Keep it inert, including
+            // mentions and newline-prefixed bot commands; never evaluate it.
+            const safe = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ')
+              .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+              .replace(/@/g, '&#64;')
+              .replace(/[`*_\[\]()!#|]/g, char => `&#${char.codePointAt(0)};`);
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${run.id}`;
+            let body = marker + '\n';
+            if (warnings.length) {
+              body += `## ⚠️ Playbook file-flow warnings (${warnings.length})\n\n` +
+                'Please review these file placements and their validation ownership. **Advisory only; not a merge gate.**\n\n';
+              let shown = 0;
+              for (const item of warnings.slice(0, 30)) {
+                const line = `- <code>${safe(item.path).slice(0, 1000)}</code> — ` +
+                  `<code>${safe(item.message).slice(0, 1000)}</code>\n`;
+                if (Buffer.byteLength(body + line, 'utf8') > 60000) break;
+                body += line;
+                shown++;
+              }
+              if (warnings.length > shown) body += `\n${warnings.length - shown} more annotations are linked in the CI run.\n`;
+            } else {
+              body += '## ✅ Playbook file-flow warnings cleared\n\n' +
+                'The latest successful recipe check reports no new file-flow warnings.\n';
+            }
+            body += `\n[Source check](${runUrl}) · head \`${run.head_sha.slice(0, 12)}\` · attempt ${run.run_attempt}\n`;
+            // Recheck after API pagination so an old run cannot normally overwrite
+            // feedback for a newer PR revision.
+            const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
+            if (current.state !== 'open' || current.head.sha !== run.head_sha) return;
+            if (previous) {
+              if (previous.body !== body) await github.rest.issues.updateComment({
+                owner, repo, comment_id: previous.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number: pr.number, body});
+            }
