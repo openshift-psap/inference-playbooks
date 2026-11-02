@@ -68,3 +68,15 @@ immutable digest as `--harness-image` during preparation. The returned request
 and run retain that exact image reference. The source commit label and pinned
 base/build inputs preserve provenance even though the runtime layers are
 flattened.
+
+The [published release record](../benchmarks/guidellm-compat/release.json) binds
+the registry digest to the scanned local image and source commit. For this
+release, prepare the smoke package with:
+
+```sh
+python3 tools/prepare_contributor.py \
+  models/nemotron-3.5-lightning-30b-a3b/recipes/h200-x1-tp1-ci-quick/recipe.yaml \
+  --stack vllm --version v0.31.0 --workload guidellm-smoke \
+  --harness-image quay.io/rh-ee-thibrahi/inference-playbooks-guidellm@sha256:c1a66d1131dee8852d87c9383ebc2dddb27d2ec730953b967b82c9976c7a0d22 \
+  --output "$HOME/playbooks-runs/nemotron35-package-001"
+```
