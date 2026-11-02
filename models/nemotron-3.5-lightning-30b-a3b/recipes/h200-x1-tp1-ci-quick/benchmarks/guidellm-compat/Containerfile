@@ -1,4 +1,6 @@
-# Build from this directory. The base digest pins all unchanged dependencies.
+# Build with Podman --squash-all, as documented in ../../guides/README.md.
+# Do not retain the superseded upstream schema example in inherited layers.
+# The base digest pins all unchanged dependencies.
 FROM ghcr.io/vllm-project/guidellm@sha256:15372f9f3f407366495470706b7a07f64addcce5d134a49cab64149b44ab1233
 
 LABEL org.opencontainers.image.source="https://github.com/openshift-psap/inference-playbooks" \
@@ -35,6 +37,8 @@ for node in ast.walk(ast.parse(source)):
                 matches.append(ast.get_source_segment(source, value))
 assert len(matches) == 1 and source.count(matches[0]) == 1, "unexpected upstream schema example"
 path.write_text(source.replace(matches[0], repr("example-api-key")))
+for bytecode in path.parent.glob("__pycache__/http.*.pyc"):
+    bytecode.unlink()
 PY
 
 # Preserve the upstream runtime user, entrypoint, and command.

@@ -50,6 +50,21 @@ with an obvious placeholder after verifying its upstream provenance. It does
 not change authentication defaults or disable secret scanning. No model files
 are rewritten, and nothing is installed dynamically in benchmark Jobs.
 
-Build the image from `benchmarks/guidellm-compat/`, scan it before publication,
-then pass its published immutable digest as `--harness-image` during preparation.
-The returned request and run retain that exact image reference.
+Build from the repository root with Podman's `--squash-all` so the superseded
+example is absent from inherited layers too; replacing only the live file does
+not satisfy the scan gate:
+
+```sh
+COMPAT_DIR=models/nemotron-3.5-lightning-30b-a3b/recipes/h200-x1-tp1-ci-quick/benchmarks/guidellm-compat
+COMPAT_IMAGE=quay.io/rh-ee-thibrahi/inference-playbooks-guidellm:v0.7.4-transformers5.15.0
+podman build --squash-all -f "$COMPAT_DIR/Containerfile" \
+  --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
+  -t "$COMPAT_IMAGE" "$COMPAT_DIR"
+python3 tools/scan_runner_image.py "$COMPAT_IMAGE"
+```
+
+After a successful scan, publish to a repository you control and pass its
+immutable digest as `--harness-image` during preparation. The returned request
+and run retain that exact image reference. The source commit label and pinned
+base/build inputs preserve provenance even though the runtime layers are
+flattened.
