@@ -1,0 +1,16 @@
+# Build from this directory. The base digest pins all unchanged dependencies.
+FROM ghcr.io/vllm-project/guidellm@sha256:15372f9f3f407366495470706b7a07f64addcce5d134a49cab64149b44ab1233
+
+LABEL org.opencontainers.image.source="https://github.com/openshift-psap/inference-playbooks" \
+      org.opencontainers.image.version="v0.7.4-transformers5.15.0" \
+      org.opencontainers.image.description="GuideLLM 0.7.4 with pinned Nemotron 3.5 tokenizer compatibility"
+
+USER 0:0
+COPY requirements.lock /tmp/nemotron35-guidellm-requirements.lock
+RUN python -m pip install --no-cache-dir --no-deps --only-binary=:all: --require-hashes \
+      -r /tmp/nemotron35-guidellm-requirements.lock && \
+    python -m pip check && \
+    python -c 'import importlib.metadata as m; assert m.version("guidellm") == "0.7.4"; assert m.version("transformers") == "5.15.0"; assert m.version("safetensors") == "0.8.0"'
+
+# Preserve the upstream runtime user, entrypoint, and command.
+USER 1001:0

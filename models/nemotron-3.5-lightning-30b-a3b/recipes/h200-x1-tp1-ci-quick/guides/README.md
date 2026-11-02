@@ -33,3 +33,20 @@ Use the packaged monitor while the attempt runs, then validate and review the
 returned archive before applying it. Imported `benchmark_runs` references are
 the evidence index; do not copy metrics into this guide or promote maturity
 based on `ci-quick` alone.
+
+## Benchmark-client compatibility
+
+The public GuideLLM 0.7.4 and 0.8.1 images inspected for this smoke contain
+Transformers 5.10.1. That version rejects this checkpoint's `full_attention` /
+`linear_attention` layer types during tokenizer loading, even though vLLM can
+serve the model. The failed attempt is not performance evidence.
+
+The [compatibility image](../benchmarks/guidellm-compat/Containerfile) preserves
+the audited GuideLLM 0.7.4 base digest and changes only Transformers to 5.15.0
+and its required Safetensors dependency to 0.8.0. The replacement wheels are
+hash-locked; `pip check` verifies the complete installed environment. No model
+files are rewritten, and nothing is installed dynamically in benchmark Jobs.
+
+Build the image from `benchmarks/guidellm-compat/`, scan it before publication,
+then pass its published immutable digest as `--harness-image` during preparation.
+The returned request and run retain that exact image reference.

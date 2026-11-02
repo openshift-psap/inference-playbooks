@@ -1,0 +1,4 @@
+# Only these two packages change; the immutable base pins all other dependencies.
+# Compile with --no-deps; the container build runs pip check against the full base.
+transformers==5.15.0
+safetensors==0.8.0
