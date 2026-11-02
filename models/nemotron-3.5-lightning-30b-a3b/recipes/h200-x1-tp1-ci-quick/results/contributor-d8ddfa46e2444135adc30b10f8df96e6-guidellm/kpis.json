@@ -1,0 +1,692 @@
+{
+  "schema_version": "2",
+  "tests": [
+    {
+      "run_id": "001__inference_playbooks_test_dir/002__benchmark_ci-quick",
+      "labels": {
+        "phase": "benchmark",
+        "model_name": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+        "product_version": "v0.31.0",
+        "deployment_profile": "tp1",
+        "guidellm_loadshape": "ci-quick",
+        "gpu_type": "NVIDIA-H200",
+        "platform": "OCP",
+        "test_harness": "forge-inference-playbooks",
+        "benchmark_key": "ci-quick",
+        "benchmark_tool": "guidellm",
+        "served_model": "RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8",
+        "quantization": "FP8",
+        "cluster": "portable-contributor",
+        "guidellm_version": "0.7.4",
+        "prompt_toks": "1000",
+        "output_toks": "1000",
+        "turns": "1",
+        "prefix_tokens": "",
+        "prefix_count": "",
+        "request_type": "/v1/chat/completions",
+        "guidellm_start_time_ms": "1793642842897",
+        "guidellm_end_time_ms": "1793643017577",
+        "runtime_args": "",
+        "mlflow_run_id": "",
+        "mlflow_experiment_id": ""
+      },
+      "metadata": {
+        "timestamp": "2026-11-02T18:10:39Z",
+        "run_id": "001__inference_playbooks_test_dir/002__benchmark_ci-quick"
+      },
+      "kpis": [
+        {
+          "kpi_id": "playbooks_output_tok_per_sec",
+          "values": [
+            [
+              1.0,
+              18.72658891142664
+            ],
+            [
+              5.0,
+              125.4425944669365
+            ]
+          ],
+          "name": "playbooks_output_tok_per_sec",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: output_tok_per_sec",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens/s",
+          "y_help": "Performance metric: output_tok_per_sec"
+        },
+        {
+          "kpi_id": "playbooks_total_tok_per_sec",
+          "values": [
+            [
+              1.0,
+              52.593255578093306
+            ],
+            [
+              5.0,
+              294.77592780027044
+            ]
+          ],
+          "name": "playbooks_total_tok_per_sec",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: total_tok_per_sec",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens/s",
+          "y_help": "Performance metric: total_tok_per_sec"
+        },
+        {
+          "kpi_id": "playbooks_measured_concurrency",
+          "values": [
+            [
+              1.0,
+              0.999972395102183
+            ],
+            [
+              5.0,
+              4.999779884020487
+            ]
+          ],
+          "name": "playbooks_measured_concurrency",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: measured_concurrency",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "count",
+          "y_help": "Performance metric: measured_concurrency"
+        },
+        {
+          "kpi_id": "playbooks_measured_rps",
+          "values": [
+            [
+              1.0,
+              0.016666666666666666
+            ],
+            [
+              5.0,
+              0.08333333333333333
+            ]
+          ],
+          "name": "playbooks_measured_rps",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: measured_rps",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "req/s",
+          "y_help": "Performance metric: measured_rps"
+        },
+        {
+          "kpi_id": "playbooks_intended_concurrency",
+          "values": [
+            [
+              1.0,
+              1.0
+            ],
+            [
+              5.0,
+              5.0
+            ]
+          ],
+          "name": "playbooks_intended_concurrency",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: intended_concurrency",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "count",
+          "y_help": "Performance metric: intended_concurrency"
+        },
+        {
+          "kpi_id": "playbooks_completed_requests",
+          "values": [
+            [
+              1.0,
+              2.0
+            ],
+            [
+              5.0,
+              10.0
+            ]
+          ],
+          "name": "playbooks_completed_requests",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: completed_requests",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "count",
+          "y_help": "Performance metric: completed_requests"
+        },
+        {
+          "kpi_id": "playbooks_failed_requests",
+          "values": [
+            [
+              1.0,
+              0.0
+            ],
+            [
+              5.0,
+              0.0
+            ]
+          ],
+          "name": "playbooks_failed_requests",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: failed_requests",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "count",
+          "y_help": "Performance metric: failed_requests"
+        },
+        {
+          "kpi_id": "playbooks_ttft_median",
+          "values": [
+            [
+              1.0,
+              0.09858489036560059
+            ],
+            [
+              5.0,
+              0.16530084609985352
+            ]
+          ],
+          "name": "playbooks_ttft_median",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_median",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_median"
+        },
+        {
+          "kpi_id": "playbooks_ttft_p95",
+          "values": [
+            [
+              1.0,
+              16.743669748306274
+            ],
+            [
+              5.0,
+              0.5598642826080322
+            ]
+          ],
+          "name": "playbooks_ttft_p95",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_p95",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_p95"
+        },
+        {
+          "kpi_id": "playbooks_ttft_p99",
+          "values": [
+            [
+              1.0,
+              16.743669748306274
+            ],
+            [
+              5.0,
+              0.5598642826080322
+            ]
+          ],
+          "name": "playbooks_ttft_p99",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_p99"
+        },
+        {
+          "kpi_id": "playbooks_ttft_p1",
+          "values": [
+            [
+              1.0,
+              0.09858489036560059
+            ],
+            [
+              5.0,
+              0.12302732467651367
+            ]
+          ],
+          "name": "playbooks_ttft_p1",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_p1",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_p1"
+        },
+        {
+          "kpi_id": "playbooks_ttft_p999",
+          "values": [
+            [
+              1.0,
+              16.743669748306274
+            ],
+            [
+              5.0,
+              0.5598642826080322
+            ]
+          ],
+          "name": "playbooks_ttft_p999",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_p999",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_p999"
+        },
+        {
+          "kpi_id": "playbooks_ttft_mean",
+          "values": [
+            [
+              1.0,
+              8.421127319335938
+            ],
+            [
+              5.0,
+              0.3417771339416504
+            ]
+          ],
+          "name": "playbooks_ttft_mean",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: ttft_mean",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: ttft_mean"
+        },
+        {
+          "kpi_id": "playbooks_tpot_median",
+          "values": [
+            [
+              1.0,
+              0.03840372514724731
+            ],
+            [
+              5.0,
+              0.03966024017333984
+            ]
+          ],
+          "name": "playbooks_tpot_median",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_median",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_median"
+        },
+        {
+          "kpi_id": "playbooks_tpot_p95",
+          "values": [
+            [
+              1.0,
+              0.05518565392494202
+            ],
+            [
+              5.0,
+              0.039879217386245724
+            ]
+          ],
+          "name": "playbooks_tpot_p95",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_p95",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_p95"
+        },
+        {
+          "kpi_id": "playbooks_tpot_p99",
+          "values": [
+            [
+              1.0,
+              0.05518565392494202
+            ],
+            [
+              5.0,
+              0.039879217386245724
+            ]
+          ],
+          "name": "playbooks_tpot_p99",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_p99"
+        },
+        {
+          "kpi_id": "playbooks_tpot_p1",
+          "values": [
+            [
+              1.0,
+              0.03840372514724731
+            ],
+            [
+              5.0,
+              0.039658303260803225
+            ]
+          ],
+          "name": "playbooks_tpot_p1",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_p1",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_p1"
+        },
+        {
+          "kpi_id": "playbooks_tpot_p999",
+          "values": [
+            [
+              1.0,
+              0.05518565392494202
+            ],
+            [
+              5.0,
+              0.039879217386245724
+            ]
+          ],
+          "name": "playbooks_tpot_p999",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: tpot_p999",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: tpot_p999"
+        },
+        {
+          "kpi_id": "playbooks_itl_median",
+          "values": [
+            [
+              1.0,
+              0.03834348374062234
+            ],
+            [
+              5.0,
+              0.03951911191205243
+            ]
+          ],
+          "name": "playbooks_itl_median",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_median",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_median"
+        },
+        {
+          "kpi_id": "playbooks_itl_p95",
+          "values": [
+            [
+              1.0,
+              0.03848046464127702
+            ],
+            [
+              5.0,
+              0.03957531688449619
+            ]
+          ],
+          "name": "playbooks_itl_p95",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_p95",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_p95"
+        },
+        {
+          "kpi_id": "playbooks_itl_p99",
+          "values": [
+            [
+              1.0,
+              0.03848046464127702
+            ],
+            [
+              5.0,
+              0.03957531688449619
+            ]
+          ],
+          "name": "playbooks_itl_p99",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_p99"
+        },
+        {
+          "kpi_id": "playbooks_itl_p1",
+          "values": [
+            [
+              1.0,
+              0.03834348374062234
+            ],
+            [
+              5.0,
+              0.039358687949729514
+            ]
+          ],
+          "name": "playbooks_itl_p1",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_p1",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_p1"
+        },
+        {
+          "kpi_id": "playbooks_itl_p999",
+          "values": [
+            [
+              1.0,
+              0.03848046464127702
+            ],
+            [
+              5.0,
+              0.03957531688449619
+            ]
+          ],
+          "name": "playbooks_itl_p999",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_p999",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_p999"
+        },
+        {
+          "kpi_id": "playbooks_itl_mean",
+          "values": [
+            [
+              1.0,
+              0.03841197419094968
+            ],
+            [
+              5.0,
+              0.03946680662271616
+            ]
+          ],
+          "name": "playbooks_itl_mean",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: itl_mean",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: itl_mean"
+        },
+        {
+          "kpi_id": "playbooks_request_latency_median",
+          "values": [
+            [
+              1.0,
+              38.40397572517395
+            ],
+            [
+              5.0,
+              39.66047191619873
+            ]
+          ],
+          "name": "playbooks_request_latency_median",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: request_latency_median",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: request_latency_median"
+        },
+        {
+          "kpi_id": "playbooks_request_latency_min",
+          "values": [
+            [
+              1.0,
+              38.40397572517395
+            ],
+            [
+              5.0,
+              39.65859937667847
+            ]
+          ],
+          "name": "playbooks_request_latency_min",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: request_latency_min",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: request_latency_min"
+        },
+        {
+          "kpi_id": "playbooks_request_latency_max",
+          "values": [
+            [
+              1.0,
+              55.18598508834839
+            ],
+            [
+              5.0,
+              39.87959694862366
+            ]
+          ],
+          "name": "playbooks_request_latency_max",
+          "higher_is_better": false,
+          "is_curve": true,
+          "help": "Dashboard curve metric: request_latency_max",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "s",
+          "y_help": "Performance metric: request_latency_max"
+        },
+        {
+          "kpi_id": "playbooks_prompt_token_count_mean",
+          "values": [
+            [
+              1.0,
+              1016.0
+            ],
+            [
+              5.0,
+              1016.0
+            ]
+          ],
+          "name": "playbooks_prompt_token_count_mean",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: prompt_token_count_mean",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens",
+          "y_help": "Performance metric: prompt_token_count_mean"
+        },
+        {
+          "kpi_id": "playbooks_prompt_token_count_p99",
+          "values": [
+            [
+              1.0,
+              1016.0
+            ],
+            [
+              5.0,
+              1016.0
+            ]
+          ],
+          "name": "playbooks_prompt_token_count_p99",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: prompt_token_count_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens",
+          "y_help": "Performance metric: prompt_token_count_p99"
+        },
+        {
+          "kpi_id": "playbooks_output_token_count_mean",
+          "values": [
+            [
+              1.0,
+              1000.0
+            ],
+            [
+              5.0,
+              1000.0
+            ]
+          ],
+          "name": "playbooks_output_token_count_mean",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: output_token_count_mean",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens",
+          "y_help": "Performance metric: output_token_count_mean"
+        },
+        {
+          "kpi_id": "playbooks_output_token_count_p99",
+          "values": [
+            [
+              1.0,
+              1000.0
+            ],
+            [
+              5.0,
+              1000.0
+            ]
+          ],
+          "name": "playbooks_output_token_count_p99",
+          "higher_is_better": true,
+          "is_curve": true,
+          "help": "Dashboard curve metric: output_token_count_p99",
+          "x_unit": "rps",
+          "x_help": "Request rate (concurrency)",
+          "y_unit": "tokens",
+          "y_help": "Performance metric: output_token_count_p99"
+        }
+      ]
+    }
+  ]
+}

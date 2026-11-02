@@ -1,0 +1,46 @@
+schema_version: 2
+evidence_source: contributor-forge
+run_id: contributor-d8ddfa46e2444135adc30b10f8df96e6-guidellm
+recipe_id: nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick
+deployment_scope: single-node
+hardware_profile: hardware-profiles/nvidia-h200-sxm-8x-nvlink-r1.yaml
+hardware_profile_revision: 1
+platform: &id001
+  stack: vllm
+  version: v0.31.0
+harness: guidellm
+result: result.json
+command: python /opt/forge/projects/inference_playbooks/orchestration/cli.py test
+workload:
+  key: ci-quick
+  harness: guidellm
+  definition:
+    data: prompt_tokens=1000,output_tokens=1000
+    rates:
+    - 1
+    - 5
+    max_seconds: 60
+environment:
+  model_revision: bff279eb543e15f7c0e3f922661e66a1b78ac2e0
+  image_digest: sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b
+  platform: *id001
+  validation_origin: contributor
+  qualification: Contributor-controlled execution; not independent validation.
+contributor:
+  bundle_checksum: sha256:25992652cde7c47c93a70d33dbb7b8c4c0e086a618a6ddb5bc1cdb3e25906b89
+  request_checksum: sha256:cd48c4b0eeb46205ea71345bb442d2ce9b7a13fe97ce8ab8ef65eaae1e9c5574
+  runtime_checksum: sha256:8ec8b5870a3bba50d7620177a6e2f25d519dd659c4b1b6b1d3226f7ca831e850
+  kpis_checksum: sha256:6aaeb2306afda8c6cc1f32727b26930c702e7fadf8209c5e602b17572c2afed9
+artifacts:
+- type: raw-output
+  path: kpis.json
+  checksum: sha256:6aaeb2306afda8c6cc1f32727b26930c702e7fadf8209c5e602b17572c2afed9
+- type: harness-config
+  path: request.json
+  checksum: sha256:cd48c4b0eeb46205ea71345bb442d2ce9b7a13fe97ce8ab8ef65eaae1e9c5574
+- type: other
+  path: runtime.json
+  checksum: sha256:8ec8b5870a3bba50d7620177a6e2f25d519dd659c4b1b6b1d3226f7ca831e850
+- type: raw-output
+  path: raw-harness-0.json
+  checksum: sha256:c6e360fd7e725c63e8a1fd24ed5d7c37a8e71f2ec37e02a99932350cdf005048

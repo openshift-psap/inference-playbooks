@@ -1,0 +1,729 @@
+{
+  "command": "python /opt/forge/projects/inference_playbooks/orchestration/cli.py test",
+  "environment": {
+    "qualification": "Observed capacity, not exclusive reservation or topology proof.",
+    "visible_nodes": [
+      {
+        "gpu_count": "8",
+        "labels": {
+          "kubernetes.io/arch": "amd64"
+        },
+        "node_info": {
+          "containerRuntimeVersion": "cri-o://1.34.6-2.rhaos4.21.gitbca534a.el9",
+          "kernelVersion": "5.14.0-570.99.1.el9_6.x86_64",
+          "kubeletVersion": "v1.34.5",
+          "osImage": "Red Hat Enterprise Linux CoreOS 9.6.20260318-0 (Plow)"
+        }
+      },
+      {
+        "gpu_count": "8",
+        "labels": {
+          "kubernetes.io/arch": "amd64"
+        },
+        "node_info": {
+          "containerRuntimeVersion": "cri-o://1.34.6-2.rhaos4.21.gitbca534a.el9",
+          "kernelVersion": "5.14.0-570.99.1.el9_6.x86_64",
+          "kubeletVersion": "v1.34.5",
+          "osImage": "Red Hat Enterprise Linux CoreOS 9.6.20260318-0 (Plow)"
+        }
+      },
+      {
+        "gpu_count": null,
+        "labels": {
+          "kubernetes.io/arch": "amd64"
+        },
+        "node_info": {
+          "containerRuntimeVersion": "cri-o://1.34.6-2.rhaos4.21.gitbca534a.el9",
+          "kernelVersion": "5.14.0-570.107.1.el9_6.x86_64",
+          "kubeletVersion": "v1.34.6",
+          "osImage": "Red Hat Enterprise Linux CoreOS 9.6.20260414-0 (Plow)"
+        }
+      },
+      {
+        "gpu_count": null,
+        "labels": {
+          "kubernetes.io/arch": "amd64"
+        },
+        "node_info": {
+          "containerRuntimeVersion": "cri-o://1.34.6-2.rhaos4.21.gitbca534a.el9",
+          "kernelVersion": "5.14.0-570.107.1.el9_6.x86_64",
+          "kubeletVersion": "v1.34.6",
+          "osImage": "Red Hat Enterprise Linux CoreOS 9.6.20260414-0 (Plow)"
+        }
+      },
+      {
+        "gpu_count": null,
+        "labels": {
+          "kubernetes.io/arch": "amd64"
+        },
+        "node_info": {
+          "containerRuntimeVersion": "cri-o://1.34.6-2.rhaos4.21.gitbca534a.el9",
+          "kernelVersion": "5.14.0-570.107.1.el9_6.x86_64",
+          "kubeletVersion": "v1.34.6",
+          "osImage": "Red Hat Enterprise Linux CoreOS 9.6.20260414-0 (Plow)"
+        }
+      },
+      {
+        "gpu_count": null,
+        "labels": {
+          "kubernetes.io/arch": "amd64"
+        },
+        "node_info": {
+          "containerRuntimeVersion": "cri-o://1.34.6-2.rhaos4.21.gitbca534a.el9",
+          "kernelVersion": "5.14.0-570.99.1.el9_6.x86_64",
+          "kubeletVersion": "v1.34.5",
+          "osImage": "Red Hat Enterprise Linux CoreOS 9.6.20260318-0 (Plow)"
+        }
+      },
+      {
+        "gpu_count": null,
+        "labels": {
+          "kubernetes.io/arch": "amd64"
+        },
+        "node_info": {
+          "containerRuntimeVersion": "cri-o://1.34.6-2.rhaos4.21.gitbca534a.el9",
+          "kernelVersion": "5.14.0-570.99.1.el9_6.x86_64",
+          "kubeletVersion": "v1.34.5",
+          "osImage": "Red Hat Enterprise Linux CoreOS 9.6.20260318-0 (Plow)"
+        }
+      },
+      {
+        "gpu_count": null,
+        "labels": {
+          "kubernetes.io/arch": "amd64"
+        },
+        "node_info": {
+          "containerRuntimeVersion": "cri-o://1.34.6-2.rhaos4.21.gitbca534a.el9",
+          "kernelVersion": "5.14.0-570.99.1.el9_6.x86_64",
+          "kubeletVersion": "v1.34.5",
+          "osImage": "Red Hat Enterprise Linux CoreOS 9.6.20260318-0 (Plow)"
+        }
+      }
+    ]
+  },
+  "harness_invocation": {
+    "fs_group": null,
+    "guidellm_args": [
+      "--backend-type=openai_http",
+      "--output-dir=/results",
+      "--outputs=json",
+      "--rate-type=concurrent",
+      "--data=prompt_tokens=1000,output_tokens=1000",
+      "--max-seconds=60",
+      "--processor=RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8",
+      "--rate=1,5"
+    ],
+    "hf_token_secret": "",
+    "image": "quay.io/rh-ee-thibrahi/inference-playbooks-guidellm@sha256:c1a66d1131dee8852d87c9383ebc2dddb27d2ec730953b967b82c9976c7a0d22",
+    "pvc_size": "10Gi",
+    "timeout": 14400
+  },
+  "input_transport": "checksummed-snapshot",
+  "launch": {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "name": "nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick"
+    },
+    "spec": {
+      "progressDeadlineSeconds": 1800,
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/name": "nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick"
+        }
+      },
+      "template": {
+        "metadata": {
+          "annotations": {
+            "openshift.io/required-scc": "restricted-v2"
+          },
+          "labels": {
+            "app.kubernetes.io/name": "nemotron-35-lightning-30b-a3b-h200-tp1-ci-quick"
+          }
+        },
+        "spec": {
+          "containers": [
+            {
+              "args": [
+                "RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8",
+                "--served-model-name=RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8",
+                "--revision=bff279eb543e15f7c0e3f922661e66a1b78ac2e0",
+                "--max-model-len=16384",
+                "--max-num-seqs=16",
+                "--gpu-memory-utilization=0.85",
+                "--enforce-eager",
+                "--mamba-backend=flashinfer"
+              ],
+              "command": [
+                "/bin/bash",
+                "-c",
+                "vllm serve \"$@\"\n",
+                "--"
+              ],
+              "env": [
+                {
+                  "name": "HOME",
+                  "value": "/tmp"
+                },
+                {
+                  "name": "HF_HOME",
+                  "value": "/home/nobody/.cache/huggingface"
+                },
+                {
+                  "name": "XDG_CACHE_HOME",
+                  "value": "/home/nobody/.cache"
+                },
+                {
+                  "name": "VLLM_CACHE_ROOT",
+                  "value": "/home/nobody/.cache/vllm"
+                },
+                {
+                  "name": "TRITON_CACHE_DIR",
+                  "value": "/home/nobody/.cache/triton"
+                }
+              ],
+              "image": "docker.io/vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3",
+              "livenessProbe": {
+                "failureThreshold": 5,
+                "httpGet": {
+                  "path": "/health",
+                  "port": 8000
+                },
+                "periodSeconds": 30,
+                "timeoutSeconds": 10
+              },
+              "name": "vllm",
+              "ports": [
+                {
+                  "containerPort": 8000,
+                  "name": "http",
+                  "protocol": "TCP"
+                }
+              ],
+              "readinessProbe": {
+                "httpGet": {
+                  "path": "/health",
+                  "port": 8000
+                },
+                "periodSeconds": 10,
+                "timeoutSeconds": 5
+              },
+              "resources": {
+                "limits": {
+                  "cpu": "8",
+                  "ephemeral-storage": "100Gi",
+                  "memory": "128Gi",
+                  "nvidia.com/gpu": "1"
+                },
+                "requests": {
+                  "cpu": "8",
+                  "ephemeral-storage": "40Gi",
+                  "memory": "64Gi",
+                  "nvidia.com/gpu": "1"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "startupProbe": {
+                "failureThreshold": 60,
+                "httpGet": {
+                  "path": "/health",
+                  "port": 8000
+                },
+                "periodSeconds": 30
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/home/nobody/.cache",
+                  "name": "hf-cache"
+                },
+                {
+                  "mountPath": "/tmp",
+                  "name": "tmp"
+                }
+              ]
+            }
+          ],
+          "securityContext": {
+            "runAsNonRoot": true,
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "volumes": [
+            {
+              "emptyDir": {},
+              "name": "hf-cache"
+            },
+            {
+              "emptyDir": {},
+              "name": "tmp"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "native_exports": [
+    {
+      "export_checksum": "sha256:c6e360fd7e725c63e8a1fd24ed5d7c37a8e71f2ec37e02a99932350cdf005048",
+      "original_checksum": "sha256:ba600da8699fab7df668cb17278fd10e1a0fd446cf38f1a09639a5f6a8935a01",
+      "path": "raw/harness-0.json",
+      "redacted_fields": [
+        "/benchmarks/0/config/backend/api_key",
+        "/benchmarks/0/config/backend/target",
+        "/benchmarks/1/config/backend/api_key",
+        "/benchmarks/1/config/backend/target",
+        "/config/spec/backend/api_key",
+        "/config/spec/backend/target"
+      ]
+    }
+  ],
+  "pods_after": {
+    "items": [
+      {
+        "kind": "Pod",
+        "spec": {
+          "containers": [
+            {
+              "args": [
+                "RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8",
+                "--served-model-name=RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8",
+                "--revision=bff279eb543e15f7c0e3f922661e66a1b78ac2e0",
+                "--max-model-len=16384",
+                "--max-num-seqs=16",
+                "--gpu-memory-utilization=0.85",
+                "--enforce-eager",
+                "--mamba-backend=flashinfer"
+              ],
+              "command": [
+                "/bin/bash",
+                "-c",
+                "vllm serve \"$@\"\n",
+                "--"
+              ],
+              "env": [
+                {
+                  "name": "HOME",
+                  "value": "/tmp"
+                },
+                {
+                  "name": "HF_HOME",
+                  "value": "/home/nobody/.cache/huggingface"
+                },
+                {
+                  "name": "XDG_CACHE_HOME",
+                  "value": "/home/nobody/.cache"
+                },
+                {
+                  "name": "VLLM_CACHE_ROOT",
+                  "value": "/home/nobody/.cache/vllm"
+                },
+                {
+                  "name": "TRITON_CACHE_DIR",
+                  "value": "/home/nobody/.cache/triton"
+                }
+              ],
+              "image": "docker.io/vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3",
+              "imagePullPolicy": "IfNotPresent",
+              "livenessProbe": {
+                "failureThreshold": 5,
+                "httpGet": {
+                  "path": "/health",
+                  "port": 8000,
+                  "scheme": "HTTP"
+                },
+                "periodSeconds": 30,
+                "successThreshold": 1,
+                "timeoutSeconds": 10
+              },
+              "name": "vllm",
+              "ports": [
+                {
+                  "containerPort": 8000,
+                  "name": "http",
+                  "protocol": "TCP"
+                }
+              ],
+              "readinessProbe": {
+                "failureThreshold": 3,
+                "httpGet": {
+                  "path": "/health",
+                  "port": 8000,
+                  "scheme": "HTTP"
+                },
+                "periodSeconds": 10,
+                "successThreshold": 1,
+                "timeoutSeconds": 5
+              },
+              "resources": {
+                "limits": {
+                  "cpu": "8",
+                  "ephemeral-storage": "100Gi",
+                  "memory": "128Gi",
+                  "nvidia.com/gpu": "1"
+                },
+                "requests": {
+                  "cpu": "8",
+                  "ephemeral-storage": "40Gi",
+                  "memory": "64Gi",
+                  "nvidia.com/gpu": "1"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "runAsUser": 1001400000
+              },
+              "startupProbe": {
+                "failureThreshold": 60,
+                "httpGet": {
+                  "path": "/health",
+                  "port": 8000,
+                  "scheme": "HTTP"
+                },
+                "periodSeconds": 30,
+                "successThreshold": 1,
+                "timeoutSeconds": 1
+              },
+              "terminationMessagePath": "/dev/termination-log",
+              "terminationMessagePolicy": "File",
+              "volumeMounts": [
+                {
+                  "mountPath": "/home/nobody/.cache",
+                  "name": "hf-cache"
+                },
+                {
+                  "mountPath": "/tmp",
+                  "name": "tmp"
+                },
+                {
+                  "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                  "name": "kube-api-access-57lcq",
+                  "readOnly": true
+                }
+              ]
+            }
+          ],
+          "securityContext": {
+            "fsGroup": 1001400000,
+            "runAsNonRoot": true,
+            "seLinuxOptions": {
+              "level": "s0:c37,c34"
+            },
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "serviceAccountName": "default",
+          "volumes": [
+            {
+              "emptyDir": {},
+              "name": "hf-cache"
+            },
+            {
+              "emptyDir": {},
+              "name": "tmp"
+            },
+            {
+              "name": "kube-api-access-57lcq",
+              "projected": {
+                "defaultMode": 420,
+                "sources": [
+                  {
+                    "serviceAccountToken": {
+                      "expirationSeconds": 3607,
+                      "path": "token"
+                    }
+                  },
+                  {
+                    "configMap": {
+                      "items": [
+                        {
+                          "key": "ca.crt",
+                          "path": "ca.crt"
+                        }
+                      ],
+                      "name": "kube-root-ca.crt"
+                    }
+                  },
+                  {
+                    "downwardAPI": {
+                      "items": [
+                        {
+                          "fieldRef": {
+                            "apiVersion": "v1",
+                            "fieldPath": "metadata.namespace"
+                          },
+                          "path": "namespace"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "configMap": {
+                      "items": [
+                        {
+                          "key": "service-ca.crt",
+                          "path": "service-ca.crt"
+                        }
+                      ],
+                      "name": "openshift-service-ca.crt"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "status": {
+          "containerStatuses": [
+            {
+              "imageID": "docker.io/vllm/vllm-openai@sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b",
+              "name": "vllm",
+              "ready": true
+            }
+          ]
+        }
+      }
+    ],
+    "kind": "List"
+  },
+  "pods_before": {
+    "items": [
+      {
+        "kind": "Pod",
+        "spec": {
+          "containers": [
+            {
+              "args": [
+                "RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8",
+                "--served-model-name=RedHatAI/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-FP8",
+                "--revision=bff279eb543e15f7c0e3f922661e66a1b78ac2e0",
+                "--max-model-len=16384",
+                "--max-num-seqs=16",
+                "--gpu-memory-utilization=0.85",
+                "--enforce-eager",
+                "--mamba-backend=flashinfer"
+              ],
+              "command": [
+                "/bin/bash",
+                "-c",
+                "vllm serve \"$@\"\n",
+                "--"
+              ],
+              "env": [
+                {
+                  "name": "HOME",
+                  "value": "/tmp"
+                },
+                {
+                  "name": "HF_HOME",
+                  "value": "/home/nobody/.cache/huggingface"
+                },
+                {
+                  "name": "XDG_CACHE_HOME",
+                  "value": "/home/nobody/.cache"
+                },
+                {
+                  "name": "VLLM_CACHE_ROOT",
+                  "value": "/home/nobody/.cache/vllm"
+                },
+                {
+                  "name": "TRITON_CACHE_DIR",
+                  "value": "/home/nobody/.cache/triton"
+                }
+              ],
+              "image": "docker.io/vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3",
+              "imagePullPolicy": "IfNotPresent",
+              "livenessProbe": {
+                "failureThreshold": 5,
+                "httpGet": {
+                  "path": "/health",
+                  "port": 8000,
+                  "scheme": "HTTP"
+                },
+                "periodSeconds": 30,
+                "successThreshold": 1,
+                "timeoutSeconds": 10
+              },
+              "name": "vllm",
+              "ports": [
+                {
+                  "containerPort": 8000,
+                  "name": "http",
+                  "protocol": "TCP"
+                }
+              ],
+              "readinessProbe": {
+                "failureThreshold": 3,
+                "httpGet": {
+                  "path": "/health",
+                  "port": 8000,
+                  "scheme": "HTTP"
+                },
+                "periodSeconds": 10,
+                "successThreshold": 1,
+                "timeoutSeconds": 5
+              },
+              "resources": {
+                "limits": {
+                  "cpu": "8",
+                  "ephemeral-storage": "100Gi",
+                  "memory": "128Gi",
+                  "nvidia.com/gpu": "1"
+                },
+                "requests": {
+                  "cpu": "8",
+                  "ephemeral-storage": "40Gi",
+                  "memory": "64Gi",
+                  "nvidia.com/gpu": "1"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "runAsUser": 1001400000
+              },
+              "startupProbe": {
+                "failureThreshold": 60,
+                "httpGet": {
+                  "path": "/health",
+                  "port": 8000,
+                  "scheme": "HTTP"
+                },
+                "periodSeconds": 30,
+                "successThreshold": 1,
+                "timeoutSeconds": 1
+              },
+              "terminationMessagePath": "/dev/termination-log",
+              "terminationMessagePolicy": "File",
+              "volumeMounts": [
+                {
+                  "mountPath": "/home/nobody/.cache",
+                  "name": "hf-cache"
+                },
+                {
+                  "mountPath": "/tmp",
+                  "name": "tmp"
+                },
+                {
+                  "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                  "name": "kube-api-access-57lcq",
+                  "readOnly": true
+                }
+              ]
+            }
+          ],
+          "securityContext": {
+            "fsGroup": 1001400000,
+            "runAsNonRoot": true,
+            "seLinuxOptions": {
+              "level": "s0:c37,c34"
+            },
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "serviceAccountName": "default",
+          "volumes": [
+            {
+              "emptyDir": {},
+              "name": "hf-cache"
+            },
+            {
+              "emptyDir": {},
+              "name": "tmp"
+            },
+            {
+              "name": "kube-api-access-57lcq",
+              "projected": {
+                "defaultMode": 420,
+                "sources": [
+                  {
+                    "serviceAccountToken": {
+                      "expirationSeconds": 3607,
+                      "path": "token"
+                    }
+                  },
+                  {
+                    "configMap": {
+                      "items": [
+                        {
+                          "key": "ca.crt",
+                          "path": "ca.crt"
+                        }
+                      ],
+                      "name": "kube-root-ca.crt"
+                    }
+                  },
+                  {
+                    "downwardAPI": {
+                      "items": [
+                        {
+                          "fieldRef": {
+                            "apiVersion": "v1",
+                            "fieldPath": "metadata.namespace"
+                          },
+                          "path": "namespace"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "configMap": {
+                      "items": [
+                        {
+                          "key": "service-ca.crt",
+                          "path": "service-ca.crt"
+                        }
+                      ],
+                      "name": "openshift-service-ca.crt"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "status": {
+          "containerStatuses": [
+            {
+              "imageID": "docker.io/vllm/vllm-openai@sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b",
+              "name": "vllm",
+              "ready": true
+            }
+          ]
+        }
+      }
+    ],
+    "kind": "List"
+  },
+  "uid_admission": [
+    {
+      "admitted_uids": {
+        "vllm": 1001400000
+      },
+      "authored_uid": null,
+      "mode": "preserve",
+      "probe_identity": "caller; actual controller admission rechecked before benchmark",
+      "role": "template",
+      "service_account": "default"
+    }
+  ]
+}

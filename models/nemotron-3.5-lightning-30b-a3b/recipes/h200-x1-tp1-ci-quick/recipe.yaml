@@ -67,3 +67,5 @@ serving:
       why: Follow the checkpoint model card's recommended Mamba backend.
 deployment:
   scope: single-node
+benchmark_runs:
+- results/contributor-d8ddfa46e2444135adc30b10f8df96e6-guidellm/run.yaml
