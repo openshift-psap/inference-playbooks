@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 import jsonschema
 import yaml
 
-from contributor_bundle import (FORGE_REVISION, WORKLOADS, checksum, json_bytes, json_load, portable_manifest,
+from contributor_bundle import (NAMESPACE_ONLY_FORGE_REVISIONS, WORKLOADS, checksum, json_bytes, json_load, portable_manifest,
                                 read_archive, replay, runtime_identity, shareable, validate_harness_invocation)
 from fetch_forge_evidence import append_reference, checked_path, tested_inputs
 from forge_serving_contract import validate_launch
@@ -48,7 +48,7 @@ def validate_evidence(repo: Path, request: dict, files: dict, *, historical=Fals
         raise ValueError('serving kind differs from selected platform')
     if not isinstance(runtime['uid_admission'], list):
         raise ValueError('UID admission decisions must be a list')
-    if request['forge_revision'] == FORGE_REVISION:
+    if request['forge_revision'] in NAMESPACE_ONLY_FORGE_REVISIONS:
         expected_launch = portable_manifest(request, files)
         expected_launch['metadata'] = {'name': expected_launch['metadata']['name']}
         if (runtime['launch'] != expected_launch

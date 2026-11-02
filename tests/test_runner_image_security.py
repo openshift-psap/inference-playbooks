@@ -105,6 +105,7 @@ def test_ci_secret_gate_runs_after_build_and_before_smoke_without_publication():
     assert not any('push' in step.get('run', '') or 'secrets.' in str(step) for step in steps)
     assert 'tests/test_runner_image_security.py' in steps[1]['run']
     assert 'tests/test_contributor_monitor.py' in steps[1]['run']
+    assert 'tests/contributor_guidellm_cleanup_smoke.py' in steps[smoke]['run']
     precommit = yaml.safe_load((REPO / '.pre-commit-config.yaml').read_text())
     hook = next(hook for repo in precommit['repos'] for hook in repo.get('hooks', [])
                 if hook['id'] == 'contributor-bundles')

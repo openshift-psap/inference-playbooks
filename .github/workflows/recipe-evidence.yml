@@ -34,6 +34,9 @@ jobs:
               -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro" \
               localhost/contributor-runner:ci /smoke.py
           done
+          docker run --rm --network none --entrypoint python \
+            -v "$PWD/tests/contributor_guidellm_cleanup_smoke.py:/cleanup-smoke.py:ro" \
+            localhost/contributor-runner:ci /cleanup-smoke.py
 
   hardware-profiles:
     runs-on: ubuntu-latest
