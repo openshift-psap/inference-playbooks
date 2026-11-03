@@ -1,0 +1,666 @@
+# Portable contributor benchmarks
+
+See the [Gemma/GuideLLM execution example](#contributor-benchmark-execution-example)
+for commands, configuration details, and troubleshooting.
+
+Contributors prepare a pinned recipe package themselves, run it on their own
+cluster, and return **two files**: `evidence.tar.gz` and
+`evidence.tar.gz.sha256`. Maintainers review and import the results; they do not
+need to prepare a package or run infrastructure for the contributor.
+
+Contributors need **no AWS, S3, MLflow, Prow/Fournos, or internal artifact access**.
+This is separate from [manually applying benchmark Jobs](../benchmarks/README.md).
+Related: [issue #62](https://github.com/openshift-psap/inference-playbooks/issues/62).
+
+## Contributor: prepare, run, and return evidence
+
+### 1. Prepare your package
+
+Start from a trusted checkout of this repository. Select a recipe and platform
+whose requirements match your cluster. The selected recipe and inputs must be
+rendered, validated, committed, and clean. Preparation does not deploy anything.
+If someone has already supplied a complete package, skip to step 2.
+
+Install the preparation dependencies in a local Python environment:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r tools/requirements.txt
+python3 tools/validate.py --current
+```
+
+The default runner is the published Linux AMD64 image
+**`quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2`**. You do not need to
+build or publish an image. Preparation reads the release's immutable digest from
+[`benchmarks/runner/release.json`](../benchmarks/runner/release.json), not from a
+moving tag. The launcher pulls that digest when you run the package; anonymous
+pulls are supported. No registry write credentials are needed.
+
+Set `HARNESS_IMAGE` to an audited compatible GuideLLM v0.7.4 or AIPerf 0.12.0 image
+by digest. The harness image must be pullable by your cluster. For the GuideLLM
+example, this is the Linux AMD64 v0.7.4 image used in
+the live smoke test:
+
+```sh
+HARNESS_IMAGE=ghcr.io/vllm-project/guidellm@sha256:15372f9f3f407366495470706b7a07f64addcce5d134a49cab64149b44ab1233
+PACKAGE_DIR="$HOME/playbooks-runs/gemma-package-001"
+python3 tools/prepare_contributor.py \
+  models/gemma-4/recipes/h200-x1-tp1-guidellm-8k1k/recipe.yaml \
+  --stack vllm --version v0.24.0 --workload guidellm-smoke \
+  --harness-image "$HARNESS_IMAGE" \
+  --output "$PACKAGE_DIR"
+```
+
+`guidellm-smoke` selects Forge's `ci-quick` plumbing check, not performance
+validation. For the full 8K/1K sweep, prepare a separate package with
+`--workload guidellm-8k1k`. The package directory must not already exist.
+
+Keep the **complete directory**: `run.sh`, `monitor.sh`, `monitor.py`,
+`request.json`, and `playbooks/`. Preserve the shell scripts' executable bits.
+The scripts are trusted checkout code; the returned evidence archive is data only.
+The request pins the tested commit, platform, workload, Forge revision, images,
+input checksums, and unique run ID. A package contains no Git checkout, credentials,
+model weights, or existing results. One package is one attempt.
+
+### 2. Check cluster prerequisites
+
+Review `request.json` and the selected manifest under `playbooks/`. Do not edit
+the generated package; make any necessary changes in the source checkout instead.
+
+- Use a Linux AMD64 machine with Podman or Docker and access to the runner image.
+- Provide a self-contained kubeconfig with embedded credentials/certificates and
+  an explicit context. External exec authentication plugins are unsupported.
+- Use an existing namespace with enough NVIDIA GPU capacity, required controllers,
+  image/model access, and any manifest-referenced Secrets or populated model PVCs.
+- Allow the cluster to reach the required image registries and model/tokenizer
+  downloads. Operators, permissions, storage, and network setup are prerequisites;
+  the runner does not install or repair them.
+- For GuideLLM, this pin uses shared emptyDir/sidecar result collection; no default
+  results-PVC storage class is needed. AIPerf creates a results PVC and needs
+  working default PVC provisioning. Model-storage requirements are separate.
+- Have the [cluster permissions listed below](#cluster-permissions). Preflight
+  checks are partial; passing them does not guarantee workload or collection access.
+
+**Gemma example below:** the serving manifest needs one H200 GPU and a Secret
+named `hf-token` with key `HF_TOKEN`. It uses the `default` service account and
+fixed non-root UID **65534**, which must be admissible in the target namespace.
+If these requirements cannot be met, correct the source recipe/configuration,
+render, validate, and commit the changes, then prepare a fresh package. Keep
+`runAsNonRoot: true`; do not rewrite packaged inputs or grant SCC privileges to
+make the test run. Include your source branch/commit or PR when returning evidence
+so reviewers can obtain the exact tested revision.
+
+The launcher mounts only the selected kubeconfig file read-only, not its parent
+directory or sibling credentials. Supply a dedicated, self-contained file with
+only the credentials you intend to expose; all contexts inside that file remain
+readable by the runner. On SELinux hosts, give the file a container-readable
+label. The launcher does not relabel it. The file must be readable by your
+container user.
+
+### 3. Run once
+
+Use the package path from step 1 (or the package you received), your kubeconfig,
+context, and namespace. The output directory must **not already exist**.
+
+```sh
+"$HOME/playbooks-runs/gemma-package-001/run.sh" \
+  /absolute/path/to/kubeconfig EXPLICIT_CONTEXT benchmark-namespace \
+  "$HOME/playbooks-runs/gemma-output-001"
+```
+
+Podman is preferred when both engines exist; set `CONTAINER_ENGINE=docker` to
+override. The launcher uses your UID, host networking, and inherited proxy
+variables. It does not mount your home directory or forward AWS credentials.
+The Forge test phase has a default six-hour timeout. Preflight, evidence collection,
+and packaging can take additional time.
+
+### 4. Monitor from another terminal (optional)
+
+The package includes a read-only monitor requiring only local **Python 3.9+**:
+
+```sh
+"$HOME/playbooks-runs/gemma-package-001/monitor.sh" \
+  "$HOME/playbooks-runs/gemma-output-001" --watch
+```
+
+Use the same output directory you passed to `run.sh`; it is where progress is
+written, not a new destination. Omit `--watch` for one snapshot. No kubeconfig,
+cluster CLI, credentials, or extra Python packages are needed for monitoring.
+Ctrl-C stops only the monitor, not the test.
+The monitor's exit status indicates whether monitoring worked, not whether the
+benchmark succeeded or its evidence was accepted.
+
+It shows the recorded phase, elapsed/stage time, latest native Forge task,
+last observed serving readiness, benchmark configuration, and final execution
+outcome. Readiness is an observation, not continuous health monitoring. Stage age
+is not a heartbeat, and no overall completion percentage is guessed. An abruptly
+killed runner can leave a stale snapshot; inspect its process/private logs then.
+A successful execution still needs separate maintainer import validation/review.
+
+### 5. Review and return the result
+
+```text
+gemma-output-001/
+  evidence.tar.gz
+  evidence.tar.gz.sha256
+  progress.json              # local status only; do not return this file
+  private-diagnostics/       # keep local; do not share this directory
+```
+
+**After privacy review, share only the archive and checksum sidecar** through
+your approved delivery channel. See [privacy and review](#privacy-and-review).
+
+For `run.sh`, exit code **0** means success; **1** means an unsuccessful attempt.
+The printed JSON and bundle `outcome` distinguish `failed`, `interrupted`, and
+`collection-failed`. Inspect `private-diagnostics/` locally on failure. Failed
+bundles are diagnostic-only and cannot be imported as successful evidence.
+Very early failures or an uncatchable kill may produce no archive.
+
+**For another attempt, prepare a fresh package/run ID and use a new output
+directory.** Keep each attempt separate. After a crash, ask your administrator
+to reconcile recorded run-owned resources; never force-delete unrelated objects.
+
+## Maintainer: validate, review, and import
+
+Use a clean, trusted feature worktree based on `main`, with the tested commit
+available in Git. Confirm the checksum through the contributor's delivery channel;
+a supplied checksum is an integrity check, **not an execution attestation**.
+If the contributor changed the recipe, review those source changes too. New
+imports require the recipe inputs in your worktree to match the tested inputs.
+
+```sh
+CHECKSUM=$(cat /received/evidence.tar.gz.sha256)
+python3 tools/import_contributor.py /received/evidence.tar.gz \
+  --checksum "$CHECKSUM"
+```
+
+This is read-only by default. It validates archive safety, the input closure
+against Git, launch/runtime identity, image pins, privacy patterns, and KPI replay.
+It prints a summary; it does **not** perform human review or extract files for you.
+Inspect the validated input snapshots, `runtime.json`, `kpis.json`, `result.json`,
+and sanitized native exports under `raw/` with a trusted archive viewer. Do not
+execute bundle content or blindly extract an unvalidated archive.
+
+After human privacy/provenance review:
+
+```sh
+python3 tools/import_contributor.py /received/evidence.tar.gz \
+  --checksum "$CHECKSUM" --apply --reviewed
+python3 tools/validate.py --current
+python3 tools/catalog.py
+git diff --check
+```
+
+Review the diff and open an evidence PR. The importer adds `results/<run-id>/`
+and additive `benchmark_runs` references; it does not commit, push, open PRs, or
+change maturity. Repeating an identical import is safe; different evidence under
+the same run ID is rejected. Ordinary local/CI validation replays retained
+evidence offline against its historical inputs, not newer recipe configurations.
+
+### Optional: maintainer S3 retention
+
+Instead of retaining native exports as individual local files, add a durable S3
+destination to the **initial** reviewed apply command:
+
+```sh
+python3 tools/import_contributor.py /received/evidence.tar.gz \
+  --checksum "$CHECKSUM" --apply --reviewed \
+  --s3-prefix s3://TEAM_OWNED_BUCKET/accepted/contributor-evidence
+```
+
+Only this step needs maintainer AWS CLI v2 credentials. Conditional writes and
+S3 SHA-256 confirmation prevent silent overwrite. Upload failures preserve the
+received bundle and do not create repository references. Keep accepted evidence
+under durable retention, not an expiring intake policy.
+
+## Reference
+
+### Supported inputs and evidence limits
+
+- Default runner release: `quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2`,
+  pinned in host-side `benchmarks/runner/release.json` to
+  `sha256:4b8dc7e0d2f05a40949992a322a103e6650ad9136616edd60ab26e55b811ce88`.
+  The image records source commit `92c37ef84658daf997df2000c403a4abca8a033f`.
+  Release metadata is recorded after publication; it is not embedded into its
+  own image. The runtime uses the digest captured in each request.
+- Runner: Linux AMD64, Python 3.12, OpenShift CLI 4.19.0, Forge cleanup fix
+  `df3c14a5eab5e8f502402f51c48765b35067fca8`, based on PR #322 and published
+  on `thameem-abbas/forge` branch `fix/guidellm-failure-cleanup`. Archives/base image are pinned and
+  checksummed; Python dependencies are hash-locked.
+- One platform and one self-contained manifest containing one Deployment,
+  LeaderWorkerSet, or PVC-backed LLMInferenceService. Authored Services, companion
+  objects, P/D, InferenceService, custom DRA, LLMInferenceService hostPath volumes,
+  and heterogeneous serving image digests are unsupported.
+- `guidellm-8k1k`: 8000/1000 tokens, concurrent streams 1/4/16/32/64/128,
+  300 seconds per stream count. `guidellm-smoke` and `aiperf-smoke` check plumbing
+  only. AgentX remains rejected until its external corpus/tokenizer revision and
+  checksum acquisition are audited; smoke evidence is not AgentX evidence.
+- Synthetic/container tests do not establish GPU performance or live distributed
+  compatibility. Import never grants independent validation, production readiness,
+  deployment verification, or recipe maturity. Evidence covers only tested inputs.
+
+### Cluster permissions
+
+Ask your cluster administrator to check permissions for the selected kind/harness:
+
+- Cluster scope: get the selected namespace; list nodes for capacity/software facts.
+- Namespace scope: get/list/create/delete the serving resource, Services, Pods,
+  Jobs, and PVCs. Current preflight requires PVC permissions even for GuideLLM.
+- Read controller ownership chains: ReplicaSets and Deployments; StatefulSets for
+  LWS and applicable controller-expanded workloads. Allow readiness watches and
+  rollout/status reads for the selected serving resource.
+- Read referenced PVCs/Secret metadata, Pod logs and relevant events; create
+  `pods/exec` sessions for result collection. Benchmark helpers use apply, so allow
+  the required create/patch operations for their Jobs, helper Pods, and PVCs.
+- Workload service accounts must be able to pull images and satisfy admission
+  policy. Deployment/LWS Pod server-side dry runs use the caller's identity, which
+  may differ from controller admission. Preflight is not a complete RBAC audit.
+
+### Launch and admission contract
+
+The runner flattens kubeconfig into a private temporary file without editing the
+original. Forge selects `<model>/recipes/<recipe-folder>` and a recipe-relative
+`manifests/<platform>/<file>.yaml`, not an opaque `recipe_id` search.
+
+A read-only adapter serves Forge's Git lookups from the package's checksummed
+snapshot. It does not fetch Git or independently attest the contributor's source;
+maintainer import verifies the exact closure against the real tested commit.
+Forge's source/submission checks still allow only placement into an omitted
+namespace. It preserves authored serving names and refuses preexisting conflicts.
+
+**Serving resources** use create-only requests, UID-owned Pod capture, and
+UID-preconditioned cleanup. Endpoint discovery does not synthesize a Service.
+GuideLLM helper finalizers also use recorded create-response UIDs, run after
+diagnostics on handled failures/timeouts, and report cleanup errors separately.
+Helper creation refuses unexpected conflicts rather than applying over them.
+These guarantees do **not** extend to all helper lifecycle operations: GuideLLM's
+pre-run cleanup and AIPerf helpers retain their existing name-based behavior.
+The shared Forge DSL bypasses `@always` on Ctrl-C/SIGTERM, so interruption or host
+failure can still require administrator recovery. Existing model PVCs and Secrets
+are prerequisites, not cleanup targets.
+
+Deployment/LWS Pod probes preserve authored UIDs. UID rejection fails without a
+UID-omitted retry; correct and commit the recipe before preparing another package.
+The runner neither grants SCC permissions nor allows root. Actual Pod UIDs and
+service accounts must match the probe before and after benchmarking. Controller-
+expanded LLMInferenceService templates are not guessed into complete Pods, but
+their actual serving Pods must still show concrete non-root UIDs.
+
+Offline import verifies the unchanged launch. Runtime comparison permits only
+Kubernetes' validated standard read-only `kube-api-access-*` mount in addition to
+authored mounts, including OpenShift's exact standard service-CA projection when
+present. Benchmark Jobs can reuse an unambiguous `HF_TOKEN` Secret
+reference with key `HF_TOKEN`; Secret values are not copied into the archive.
+
+### Privacy and review
+
+Private diagnostics, console logs, and HTML reports can contain cluster endpoints
+or identifying details. Keep them local. Never publish credentials, private
+prompts/responses, host identifiers, or arbitrary resource/log dumps as evidence.
+
+Native JSON exports retain numeric metrics but remove recognized host-identity
+fields and replace the generated private endpoint with `${ENDPOINT}`.
+`runtime.json` records original/export checksums and redacted paths; these are
+sanitized exports, not byte-identical originals. **Detected prohibited fields or
+patterns block collection; unrecognized sensitive content may remain, so review
+is required.** Contributor-controlled evidence is not independent attestation.
+
+### Local HTML reports
+
+Forge generates `*__postprocessing/kpis/kpis.html` under `private-diagnostics/`.
+This pin includes AIPerf concurrency charts grouped by explicit `sweep_id` labels;
+per-run scalar KPIs remain unchanged. KPI HTML generation is separate from the
+disabled plugin `visualize` step. Reports are not in the shareable archive;
+separate sharing requires privacy review.
+
+### Legacy packages and archive format
+
+Bundles pinned to `768a285851ade70d0d5737f9bd90564350410469` remain importable and
+replayable under historical launch rules, including bounded UID omission. Bundles
+pinned to `93b85db135425516eb000de62d2483c62cdacacc` remain importable/replayable
+under the unchanged namespace-only, preserve-UID contract. New packages use the
+cleanup-fixed current pin; this runner refuses old-pin execution. Keep the
+old reviewed runner for an unfinished attempt, or prepare a fresh package/run ID.
+Never relabel historical measurements.
+
+Older packages have no monitor helper/progress snapshots. From a trusted checkout,
+`python3 tools/monitor_contributor.py /path/to/output` can still show their final
+reported bundle outcome after checksum verification; it does not reconstruct
+unrecorded live phases or perform importer validation.
+
+Bundle v1 contains `bundle.json` (request, outcome, exact checksum inventory),
+allowlisted input snapshots, replay files, and native JSON exports. Intake rejects
+unsafe paths/types, executable content, duplicates, excessive structure, changed
+results, and inventory mismatches. The bundle retains a 1024-file inventory limit,
+but artifact byte sizes and compressed/expanded bundle sizes are not capped.
+Provision enough memory and disk for the evidence: import parses retained JSON
+in memory, while the monitor streams the archive to read its outcome. Large
+artifacts still require deliberate privacy review and an appropriate retention
+location; removing size caps does not change repository publication policy.
+
+### Developer verification
+
+Run from the repository root. These tests use synthetic data, not model evidence:
+
+```sh
+python3 -m pytest tests/test_contributor.py tests/test_contributor_monitor.py tests/test_runner_image_security.py -q
+podman build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:test .
+python3 tools/scan_runner_image.py localhost/contributor-runner:test
+podman run --rm --network none --entrypoint python \
+  -v "$PWD/tests/contributor_guidellm_cleanup_smoke.py:/cleanup-smoke.py:ro,Z" \
+  localhost/contributor-runner:test /cleanup-smoke.py
+podman run --rm --network none --entrypoint python \
+  -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,z" \
+  localhost/contributor-runner:test /smoke.py
+podman run --rm --network none --entrypoint python -e SMOKE_HARNESS=aiperf \
+  -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,z" \
+  localhost/contributor-runner:test /smoke.py
+```
+
+Both smoke tests invoke the real Forge CLI and Caliper; only Kubernetes and
+benchmark Jobs are simulated. Rerun these proofs after pin/CLI/dependency changes.
+Regenerate `requirements.lock` from `requirements.in` deliberately, not at runtime.
+
+### Development runner override
+
+Normal contributors use the published default. To test runner changes locally,
+build and scan your own image, then explicitly pass its digest during preparation:
+
+```sh
+podman build -f benchmarks/runner/Containerfile \
+  -t localhost/playbooks-contributor:reviewed .
+python3 tools/scan_runner_image.py localhost/playbooks-contributor:reviewed
+RUNNER_IMAGE=$(podman image inspect localhost/playbooks-contributor:reviewed \
+  --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}')
+if [ -z "$RUNNER_IMAGE" ]; then
+  echo 'No manifest digest is available; publish to a developer-controlled registry and resolve its digest before continuing.' >&2
+  exit 1
+fi
+# Add --runner-image "$RUNNER_IMAGE" to the prepare_contributor.py command above.
+```
+
+If a local Podman build has no `RepoDigests`, or for Docker builds, publish the
+development image to a registry you control and
+resolve its registry digest before passing `--runner-image`. Image IDs and mutable
+tags are not substitutes for manifest digests. A local Podman reference only
+works on the machine holding that image; use a pullable reference when sharing
+the package with another machine.
+
+### Image secret-scan gate
+
+Before publishing a runner image, scan the same built image you intend to publish:
+
+```sh
+python3 tools/scan_runner_image.py localhost/playbooks-contributor:reviewed
+```
+
+The command selects Podman first, or Docker; `CONTAINER_ENGINE=docker` overrides
+that choice. It freezes the local image ID and scans an exported image with
+digest-pinned Trivy 0.76.1. The scanner runs without network access, telemetry,
+host credentials, or a container-engine socket. Its only writable host mount is
+an isolated temporary report directory. Scanner-image download may require network
+access before the scan. Reports and archives are temporary; matches are not
+printed or uploaded.
+
+CI runs the same command after the runner build and fails on secret findings,
+scanner errors, missing reports, or an image-identity mismatch. PR CI never
+publishes images. Do not rebuild or move a tag between successful scanning and
+publication; future publication automation must depend on this gate succeeding.
+
+Host `__pycache__`/bytecode is excluded from the build context, and the runner
+copies only `tools/*.py`. Both container smoke tests check that no host Python
+caches entered `/opt/playbooks/tools`.
+
+This gate uses Trivy's built-in secret rules and allowlists/base-layer exclusions.
+It is not an exhaustive all-layer forensic audit, vulnerability scan, or guarantee
+of credential absence. Review changes to scanner pins and build inputs before
+publication; do not add broad exclusions merely to silence a finding.
+
+## Contributor benchmark execution example
+
+This walkthrough takes you from a checkout to a shareable benchmark result using
+the portable Forge runner introduced in [PR #70](https://github.com/openshift-psap/inference-playbooks/pull/70).
+The worked example deploys Gemma 4 on one H200 GPU, checks the pipeline with
+GuideLLM, then shows how to run the full 8K-input/1K-output workload.
+
+### Workflow and responsibilities
+
+```text
+Contributor                           Maintainer
+-----------                           ----------
+Committed recipe + platform
+    -> prepare immutable package
+    -> run on your cluster
+    -> review evidence for privacy
+    -> archive + checksum ----------> validate without writing
+                                      -> review provenance and metrics
+                                      -> import and open evidence PR
+```
+
+The **runner image** contains Forge and the supporting tools and runs on your
+machine. The **harness image** contains GuideLLM or AIPerf and runs in your
+cluster. The **serving image** comes from the recipe and serves the model in
+your cluster. You do not need to install Forge locally or build the runner.
+
+Preparation is offline with respect to the cluster. Running deploys a workload
+and consumes cluster resources. Import is a separate maintainer operation;
+a successful run does not automatically publish results or promote recipe maturity.
+No AWS, MLflow, or internal artifact credentials are needed by the contributor.
+
+### 1. Set up the tools and select a recipe
+
+Use a Linux AMD64 runner host with Git, Python, and Podman or Docker. Run these
+commands in a new checkout:
+
+```sh
+git clone https://github.com/openshift-psap/inference-playbooks.git
+cd inference-playbooks
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r tools/requirements.txt
+python3 tools/validate.py --current
+
+RECIPE=models/gemma-4/recipes/h200-x1-tp1-guidellm-8k1k/recipe.yaml
+HARNESS_IMAGE=ghcr.io/vllm-project/guidellm@sha256:15372f9f3f407366495470706b7a07f64addcce5d134a49cab64149b44ab1233
+RUNS="$HOME/playbooks-runs"
+mkdir -p "$RUNS"
+```
+
+Keep this terminal open for subsequent commands. The harness digest above is
+the GuideLLM v0.7.4 Linux AMD64 image used by the documented live smoke example.
+The runner digest is selected automatically from
+[`release.json`](../benchmarks/runner/release.json).
+
+Before using this example, check the
+[recipe](../models/gemma-4/recipes/h200-x1-tp1-guidellm-8k1k/recipe.yaml) and
+[rendered manifest](../models/gemma-4/recipes/h200-x1-tp1-guidellm-8k1k/manifests/vllm-v0.24.0/deployment.yaml):
+
+- Your existing namespace must have capacity for the manifest's one H200 GPU,
+  CPU, and memory requests, and access to the serving and harness images.
+- The model must be accessible. This manifest references Secret `hf-token`, key
+  `HF_TOKEN`, and uses the `default` service account.
+- The namespace must admit the authored non-root UID `65534`. The runner does
+  not grant SCC permissions or change the authored UID to bypass admission.
+- Supply a self-contained kubeconfig, with embedded credentials/certificates,
+  readable by your container user. External exec authentication is unsupported.
+  On SELinux hosts, the kubeconfig needs an appropriate container-readable label.
+- Confirm [cluster permissions](#cluster-permissions)
+  with your administrator. GuideLLM uses shared emptyDir/sidecar result collection;
+  AIPerf needs working default PVC provisioning for results.
+
+For different hardware, select a matching recipe and its declared platform.
+If configuration changes are needed, edit the source recipe/overrides, render,
+validate, and commit them before preparing. Keep the tested commit available for
+maintainer review. Do not edit the generated package.
+
+### 2. Prepare a smoke-test package
+
+```sh
+PACKAGE_DIR="$RUNS/gemma-smoke-package-001"
+OUTPUT_DIR="$RUNS/gemma-smoke-output-001"
+
+python3 tools/prepare_contributor.py "$RECIPE" \
+  --stack vllm --version v0.24.0 \
+  --workload guidellm-smoke \
+  --harness-image "$HARNESS_IMAGE" \
+  --output "$PACKAGE_DIR"
+```
+
+The command prints JSON containing a generated `run_id` and package path. Both
+the package and output paths must be new; do not create either directory yourself.
+The parent `$RUNS` directory already exists from step 1.
+
+| Argument | Meaning |
+| --- | --- |
+| Recipe path | Repository-relative `recipe.yaml` with committed, clean inputs. |
+| `--stack` / `--version` | An existing platform entry and its rendered manifest. |
+| `--workload` | The benchmark definition; smoke checks plumbing, not performance. |
+| `--harness-image` | Compatible, cluster-pullable benchmark image pinned by digest. |
+| `--output` | New package directory, separate from the later run output directory. |
+
+Inspect the pinned request:
+
+```sh
+python3 -m json.tool "$PACKAGE_DIR/request.json"
+```
+
+The package contains `run.sh`, `monitor.sh`, `monitor.py`, `request.json`, and
+`playbooks/`. If moving it to another runner host, copy the **whole directory**
+and preserve executable bits. It contains the input snapshot, not credentials,
+model weights, or a Git checkout. One package represents one execution attempt.
+
+### 3. Run against your cluster
+
+Replace the three values below with your dedicated kubeconfig, an explicit
+context from that file, and an existing namespace. If your cluster needs a proxy,
+set its proxy environment variables in this terminal before launching.
+
+```sh
+KUBECONFIG_FILE=/absolute/path/to/benchmark.kubeconfig
+CONTEXT=your-cluster-context
+NAMESPACE=your-benchmark-namespace
+
+"$PACKAGE_DIR/run.sh" "$KUBECONFIG_FILE" "$CONTEXT" "$NAMESPACE" "$OUTPUT_DIR"
+```
+
+The launcher pulls the pinned runner image and mounts the package and kubeconfig
+read-only. Podman is preferred; prefix the command with `CONTAINER_ENGINE=docker`
+to select Docker. Keep the runner terminal alive until completion. The Forge
+test phase has a six-hour default timeout; preflight and evidence collection can
+take additional time.
+
+In another terminal, watch the **same output directory** using local Python 3.9+:
+
+```sh
+"$HOME/playbooks-runs/gemma-smoke-package-001/monitor.sh" \
+  "$HOME/playbooks-runs/gemma-smoke-output-001" --watch
+```
+
+Omit `--watch` for a single snapshot. The monitor shows phase, elapsed time,
+latest Forge task, last observed readiness, and final outcome. Ctrl-C here stops
+only the monitor. Its exit code is not the benchmark's success status.
+
+### 4. Interpret and return the result
+
+For the runner, exit code `0` means success; `1` means an unsuccessful attempt.
+The printed JSON distinguishes `failed`, `interrupted`, and `collection-failed`.
+An unsuccessful bundle is diagnostic-only, not importable successful evidence.
+
+```text
+gemma-smoke-output-001/
+  evidence.tar.gz             # share after privacy review
+  evidence.tar.gz.sha256      # share with the archive
+  progress.json              # local monitoring only
+  private-diagnostics/       # local logs/reports; do not send
+```
+
+Review the archive for sensitive content before sharing. Automated sanitization
+does not replace human review; see the
+[privacy contract](#privacy-and-review).
+Send only the archive and checksum sidecar through your team's approved delivery
+channel. Include a short handoff message, for example:
+
+```text
+Recipe: models/gemma-4/recipes/h200-x1-tp1-guidellm-8k1k/recipe.yaml
+Platform: vllm v0.24.0
+Workload: guidellm-smoke (plumbing check only)
+Run ID / tested revision: copied from request.json
+Source PR or branch: include if recipe inputs changed
+Outcome: copied from runner output
+Files: evidence.tar.gz and evidence.tar.gz.sha256
+Privacy review: completed
+```
+
+### 5. Run the performance workload separately
+
+Once the smoke check succeeds, prepare a **fresh package** for the full workload:
+
+```sh
+python3 tools/prepare_contributor.py "$RECIPE" \
+  --stack vllm --version v0.24.0 \
+  --workload guidellm-8k1k \
+  --harness-image "$HARNESS_IMAGE" \
+  --output "$RUNS/gemma-8k1k-package-001"
+
+"$RUNS/gemma-8k1k-package-001/run.sh" \
+  "$KUBECONFIG_FILE" "$CONTEXT" "$NAMESPACE" \
+  "$RUNS/gemma-8k1k-output-001"
+```
+
+This workload uses 8000 input / 1000 output tokens and concurrent streams
+1, 4, 16, 32, 64, and 128, with 300 seconds per stream count. Deployment, model
+loading, and collection add time. Monitor and return its evidence using the same
+steps as above, substituting the new package/output paths. Never relabel smoke
+results as full workload coverage.
+
+### Maintainer: turn the handoff into an evidence PR
+
+Use a clean feature worktree based on `main`, with Python dependencies installed
+and the tested commit available in Git. If the contributor changed inputs,
+review and integrate those source changes first: the import worktree's recipe
+inputs must match the tested inputs.
+
+```sh
+git switch -c evidence/contributor-gemma-run
+CHECKSUM=$(cat /received/evidence.tar.gz.sha256)
+python3 tools/import_contributor.py /received/evidence.tar.gz \
+  --checksum "$CHECKSUM"
+```
+
+This first command validates without writing. Confirm the checksum through the
+delivery channel; it checks integrity, not independent execution attestation.
+Review validated input snapshots, runtime identity, KPIs, normalized results,
+and sanitized native exports using a trusted archive viewer. Then apply:
+
+```sh
+python3 tools/import_contributor.py /received/evidence.tar.gz \
+  --checksum "$CHECKSUM" --apply --reviewed
+python3 tools/validate.py --current
+python3 tools/catalog.py
+git diff --check
+git status --short
+git diff
+```
+
+The importer adds `results/<run-id>/` and `benchmark_runs` references. Review and
+stage the intended files, commit, push your feature branch, and open a PR against
+`main`. Import does not commit or publish anything and does not change maturity.
+See the [maintainer reference](#maintainer-validate-review-and-import)
+for replay, repeat imports, and optional S3 retention.
+
+### Troubleshooting
+
+| Symptom | What to do next |
+| --- | --- |
+| Package/output directory already exists | Prepare a new package with a new path/run ID and choose a new output path. Do not reuse an attempt. |
+| Inputs are not committed and clean | Render and validate source changes, commit them, then prepare again. |
+| Kubeconfig or admission preflight fails | Check explicit context, embedded credentials, file access, RBAC, and authored UID requirements. Correct source/configuration before a fresh attempt. |
+| Model or benchmark never becomes ready | Inspect local private diagnostics for image pulls, model access, scheduling, and storage failures. |
+| Monitor stops updating | Check the runner process and private logs; stage age is not a heartbeat. |
+| Benchmark ran but outcome is `collection-failed` | Inspect local collection diagnostics. Do not treat the partial attempt as successful evidence. |
+| Runner interrupted or host crashed | Ask an administrator to reconcile recorded run-owned resources before retrying. Some interruption paths bypass cleanup; early failures may leave no archive. |
+| Import rejects the tested revision or inputs | Obtain the contributor's exact source commit and matching inputs; do not edit the archive to make it pass. |
+
+For other supported resource kinds, AIPerf, cleanup guarantees, and current
+limitations, use the [portable contributor benchmark reference](#reference).

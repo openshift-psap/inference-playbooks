@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "version": "v0.1.2",
+  "tag": "quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2",
+  "image": "quay.io/rh-ee-thibrahi/inference-playbooks-runner@sha256:4b8dc7e0d2f05a40949992a322a103e6650ad9136616edd60ab26e55b811ce88",
+  "forge_revision": "df3c14a5eab5e8f502402f51c48765b35067fca8",
+  "source_revision": "92c37ef84658daf997df2000c403a4abca8a033f"
+}

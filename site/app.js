@@ -59,8 +59,12 @@ function workloadGroup(key) {
 }
 function evidenceWorkloads(item, entry) {
   if (item.run.platform?.stack !== entry.platform.stack || item.run.platform?.version !== entry.platform.version) return [];
-  // Execution snapshots include every harness: only use this run's workloads.
-  return (item.run.workload?.expectations?.workloads || [])
+  // Contributor bundles record one workload; Forge snapshots include all harnesses.
+  const workload = item.run.workload;
+  const workloads = item.run.evidence_source === 'contributor-forge'
+    ? (workload?.harness === item.run.harness ? [workload] : [])
+    : (workload?.expectations?.workloads || []);
+  return workloads
     .filter(workload => workload.harness === item.run.harness)
     .map(workload => workloadGroup(workload.key)).filter(Boolean);
 }

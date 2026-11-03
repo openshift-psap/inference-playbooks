@@ -8,6 +8,8 @@ import logging
 import math
 from pathlib import Path
 
+from forge_model_identity import kpi_labels
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,7 +58,7 @@ def normalize(document, *, run_id, deployment_scope, accelerator_key, expected_c
     workloads = {}
     sweeps = {}
     for test in document['tests']:
-        labels = test.get('labels', {})
+        labels = kpi_labels(test)
         harness = labels.get('benchmark_tool')
         if harness not in ('guidellm', 'aiperf'):
             continue

@@ -21,9 +21,7 @@ def fetch_profiles(revision):
     url = f'https://raw.githubusercontent.com/openshift-psap/forge/{revision}/{PROFILE_PATH}'
     # Never send MLflow credentials to the producer source repository.
     with build_opener(NoRedirect()).open(url, timeout=30) as response:
-        raw = response.read(1024 * 1024 + 1)
-    if len(raw) > 1024 * 1024:
-        raise ValueError('Forge workload profile exceeds intake limit')
+        raw = response.read()
     return url, raw
 
 

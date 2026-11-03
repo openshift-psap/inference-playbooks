@@ -20,6 +20,9 @@ BUILD = {'source_sha': 'a' * 40, 'dirty': False}
 
 @pytest.fixture
 def repo(tmp_path):
+    # Contributor evidence replays its tested Git snapshot. Keep that history
+    # while copying current inputs so tests also exercise uncommitted changes.
+    subprocess.run(['git', 'clone', '--quiet', '--shared', '--no-checkout', str(REPO), str(tmp_path)], check=True)
     for name in ('models', 'schema', 'templates', 'hardware-profiles', 'engine-versions'):
         shutil.copytree(REPO / name, tmp_path / name)
     return tmp_path

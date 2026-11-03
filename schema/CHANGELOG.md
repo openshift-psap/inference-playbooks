@@ -1,5 +1,12 @@
 # Schema changelog
 
+## Contributor Forge evidence
+
+- Benchmark-run v2 accepts `evidence_source: contributor-forge` with explicit
+  contributor integrity metadata. The local validator replays checksummed
+  request/runtime/KPI inputs against the tested Git snapshot without network
+  access. No recipe maturity values or promotion requirements change.
+
 ## Actionable reader quickstarts
 
 - Optional `quickstart[].commands` holds a copyable command block and
