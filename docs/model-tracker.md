@@ -422,14 +422,3 @@ the schedule cannot write in parallel or create duplicate comments.
   exercises the same evaluator/sync code path after setup.
 - One project is supported per repository configuration. Multi-project fan-out
   is deliberately out of scope.
-
-## Rollback
-
-See [model-tracker-change-log.md](model-tracker-change-log.md). Before a revert,
-cancel in-flight `Model coverage` runs and disable the workflow; setting
-`MODEL_TRACKER_WRITE_ENABLED=false` only affects future jobs and is **not** an
-in-flight kill switch. Use a reviewed pull request for code/workflow changes:
-`git revert <squash-merge-sha>` for a squash merge, or
-`git revert -m 1 <merge-commit-sha>` for a merge commit. Never force-push or
-reset the default branch. Remove only tracker-owned project fields and
-bot-authored marker comments when cleaning up externally.

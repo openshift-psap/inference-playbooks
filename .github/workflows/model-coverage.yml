@@ -11,7 +11,6 @@ on:
       - tools/model_coverage_sync.py
       - tests/test_model_coverage.py
       - docs/model-tracker.md
-      - docs/model-tracker-change-log.md
   issues:
     types: [opened, edited, reopened, closed, labeled, unlabeled, transferred]
   workflow_dispatch:
