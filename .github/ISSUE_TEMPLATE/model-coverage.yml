@@ -6,15 +6,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        <!-- inference-playbooks:model-coverage-tracker -->
-
         This issue is the single maintained plan for one model's coverage. The
         repository catalog remains the source of truth for recipe maturity and
         committed benchmark evidence. CI success does not mean validated.
 
-        Edit the fenced YAML block below. Keep the fences, use one issue per
-        model, and do not add a second YAML block. The model tracker reads only
-        that block. See [docs/model-tracker.md](https://github.com/openshift-psap/inference-playbooks/blob/main/docs/model-tracker.md)
+        Edit the fenced YAML block below. Keep the marker comment and the
+        fences, use one issue per model, and do not add a second YAML block.
+        The model tracker reads only that block. See
+        [docs/model-tracker.md](https://github.com/openshift-psap/inference-playbooks/blob/main/docs/model-tracker.md)
         for status rules and examples.
 
         Internal Jira: put only the issue key in `jira`, for example
@@ -31,6 +30,7 @@ body:
         override the model-level `completion`. Remove the leading `#` from
         `jira` only when an internal Jira issue exists.
       value: |
+        <!-- inference-playbooks:model-coverage-tracker -->
         ```yaml
         schema_version: 1
         model_id: replace-with-model-id

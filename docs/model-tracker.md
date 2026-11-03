@@ -84,7 +84,9 @@ source when the build is clean.
 The evaluator filters evidence to the exact target platform and calls the
 catalog's existing `validation_badge` helper again, so an earlier cross-platform
 badge cannot hide a later exact run. Within exact-platform evidence it prefers
-a same-engine run over an earlier-engine run.
+a same-engine run over an earlier-engine run. If same-engine candidates exist
+but are unusable, the evaluator falls back to the full exact-platform set only
+to explain earlier-engine evidence; the target remains `contributed`.
 
 `earlier-engine` is retained in the report for transparency and may be useful
 for operational decisions, but it is never accepted as independent validation
@@ -94,8 +96,8 @@ compatibility claim.
 ## Issue definition
 
 Create one issue per model using the **Model coverage target** form. The form
-prefills a fenced block. Keep exactly one fenced `yaml` block and edit it in
-place:
+prefills the marker comment and a fenced block in the editable body. Keep both,
+keep exactly one fenced `yaml` block, and edit the block in place:
 
 ```yaml
 schema_version: 1
@@ -141,11 +143,19 @@ Rules:
 - The label `model-coverage` must exist before the form is used. Create it
   manually once (this repository change did not create it):
   `gh label create model-coverage --color 5319E7 --description "Model coverage tracker entry"`.
+  The form's label and the marker comment both identify a tracking issue;
+  either one is sufficient. The marker lives inside the editable target
+  definition because GitHub issue forms do not submit `markdown` block content.
 
-Closing a tracking issue does not delete coverage history. It should mean the
-model plan is retired; the dashboard and evaluator use the issue body, not the
-issue state, for coverage. Reopen or remove the issue deliberately if the plan
-changes.
+Closing a tracking issue does not retire the plan or free the model ID. The
+evaluator reads the issue body and ignores issue state, so a closed issue still
+owns its `model_id` and is still evaluated. To untrack a model, remove **both**
+the `model-coverage` label and the
+`<!-- inference-playbooks:model-coverage-tracker -->` marker comment. Removing
+only one of them leaves the issue tracked. Deleting or emptying the fenced YAML
+without removing both identifiers produces an invalid tracked definition
+(`Error`); it does not untrack the model. Transfer or delete the issue if it
+should disappear entirely.
 
 ## Existing untracked models
 
@@ -284,6 +294,15 @@ Plan and report files are written before any mutation; `--result-out` records
 applied actions and, on failure, the failed action plus the actions that had
 already completed. Review the plan before applying.
 
+`--issues` may supply a snapshot for evaluation, but the sync does not trust it
+as a write source. Every tracking entry is checked against the selected
+repository before planning: any supplied `html_url` or `url` must exactly match
+`OWNER/REPO` and the issue number as a browser or API URL, and the supplied
+`node_id` must match the authoritative issue read from GitHub. The plan uses
+the authoritative issue body and `node_id`. Foreign or inconsistent identities
+fail before any project or comment mutation; outdated bodies are refreshed
+from GitHub.
+
 To rehearse the catalog-failure path without evaluating:
 
 ```sh
@@ -317,9 +336,10 @@ Live writes are refused unless all applicable guard conditions hold:
 - `MODEL_TRACKER_WRITE_ENABLED=true`;
 - in Actions, the event is not `pull_request`, `pull_request_target`, or
   `workflow_run`;
-- the ref is `refs/heads/main` (or `MODEL_TRACKER_DEFAULT_BRANCH` for a fork),
-  except the `issues` event, which is allowed only with
-  `GITHUB_REPOSITORY` present;
+- the ref is the event repository's `refs/heads/<default_branch>`
+  (`MODEL_TRACKER_DEFAULT_BRANCH`, set from
+  `github.event.repository.default_branch` in Actions), except the `issues`
+  event, which is allowed only with `GITHUB_REPOSITORY` present;
 - local runs additionally set `MODEL_TRACKER_ALLOW_LOCAL_WRITE=true`.
 
 The sync is idempotent:
@@ -332,9 +352,11 @@ The sync is idempotent:
 - duplicate owned marker comments are **reported and left in place** for manual
   review, never deleted; marker comments owned by another identity or by a human
   are never edited;
-- an invalid definition updates its item to `Error`, sets `Completed` and
-  `Blocked` to `Unknown`, replaces old `Coverage` with an explicit unknown
-  value, and rewrites the owned comment with the error and evaluated SHA;
+- an invalid definition updates or creates its item as `Error`, sets
+  `Completed` and `Blocked` to `Unknown`, replaces old `Coverage` with an
+  explicit unknown value, and rewrites the owned comment with the error and
+  evaluated SHA. A malformed issue that has no project item yet is added with
+  those same error values;
 - valid models in the same report are still updated; one bad issue does not
   abort the run;
 - `Last Evaluated` and comments carry the evaluated catalog SHA, with no
@@ -365,6 +387,12 @@ stale path, write comments, delete items, or touch human fields.
   tracker edit;
 - on relevant pull requests for read-only tests/evaluation.
 
+The `push` trigger keeps the literal `main` branch because workflow trigger
+configuration cannot read the event context. A fork that renames its default
+branch must update `on.push.branches`; the `sync`/`stale` write guard, checkout,
+and `MODEL_TRACKER_DEFAULT_BRANCH` still derive the event repository's actual
+default branch at runtime.
+
 The `check` job has `contents: read` and `issues: read` and never has a write
 token. It runs `python3 tools/validate.py --current` and
 `python3 -m pytest tests/test_model_coverage.py -q` — the same commands used
@@ -374,10 +402,11 @@ instead of blocking every valid model update. Report artifacts are uploaded on
 success and failure.
 
 The `sync` job exists only after a successful `check`, only when
-`MODEL_TRACKER_WRITE_ENABLED == 'true'`, and only for main/issues/manual/schedule
-contexts. It checks out the default branch, receives the project secret only in
-its sync step, and applies the same plan used by the dry run. A missing secret
-fails with an explicit setup message. Pull requests cannot reach this job.
+`MODEL_TRACKER_WRITE_ENABLED == 'true'`, and only for
+default-branch/issues/manual/schedule contexts. It checks out the default
+branch, receives the project secret only in its sync step, and applies the same
+plan used by the dry run. A missing secret fails with an explicit setup
+message. Pull requests cannot reach this job.
 
 The `stale` job runs when the validation or evaluator step failed (for example
 a schema failure or catalog build failure), not when a test-only step failed,
@@ -391,8 +420,10 @@ the schedule cannot write in parallel or create duplicate comments.
 - Each model has exactly one tracking issue and one owner.
 - Owners update blockers, Jira keys, and target scope by editing the fenced YAML
   in their issue.
-- Maintainers add planned models by opening a new issue from the form, or remove
-  a plan by closing the issue after an explicit decision.
+- Maintainers add planned models by opening a new issue from the form. To retire
+  a plan, remove both the `model-coverage` label and the tracker marker after an
+  explicit decision; closing the issue alone does not retire it or free the
+  model ID.
 - Recipe authors do not maintain a second status file. When a recipe merges,
   the next main push/evaluation changes `planned`/`in-progress` to
   `contributed`. When benchmark evidence for the exact platform is committed,

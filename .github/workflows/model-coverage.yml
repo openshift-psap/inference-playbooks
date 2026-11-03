@@ -2,6 +2,9 @@ name: Model coverage
 
 on:
   push:
+    # Trigger configuration cannot read the event context, so this list stays
+    # literal. A fork that renames its default branch must update this line;
+    # the runtime write guard still derives the actual default branch below.
     branches: [main]
   pull_request:
     paths:
@@ -100,9 +103,9 @@ jobs:
     if: >-
       vars.MODEL_TRACKER_WRITE_ENABLED == 'true' &&
       (github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
       github.event_name == 'issues' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+      (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,6 +137,7 @@ jobs:
           MODEL_TRACKER_PROJECT_OWNER: ${{ vars.MODEL_TRACKER_PROJECT_OWNER }}
           MODEL_TRACKER_PROJECT_NUMBER: ${{ vars.MODEL_TRACKER_PROJECT_NUMBER }}
           MODEL_TRACKER_BOT_LOGIN: ${{ vars.MODEL_TRACKER_BOT_LOGIN }}
+          MODEL_TRACKER_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           mkdir -p .build/model-coverage
           python3 tools/model_coverage_sync.py \
@@ -160,9 +164,9 @@ jobs:
       needs.check.outputs.reconciliation_failure == 'true' &&
       vars.MODEL_TRACKER_WRITE_ENABLED == 'true' &&
       (github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
       github.event_name == 'issues' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+      (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -193,6 +197,7 @@ jobs:
           MODEL_TRACKER_WRITE_ENABLED: 'true'
           MODEL_TRACKER_PROJECT_OWNER: ${{ vars.MODEL_TRACKER_PROJECT_OWNER }}
           MODEL_TRACKER_PROJECT_NUMBER: ${{ vars.MODEL_TRACKER_PROJECT_NUMBER }}
+          MODEL_TRACKER_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           mkdir -p .build/model-coverage
           python3 tools/model_coverage_sync.py \

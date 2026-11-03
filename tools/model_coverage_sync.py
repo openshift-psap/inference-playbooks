@@ -17,15 +17,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 
-from model_coverage import build_catalog, coverage_text, evaluate, load_issues
+from model_coverage import (
+    build_catalog, coverage_text, evaluate, is_tracking_issue, load_issues,
+)
 
 COMMENT_MARKER = "<!-- inference-playbooks:model-coverage -->"
+REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 STATUS_FIELD = "Tracker Status"
 COMPLETION_FIELD = "Completion Criterion"
 COMPLETED_FIELD = "Completed"
@@ -247,6 +251,113 @@ def fetch_issues(client: GhClient, repository: str) -> list[dict]:
     """Read every issue, excluding pull requests, with REST pagination."""
     issues = client.rest_paginated(f"repos/{repository}/issues?state=all&per_page=100")
     return [issue for issue in issues if "pull_request" not in issue]
+
+
+def require_repository(repository: str) -> str:
+    """Reject malformed repository names before they reach API paths."""
+    if not isinstance(repository, str) or not REPOSITORY_NAME.fullmatch(repository):
+        raise SyncError(f"invalid repository {repository!r}; expected OWNER/REPO")
+    return repository
+
+
+def _issue_urls(repository: str, number: int) -> tuple[str, str]:
+    return (
+        f"https://github.com/{repository}/issues/{number}",
+        f"https://api.github.com/repos/{repository}/issues/{number}",
+    )
+
+
+def validate_issue_identity(issue: dict, repository: str) -> int:
+    """Require an --issues entry to identify one issue in ``repository``.
+
+    A label or marker comment alone must not authorize a write: the issue
+    number and any supplied browser/API URL have to agree with the selected
+    repository before any project item or comment is touched.
+    """
+    number = issue.get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+        raise SyncError(f"--issues entry has an invalid issue number {number!r}")
+    expected_html, expected_api = _issue_urls(repository, number)
+    supplied_html = issue.get("html_url")
+    supplied_url = issue.get("url")
+    if supplied_html is not None and supplied_html != expected_html:
+        raise SyncError(
+            f"issue #{number} html_url {supplied_html!r} does not belong to "
+            f"{repository}; expected {expected_html}"
+        )
+    if supplied_url is not None and supplied_url not in {expected_html, expected_api}:
+        raise SyncError(
+            f"issue #{number} url {supplied_url!r} does not belong to "
+            f"{repository}; expected {expected_html} or {expected_api}"
+        )
+    if supplied_html is None and supplied_url is None:
+        raise SyncError(
+            f"issue #{number} has no html_url or url; cannot bind it to {repository}"
+        )
+    node_id = issue.get("node_id")
+    if node_id is not None and (not isinstance(node_id, str) or not node_id):
+        raise SyncError(f"issue #{number} has an invalid node_id {node_id!r}")
+    return number
+
+
+def fetch_issue(client: GhClient, repository: str, number: int) -> dict:
+    data = client.rest("GET", f"repos/{repository}/issues/{number}")
+    if not isinstance(data, dict):
+        raise SyncError(f"GitHub returned a non-object issue for #{number}")
+    if "pull_request" in data:
+        raise SyncError(f"issue #{number} is a pull request, not a tracking issue")
+    return data
+
+
+def bind_repository_issues(
+    client: GhClient, repository: str, issues: list[dict],
+) -> list[dict]:
+    """Bind --issues tracking entries to authoritative repository issues.
+
+    The evaluator may consume a supplied snapshot, but a write plan must use
+    the real issue number, URL, body, and node_id from GitHub. Verification
+    happens before planning so a foreign or stale entry cannot reach a
+    mutation.
+    """
+    repository = require_repository(repository)
+    bound = []
+    seen = set()
+    for issue in issues:
+        if not is_tracking_issue(issue):
+            bound.append(issue)
+            continue
+        number = validate_issue_identity(issue, repository)
+        if number in seen:
+            raise SyncError(f"--issues contains duplicate tracking issue #{number}")
+        seen.add(number)
+        authoritative = fetch_issue(client, repository, number)
+        if authoritative.get("number") != number:
+            raise SyncError(
+                f"--issues issue #{number} resolved to a different issue number "
+                f"{authoritative.get('number')!r} in {repository}"
+            )
+        expected_html, expected_api = _issue_urls(repository, number)
+        if authoritative.get("html_url") != expected_html:
+            raise SyncError(
+                f"authoritative issue #{number} html_url "
+                f"{authoritative.get('html_url')!r} does not belong to {repository}"
+            )
+        if authoritative.get("url") != expected_api:
+            raise SyncError(
+                f"authoritative issue #{number} API url "
+                f"{authoritative.get('url')!r} does not belong to {repository}"
+            )
+        node_id = authoritative.get("node_id")
+        if not isinstance(node_id, str) or not node_id:
+            raise SyncError(f"authoritative issue #{number} is missing node_id")
+        supplied_node_id = issue.get("node_id")
+        if supplied_node_id is not None and supplied_node_id != node_id:
+            raise SyncError(
+                f"issue #{number} node_id {supplied_node_id!r} is not bound to the "
+                f"repository issue node_id {node_id!r}"
+            )
+        bound.append(authoritative)
+    return bound
 
 
 def _field_nodes(nodes: list[dict]) -> dict[str, dict]:
@@ -753,10 +864,21 @@ def build_sync_plan(
     for error in report.get("errors") or []:
         item = matching_item(error)
         if item is None:
-            warnings.append(
-                f"issue #{error.get('number')} has no project item; cannot mark it "
-                "Error/Stale until the item exists"
-            )
+            if not error.get("node_id"):
+                raise SyncError(
+                    f"issue #{error.get('number')} is missing node_id; fetch issues with "
+                    "gh api so project items can be created"
+                )
+            actions.append({
+                "action": "add_item",
+                "model_id": error.get("model_id"),
+                "issue": error.get("number"),
+                "content_id": error["node_id"],
+                "fields": [
+                    field for field in stale_fields(error, project, source_sha)
+                    if field["data_type"] != "TEXT" or field["value"]
+                ],
+            })
         else:
             actions.extend(_field_actions(
                 item_values(item), stale_fields(error, project, source_sha),
@@ -1040,6 +1162,11 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        repository = require_repository(repository)
+    except SyncError as error:
+        print(f"Model coverage sync failed: {error}", file=sys.stderr)
+        return 2
     if args.apply:
         try:
             assert_trusted_write_context()
@@ -1077,7 +1204,10 @@ def main() -> int:
                 _write_json(args.result_out, result)
                 print(f"Model coverage sync failed: {failure}", file=sys.stderr)
                 return 2
-            issues = load_issues(args.issues) if args.issues else fetch_issues(client, repository)
+            issues = (
+                bind_repository_issues(client, repository, load_issues(args.issues))
+                if args.issues else fetch_issues(client, repository)
+            )
             report = evaluate(catalog, issues)
             for error in report["errors"]:
                 print(f"Issue #{error.get('number')}: {error['error']}", file=sys.stderr)

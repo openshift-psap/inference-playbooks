@@ -15,14 +15,14 @@ sys.path.insert(0, str(REPO / "tools"))
 
 from model_coverage import (  # noqa: E402
     DefinitionError, JIRA_NOTE, TRACKER_MARKER, build_catalog, evaluate,
-    parse_definition, to_markdown,
+    is_tracking_issue, parse_definition, to_markdown,
 )
 from model_coverage_sync import (  # noqa: E402
     BLOCKED_FIELD, COMMENT_MARKER, COMPLETED_FIELD, COMPLETION_FIELD,
     LAST_EVALUATED_FIELD, SINGLE_SELECT_FIELDS, STATUS_FIELD, TEXT_FIELDS,
     GhClient, SyncApplyError, SyncError, apply_plan, assert_trusted_write_context,
-    build_stale_plan, build_sync_plan, desired_fields, fetch_items, main,
-    resolve_comment_owner,
+    bind_repository_issues, build_stale_plan, build_sync_plan, desired_fields,
+    fetch_items, main, resolve_comment_owner,
 )
 import model_coverage_sync as sync_module  # noqa: E402
 
@@ -40,14 +40,15 @@ def platform(stack="vllm", version="v0.24.0"):
 
 
 def evidence_item(run_id, stack="vllm", version="v0.24.0",
-                  engine_version="v0.24.0", pr_number=None):
+                  engine_version="v0.24.0", pr_number=None,
+                  image=IMAGE, compatibility=SIGNATURE):
     run = {
         "run_id": run_id,
         "environment": {
             "platform": platform(stack, version),
-            "image": IMAGE,
+            "image": image,
             "vllm_version": engine_version,
-            "catalog_compatibility": SIGNATURE,
+            "catalog_compatibility": compatibility,
         },
     }
     if pr_number:
@@ -259,6 +260,30 @@ def test_earlier_engine_exact_platform_is_not_independent_validation():
     assert "compatible evidence" in platform_state["reason"]
 
 
+def test_unusable_same_engine_falls_back_to_earlier_engine_explanation():
+    repository = catalog(entry(
+        "model-a", "recipe-a", maturity="validated",
+        evidence=[
+            # Same engine version, but the image is not digest-pinned, so the
+            # same-engine candidate cannot produce a badge.
+            {"run_id": "run-broken-same-engine",
+             "image": "quay.io/example/runtime:latest"},
+            {"run_id": "run-older", "engine_version": "v0.23.0"},
+        ],
+    ))
+    model = evaluate(
+        repository, [issue(118, definition(completion="validated"))]
+    )["models"][0]
+    platform_state = model["targets"][0]["platforms"][0]
+    assert model["completed"] is False
+    assert model["status"] == "contributed"
+    assert platform_state["status"] == "contributed"
+    assert platform_state["validation_state"] == "earlier-engine"
+    assert platform_state["evidence_run_id"] is None
+    assert "earlier engine v0.23.0" in platform_state["reason"]
+    assert "not independent validation" in platform_state["reason"]
+
+
 def test_blocked_recipe_never_completes():
     repository = catalog(entry("a", "recipe-a", maturity="contributed", blocked=True))
     model = evaluate(repository, [issue(104, definition(model_id="a"))])["models"][0]
@@ -283,12 +308,40 @@ def test_existing_untracked_and_planned_models_are_reported():
     assert evaluate(repository, [])["untracked_models"] == ["tracked", "untracked"]
 
 
+def test_closing_or_removing_one_identifier_keeps_the_issue_tracked():
+    repository = catalog(entry("a", "recipe-a", maturity="contributed"), model_ids={"a"})
+    tracked = issue(120, definition(model_id="a"))
+    assert evaluate(repository, [tracked])["models"][0]["model_id"] == "a"
+
+    closed = {**tracked, "state": "closed"}
+    assert evaluate(repository, [closed])["models"][0]["model_id"] == "a"
+
+    without_label = {**tracked, "labels": []}
+    assert evaluate(repository, [without_label])["models"][0]["model_id"] == "a"
+
+    no_marker_body = f"```yaml\n{yaml.safe_dump(definition(model_id='a'), sort_keys=False)}```\n"
+    without_marker = {**tracked, "body": no_marker_body}
+    assert evaluate(repository, [without_marker])["models"][0]["model_id"] == "a"
+
+    untracked = {**tracked, "labels": [], "body": no_marker_body}
+    report = evaluate(repository, [untracked])
+    assert report["models"] == []
+    assert report["untracked_models"] == ["a"]
+
+    deleted_yaml = {**tracked, "body": f"{TRACKER_MARKER}\nDefinition removed.\n"}
+    report = evaluate(repository, [deleted_yaml])
+    assert report["models"] == []
+    assert [error["number"] for error in report["errors"]] == [120]
+    assert "exactly one fenced yaml" in report["errors"][0]["error"]
+
+
 def test_current_repository_models_are_reported_when_untracked():
-    report = evaluate(build_catalog(REPO), [])
+    repository = build_catalog(REPO)
+    report = evaluate(repository, [])
     assert report["errors"] == []
-    assert report["untracked_models"] == [
-        "gemma-4", "glm-5.2", "kimi-k3", "qwen3-235b-a22b",
-    ]
+    assert report["untracked_models"] == sorted(
+        model["id"] for model in repository["models"]
+    )
 
 
 def test_current_repository_kimi_k3_reaches_contributed_without_ci_validation():
@@ -389,6 +442,17 @@ def test_definition_keys_must_be_strings():
         parse_definition(body)
 
 
+def test_null_mapping_key_is_a_definition_error_not_a_type_error():
+    body = (
+        f"{TRACKER_MARKER}\n```yaml\n"
+        "schema_version: 1\nmodel_id: a\nowner: o\ncompletion: contributed\n"
+        "targets:\n  - recipe_id: r\n    platforms: [{stack: vllm, version: v1}]\n"
+        "~: true\n```\n"
+    )
+    with pytest.raises(DefinitionError, match="mapping keys must be strings, got None"):
+        parse_definition(body)
+
+
 def test_schema_version_must_be_an_integer_not_float():
     body = (
         f"{TRACKER_MARKER}\n```yaml\n"
@@ -481,6 +545,123 @@ def item_for(model, project_document, *, human_fields=True, source_sha="unknown"
         },
         "fieldValues": {"pageInfo": {"hasNextPage": False}, "nodes": nodes},
     }
+
+
+def repository_issue(number, value=None, *, repository="o/r", node_id=None, body=None):
+    document = issue(number, value, node_id=node_id, body=body)
+    document["html_url"] = f"https://github.com/{repository}/issues/{number}"
+    document["url"] = f"https://api.github.com/repos/{repository}/issues/{number}"
+    return document
+
+
+class IssueReadClient:
+    def __init__(self, issues):
+        self.issues = {item["number"]: item for item in issues}
+        self.calls = []
+
+    def rest(self, method, path, payload=None):
+        self.calls.append((method, path, payload))
+        assert method == "GET"
+        return self.issues[int(path.rsplit("/", 1)[-1])]
+
+
+def test_sync_binds_supplied_issues_to_authoritative_repository_issue():
+    authoritative = repository_issue(200, definition(model_id="model-a"))
+    supplied = {**authoritative, "node_id": None, "body": "stale snapshot body"}
+    client = IssueReadClient([authoritative])
+
+    bound = bind_repository_issues(client, "o/r", [supplied])
+
+    assert bound == [authoritative]
+    assert bound[0]["node_id"] == "I_200"
+    assert bound[0]["body"] == authoritative["body"]
+    assert client.calls == [("GET", "repos/o/r/issues/200", None)]
+
+
+@pytest.mark.parametrize(("change", "message"), [
+    ({"html_url": "https://github.com/other/repo/issues/200"}, "does not belong to o/r"),
+    ({"html_url": "https://github.com/o/r/issues/not-a-number"}, "expected https://github.com/o/r/issues/200"),
+    ({"number": 201}, "expected https://github.com/o/r/issues/201"),
+    ({"url": "https://api.github.com/repos/other/repo/issues/200"}, "url .* does not belong"),
+    ({"html_url": "http://github.com/o/r/issues/200"}, "does not belong to o/r"),
+    ({"html_url": None, "url": None}, "has no html_url or url"),
+])
+def test_sync_rejects_foreign_or_malformed_issue_identity(change, message):
+    supplied = {**repository_issue(200, definition(model_id="model-a")), **change}
+    client = IssueReadClient([])
+    with pytest.raises(SyncError, match=message):
+        bind_repository_issues(client, "o/r", [supplied])
+    assert client.calls == []
+
+
+def test_sync_accepts_browser_url_when_html_url_is_absent():
+    authoritative = repository_issue(200, definition(model_id="model-a"))
+    supplied = {
+        **authoritative,
+        "html_url": None,
+        "url": authoritative["html_url"],
+    }
+    client = IssueReadClient([authoritative])
+
+    assert bind_repository_issues(client, "o/r", [supplied]) == [authoritative]
+
+
+def test_sync_rejects_node_id_not_bound_to_the_authoritative_issue():
+    authoritative = repository_issue(200, definition(model_id="model-a"))
+    supplied = {**authoritative, "node_id": "I_FOREIGN"}
+    client = IssueReadClient([authoritative])
+    with pytest.raises(SyncError, match="node_id.*not bound"):
+        bind_repository_issues(client, "o/r", [supplied])
+
+
+def test_sync_rejects_duplicate_supplied_tracking_issue():
+    issue_document = repository_issue(200, definition(model_id="model-a"))
+    client = IssueReadClient([issue_document])
+    with pytest.raises(SyncError, match="duplicate tracking issue #200"):
+        bind_repository_issues(client, "o/r", [issue_document, issue_document])
+
+
+def test_main_refuses_foreign_issue_snapshot_before_any_mutation(tmp_path, monkeypatch):
+    issues_path = tmp_path / "issues.json"
+    foreign = {
+        **repository_issue(200, definition(model_id="model-a")),
+        "html_url": "https://github.com/other/repo/issues/200",
+    }
+    issues_path.write_text(json.dumps([foreign]))
+
+    class RecordingClient:
+        def __init__(self, *args, **kwargs):
+            self.calls = []
+
+        def graphql(self, *args, **kwargs):
+            self.calls.append(("graphql", args, kwargs))
+            return {}
+
+        def rest(self, *args, **kwargs):
+            self.calls.append(("rest", args, kwargs))
+            return {}
+
+    client = RecordingClient()
+    monkeypatch.setattr(sync_module, "GhClient", lambda *args, **kwargs: client)
+    monkeypatch.setattr(sync_module, "fetch_project", lambda *args: project())
+    monkeypatch.setattr(sync_module, "fetch_items", lambda *args: [])
+    monkeypatch.setattr(
+        sync_module, "build_catalog",
+        lambda _repo: catalog(entry("model-a", "recipe-a", maturity="contributed")),
+    )
+    monkeypatch.setenv("MODEL_TRACKER_PROJECT_OWNER", "org")
+    monkeypatch.setenv("MODEL_TRACKER_PROJECT_NUMBER", "1")
+    monkeypatch.setenv("MODEL_TRACKER_WRITE_ENABLED", "true")
+    monkeypatch.setenv("MODEL_TRACKER_ALLOW_LOCAL_WRITE", "true")
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.setattr(sys, "argv", [
+        "model_coverage_sync.py",
+        "--repo", str(REPO), "--repository", "o/r", "--apply",
+        "--issues", str(issues_path),
+    ])
+
+    assert main() == 2
+    assert client.calls == []
 
 
 def test_sync_plan_adds_one_item_and_one_marker_comment():
@@ -669,6 +850,77 @@ def test_invalid_definition_marks_error_and_keeps_other_model_updates():
     assert "definition error" in error_comment["body"]
     assert sha in error_comment["body"]
     assert "old validated" not in error_comment["body"]
+
+
+def test_malformed_issue_without_project_item_is_added_as_error():
+    report = evaluate(
+        catalog(entry("model-a", "recipe-a", maturity="contributed")),
+        [issue(210, body=f"{TRACKER_MARKER}\n```yaml\nbad: yaml\n```\n")],
+    )
+    assert [error["number"] for error in report["errors"]] == [210]
+    plan = build_sync_plan(
+        report, project(), [], {}, comment_owner_login="tracker-bot", source_sha="sha",
+    )
+    adds = [action for action in plan["actions"] if action["action"] == "add_item"]
+    assert len(adds) == 1
+    assert adds[0]["issue"] == 210
+    assert adds[0]["content_id"] == "I_210"
+    values = {field["field"]: field["value"] for field in adds[0]["fields"]}
+    assert values[STATUS_FIELD] == "Error"
+    assert values[COMPLETED_FIELD] == "Unknown"
+    assert values[BLOCKED_FIELD] == "Unknown"
+    assert values["Coverage"].startswith("unknown")
+    assert values[LAST_EVALUATED_FIELD] == "sha"
+    assert any(
+        action["action"] == "create_comment" and action["issue"] == 210
+        for action in plan["actions"]
+    )
+
+
+def test_apply_plan_adds_missing_error_item_with_error_fields():
+    report = evaluate(
+        catalog(entry("model-a", "recipe-a", maturity="contributed")),
+        [issue(212, body=f"{TRACKER_MARKER}\n```yaml\nbad: yaml\n```\n")],
+    )
+    plan = build_sync_plan(
+        report, project(), [], {}, include_comments=False, source_sha="sha",
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def graphql(self, query, variables):
+            self.calls.append((query, variables))
+            if "addProjectV2ItemById" in query:
+                return {"addProjectV2ItemById": {"item": {"id": "NEW_ITEM"}}}
+            return {}
+
+    client = FakeClient()
+    result = apply_plan(client, plan, "o/r")
+    assert result["added_items"] == 1
+    add_call = next(
+        variables for query, variables in client.calls
+        if "addProjectV2ItemById" in query
+    )
+    assert add_call["content"] == "I_212"
+    error_status = next(
+        variables for query, variables in client.calls
+        if "updateProjectV2ItemFieldValue" in query
+        and variables["option"] == project()["fields"][STATUS_FIELD]["options"]["Error"]
+    )
+    assert error_status["item"] == "NEW_ITEM"
+
+
+def test_malformed_issue_without_node_id_cannot_be_added():
+    report = evaluate(
+        catalog(),
+        [issue(211, body=f"{TRACKER_MARKER}\n```yaml\nbad: yaml\n```\n", node_id=None)],
+    )
+    # issue() substitutes a default node_id; remove it to model a partial snapshot.
+    report["errors"][0]["node_id"] = None
+    with pytest.raises(SyncError, match="missing node_id"):
+        build_sync_plan(report, project(), [], {}, comment_owner_login="tracker-bot")
 
 
 def test_stale_plan_marks_only_tracker_owned_items():
@@ -1005,6 +1257,21 @@ def test_write_guard_requires_opt_in_and_trusted_branch():
         "GITHUB_REF": "refs/heads/main",
         "GITHUB_REPOSITORY": "o/r",
     })
+    assert_trusted_write_context({
+        "MODEL_TRACKER_WRITE_ENABLED": "true",
+        "GITHUB_EVENT_NAME": "push",
+        "GITHUB_REF": "refs/heads/trunk",
+        "GITHUB_REPOSITORY": "o/r",
+        "MODEL_TRACKER_DEFAULT_BRANCH": "trunk",
+    })
+    with pytest.raises(SyncError, match="trusted default branch"):
+        assert_trusted_write_context({
+            "MODEL_TRACKER_WRITE_ENABLED": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_REPOSITORY": "o/r",
+            "MODEL_TRACKER_DEFAULT_BRANCH": "trunk",
+        })
     with pytest.raises(SyncError, match="MODEL_TRACKER_ALLOW_LOCAL_WRITE"):
         assert_trusted_write_context({"MODEL_TRACKER_WRITE_ENABLED": "true"})
 
@@ -1013,15 +1280,22 @@ def test_issue_form_default_definition_parses():
     template = yaml.safe_load(
         (REPO / ".github" / "ISSUE_TEMPLATE" / "model-coverage.yml").read_text()
     )
-    text = "\n".join(
+    markdown = "\n".join(
         element["attributes"].get("value", "")
         for element in template["body"] if element["type"] == "markdown"
     )
-    assert TRACKER_MARKER in text
+    # GitHub issue forms do not submit markdown block content, so the marker
+    # must live in the editable textarea to reach the issue body.
+    assert TRACKER_MARKER not in markdown
     textarea = next(
         element for element in template["body"]
         if element["type"] == "textarea" and element["id"] == "target-definition"
     )
+    assert textarea["attributes"]["value"].startswith(TRACKER_MARKER)
+    submitted = {
+        "number": 400, "body": textarea["attributes"]["value"], "labels": [],
+    }
+    assert is_tracking_issue(submitted) is True
     with pytest.raises(DefinitionError, match="placeholders"):
         parse_definition(textarea["attributes"]["value"])
     filled = textarea["attributes"]["value"].replace(
@@ -1036,6 +1310,7 @@ def test_issue_form_default_definition_parses():
     assert target_platform["stack"] == "vllm"
     assert target_platform["version"] == "v0.24.0"
     assert target_platform["completion"] is None
+    assert is_tracking_issue({**submitted, "body": filled}) is True
 
 
 def test_workflow_serializes_writers_and_uploads_audits():
@@ -1044,6 +1319,7 @@ def test_workflow_serializes_writers_and_uploads_audits():
     )
     triggers = workflow.get("on") or workflow.get(True)
     assert {"push", "pull_request", "issues", "workflow_dispatch", "schedule"} <= set(triggers)
+    assert triggers["push"]["branches"] == ["main"]
     assert workflow["concurrency"] == {
         "group": "model-coverage", "cancel-in-progress": False,
     }
@@ -1063,10 +1339,17 @@ def test_workflow_serializes_writers_and_uploads_audits():
     assert sync["permissions"] == {"contents": "read", "issues": "write"}
     assert "vars.MODEL_TRACKER_WRITE_ENABLED == 'true'" in sync["if"]
     assert "github.event_name == 'issues'" in sync["if"]
-    assert "refs/heads/main" in sync["if"]
+    assert "refs/heads/main" not in sync["if"]
+    assert "format('refs/heads/{0}', github.event.repository.default_branch)" in sync["if"]
     sync_text = json.dumps(sync)
     assert "--result-out" in sync_text
     assert "MODEL_TRACKER_BOT_LOGIN" in sync_text
+    sync_apply = next(
+        step for step in sync["steps"] if "--apply" in step.get("run", "")
+    )
+    assert sync_apply["env"]["MODEL_TRACKER_DEFAULT_BRANCH"] == (
+        "${{ github.event.repository.default_branch }}"
+    )
     sync_uploads = [
         step for step in sync["steps"]
         if str(step.get("uses", "")).startswith("actions/upload-artifact")
@@ -1077,6 +1360,14 @@ def test_workflow_serializes_writers_and_uploads_audits():
     assert stale["needs"] == "check"
     assert "always()" in stale["if"]
     assert "needs.check.outputs.reconciliation_failure == 'true'" in stale["if"]
+    assert "refs/heads/main" not in stale["if"]
+    assert "format('refs/heads/{0}', github.event.repository.default_branch)" in stale["if"]
+    stale_apply = next(
+        step for step in stale["steps"] if "--apply" in step.get("run", "")
+    )
+    assert stale_apply["env"]["MODEL_TRACKER_DEFAULT_BRANCH"] == (
+        "${{ github.event.repository.default_branch }}"
+    )
     assert "--mark-stale" in json.dumps(stale)
     assert "--apply" in json.dumps(stale)
     assert any(
@@ -1112,7 +1403,9 @@ def test_cli_evaluates_issues_file(tmp_path):
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["tracking_issue_count"] == 0
-    assert "gemma-4" in report["untracked_models"]
+    assert report["untracked_models"] == sorted(
+        model["id"] for model in build_catalog(REPO)["models"]
+    )
 
 
 def test_cli_allow_errors_still_writes_reports(tmp_path):

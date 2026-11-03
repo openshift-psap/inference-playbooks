@@ -72,12 +72,17 @@ def is_tracking_issue(issue: dict) -> bool:
     return TRACKER_MARKER in body or LABEL in _labels(issue)
 
 
+_NO_NON_STRING_KEY = object()
+
+
 def _unknown_keys(
     value: dict, allowed: frozenset[str], location: str,
     optional: frozenset[str] = frozenset(),
 ) -> None:
-    non_string = next((key for key in value if not isinstance(key, str)), None)
-    if non_string is not None:
+    non_string = next(
+        (key for key in value if not isinstance(key, str)), _NO_NON_STRING_KEY,
+    )
+    if non_string is not _NO_NON_STRING_KEY:
         raise DefinitionError(f"{location}: mapping keys must be strings, got {non_string!r}")
     unknown = sorted(set(value) - allowed)
     missing = sorted(allowed - set(value) - optional)
@@ -253,8 +258,14 @@ def _validation_applies(entry: dict, platform: dict) -> tuple[dict, bool, str | 
         ) == 0
     ]
     # Prefer an exact-current-engine run even when an earlier run is ordered
-    # first; require same-engine for independent validation.
+    # first; require same-engine for independent validation. If the same-engine
+    # candidates are unusable, use the full exact-platform set only to explain
+    # earlier-engine evidence; that explanation never validates the target.
     badge = validation_badge(entry, same_engine) if same_engine else validation_badge(entry, filtered)
+    if same_engine and badge.get("state") != "same-engine":
+        exact_badge = validation_badge(entry, filtered)
+        if exact_badge.get("state") == "earlier-engine":
+            badge = exact_badge
     state = badge.get("state")
     if state == "same-engine" and badge.get("run_id"):
         return badge, True, None
