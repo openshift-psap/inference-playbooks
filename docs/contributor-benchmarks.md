@@ -1,7 +1,7 @@
 # Portable contributor benchmarks
 
-**First run?** Follow the [step-by-step Gemma/GuideLLM walkthrough](#run-your-first-contributor-benchmark)
-for a complete example, command explanations, and troubleshooting.
+See the [Gemma/GuideLLM execution example](#contributor-benchmark-execution-example)
+for commands, configuration details, and troubleshooting.
 
 Contributors prepare a pinned recipe package themselves, run it on their own
 cluster, and return **two files**: `evidence.tar.gz` and
@@ -417,14 +417,14 @@ It is not an exhaustive all-layer forensic audit, vulnerability scan, or guarant
 of credential absence. Review changes to scanner pins and build inputs before
 publication; do not add broad exclusions merely to silence a finding.
 
-## Run your first contributor benchmark
+## Contributor benchmark execution example
 
 This walkthrough takes you from a checkout to a shareable benchmark result using
 the portable Forge runner introduced in [PR #70](https://github.com/openshift-psap/inference-playbooks/pull/70).
 The worked example deploys Gemma 4 on one H200 GPU, checks the pipeline with
 GuideLLM, then shows how to run the full 8K-input/1K-output workload.
 
-### Understand the handoff
+### Workflow and responsibilities
 
 ```text
 Contributor                           Maintainer
@@ -448,7 +448,7 @@ and consumes cluster resources. Import is a separate maintainer operation;
 a successful run does not automatically publish results or promote recipe maturity.
 No AWS, MLflow, or internal artifact credentials are needed by the contributor.
 
-### 1. Get the tools and choose the example
+### 1. Set up the tools and select a recipe
 
 Use a Linux AMD64 runner host with Git, Python, and Podman or Docker. Run these
 commands in a new checkout:
@@ -649,7 +649,7 @@ stage the intended files, commit, push your feature branch, and open a PR agains
 See the [maintainer reference](#maintainer-validate-review-and-import)
 for replay, repeat imports, and optional S3 retention.
 
-### Troubleshooting your first attempt
+### Troubleshooting
 
 | Symptom | What to do next |
 | --- | --- |

@@ -20,7 +20,7 @@ to explore deployment configurations and available benchmark evidence.
 ## Target Workloads
 
 To prepare and run a recipe yourself with pinned Forge and returnable evidence,
-start with the [step-by-step contributor benchmark walkthrough](docs/contributor-benchmarks.md#run-your-first-contributor-benchmark).
+see the [contributor benchmark execution example](docs/contributor-benchmarks.md#contributor-benchmark-execution-example).
 See the [portable contributor runner reference](docs/contributor-benchmarks.md)
 for supported inputs, permissions, and maintainer import details.
 Preparation defaults to the published
