@@ -50,6 +50,12 @@ the workload is specific to that model, framework, or deployment shape.
 | Qwen3-235B-A22B | [h200-x8-pp2-tp8-agentx-128k](models/qwen3-235b-a22b/recipes/h200-x8-pp2-tp8-agentx-128k/recipe.yaml) | RHOAI 3.5 | PP2+TP8 (LLMI) |
 | GLM-5 / GLM-5-FP8 | — | — | [Model Ops](models/glm-5/model-ops/) only |
 
+Planned and completed model coverage, ownership, blockers, and validation
+evidence are tracked through GitHub Issues and Projects; see the
+[model coverage tracker](docs/model-tracker.md). Existing repository models
+without a tracking issue are reported explicitly rather than counted as
+complete.
+
 ## Recipe Layout
 
 ```text
