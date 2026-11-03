@@ -46,3 +46,6 @@ deployment:
     kind: Deployment
     generated: true
 notes: guides/notes.yaml
+benchmark_runs:
+- results/forge-ccd5da6688354217b516728a799cd12b-guidellm/run.yaml
+- results/forge-ccd5da6688354217b516728a799cd12b-aiperf/run.yaml

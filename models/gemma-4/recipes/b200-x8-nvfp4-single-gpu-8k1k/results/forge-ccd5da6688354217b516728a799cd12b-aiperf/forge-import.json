@@ -1,0 +1,32 @@
+{
+  "outputs": [
+    {
+      "benchmark_run_id": "ccd5da6688354217b516728a799cd12b",
+      "files": {
+        "kpis.json": "03e6688cd9596c5a1678d2191fb55fce459dbd4e",
+        "result.json": "9f7f623c8ef808f18b94e3d8667233b8b259d956",
+        "run.yaml": "441e326e1e2fe58eeb254d11a1562b1310f0543c"
+      },
+      "harness": "aiperf",
+      "recipe_path": "models/gemma-4/recipes/b200-x8-nvfp4-single-gpu-8k1k/recipe.yaml",
+      "run_path": "models/gemma-4/recipes/b200-x8-nvfp4-single-gpu-8k1k/results/forge-ccd5da6688354217b516728a799cd12b-aiperf/run.yaml"
+    },
+    {
+      "benchmark_run_id": "ccd5da6688354217b516728a799cd12b",
+      "files": {
+        "kpis.json": "03e6688cd9596c5a1678d2191fb55fce459dbd4e",
+        "result.json": "451fbc27454b1c0694536332d8f8039ae8d122b3",
+        "run.yaml": "6ae77714f68e1eb033c36ff6e62e1876668ba2f2"
+      },
+      "harness": "guidellm",
+      "recipe_path": "models/gemma-4/recipes/b200-x8-nvfp4-single-gpu-8k1k/recipe.yaml",
+      "run_path": "models/gemma-4/recipes/b200-x8-nvfp4-single-gpu-8k1k/results/forge-ccd5da6688354217b516728a799cd12b-guidellm/run.yaml"
+    }
+  ],
+  "parent_run_id": "ccd5da6688354217b516728a799cd12b",
+  "pr_number": 92,
+  "tested_revision": "bff852e5bc1dbd5b81ec0840a16295cf4b7a95cd",
+  "tracking_origin": "https://mlflow.apps.psap-automation.ibm.rhperfscale.org",
+  "version": 1,
+  "workspace": "forge-inference-playbooks"
+}

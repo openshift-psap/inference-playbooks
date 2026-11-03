@@ -1,0 +1,74 @@
+name: Model coverage target
+description: Declare a model's planned recipe/platform coverage, owner, and completion criterion.
+title: "[model-coverage] "
+labels: ["model-coverage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is the single maintained plan for one model's coverage. The
+        repository catalog remains the source of truth for recipe maturity and
+        committed benchmark evidence. CI success does not mean validated.
+
+        Edit the fenced YAML block below. Keep the marker comment and the
+        fences, use one issue per model, and do not add a second YAML block.
+        The model tracker reads only that block. See
+        [docs/model-tracker.md](https://github.com/openshift-psap/inference-playbooks/blob/main/docs/model-tracker.md)
+        for status rules and examples.
+
+        Internal Jira: put only the issue key in `jira`, for example
+        `RHOAIENG-123`. The tracker renders the fixed note
+        "Refer to internal Jira for more details on this task." and never reads
+        Jira content. Do not paste Jira descriptions or discussions here.
+  - type: textarea
+    id: target-definition
+    attributes:
+      label: Machine-readable target definition
+      description: >-
+        Required. Replace the placeholders. `completion` is `contributed` or
+        `validated`. List every planned recipe and platform pair. A platform may
+        override the model-level `completion`. Remove the leading `#` from
+        `jira` only when an internal Jira issue exists.
+      value: |
+        <!-- inference-playbooks:model-coverage-tracker -->
+        ```yaml
+        schema_version: 1
+        model_id: replace-with-model-id
+        owner: "@your-github-handle"
+        completion: contributed  # contributed or validated
+        # jira: RHOAIENG-123
+        blockers: []
+        targets:
+          - recipe_id: replace-with-recipe-id
+            platforms:
+              - stack: vllm
+                version: v0.24.0
+                # completion: validated  # optional per-platform override
+        ```
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        ### Field rules
+
+        - `model_id` must match `models/<model-id>/model.yaml` when the model
+          exists. A planned model may not exist in the repository yet.
+        - `owner` is the accountable GitHub user or team.
+        - `completion` is the model-level bar for every listed platform:
+          `contributed` accepts contributed, validated, or production maturity;
+          `validated` requires same-engine committed benchmark evidence for the
+          exact target platform, not a green CI run, a badge for another
+          platform, or an earlier-engine compatibility run. A single
+          `platforms[]` entry may set its own `completion` to override the
+          model-level bar.
+        - `targets[].recipe_id` is the v4 `recipe_id` field. Recipe IDs are
+          scoped by model: the same recipe ID may exist under different models.
+        - `targets[].platforms[]` entries are exact `stack` and `version`
+          values declared by that recipe. A target platform missing from the
+          recipe stays planned.
+        - `blockers` is an optional public list. Do not include confidential
+          information.
+        - Duplicate model declarations invalidate every issue that declares the
+          same model. Duplicate targets, unknown keys, and malformed YAML fail
+          the tracker check with an actionable error.

@@ -42,6 +42,8 @@ def test_fixed_groups_always_visible_on_single_recipe_models(page, served, model
 def synthetic(page, served):
     payload = copy.deepcopy(served[1])
     base = copy.deepcopy(payload['entries'][0])
+    # These fixtures exercise declared dimensions, not production evidence.
+    base['evidence'] = []
     payload['entries'] = []
     for index, (gpu, scope, workload) in enumerate([
         ('h200', 'single-node', 'guidellm-8k1k'),

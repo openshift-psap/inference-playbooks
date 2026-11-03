@@ -232,6 +232,8 @@ layout. The renderer generates manifests from the serving block.
 
 For hardware maintainers cannot access directly, use the
 [portable contributor runner and maintainer import workflow](docs/contributor-benchmarks.md).
+See the [Gemma/GuideLLM execution example](docs/contributor-benchmarks.md#contributor-benchmark-execution-example)
+for package preparation, execution, monitoring, and the evidence handoff.
 Contributors return a local evidence bundle; maintainers review/import it and
 handle any storage uploads. Import alone never promotes recipe maturity.
 

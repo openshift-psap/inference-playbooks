@@ -92,6 +92,28 @@ jobs:
         run: |
           python3 trusted/tools/open_pr_evidence.py publish \
             --plan "$RUNNER_TEMP/forge-open-pr/plan.json" --actor "$ACTOR"
+      - name: Read the prepared delivery mode
+        id: delivery
+        if: ${{ steps.prepare.outcome == 'success' }}
+        run: |
+          python3 - "$RUNNER_TEMP/forge-open-pr/plan.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          plan = json.load(open(sys.argv[1], encoding='utf-8'))
+          print(f"mode={plan['mode']}")
+          print(f"same_repo={str(plan['head_repository'] == plan['repository']).lower()}")
+          PY
+      - name: Verify every PR commit has a GitHub-verified signature
+        if: ${{ steps.prepare.outcome == 'success' && steps.delivery.outputs.same_repo == 'true' && (steps.delivery.outputs.mode == 'publish' || steps.delivery.outputs.mode == 'unchanged') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: >-
+          python3 trusted/tools/verify_pr_signatures.py
+          --repository "$REPOSITORY"
+          --pr-number "$PR_NUMBER"
       - name: Report import outcome
         if: ${{ always() }}
         run: |

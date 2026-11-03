@@ -70,7 +70,7 @@ def synthetic_catalog(page, served):
     payload = copy.deepcopy(served[1])
     entry = copy.deepcopy(payload['entries'][0])
     entry.update(id='first-entry', model_id=payload['models'][0]['id'], blocked=False,
-                 scope='single-node', workload_profile='guidellm-8k1k', notes=None)
+                 scope='single-node', workload_profile='guidellm-8k1k', notes=None, evidence=[])
     second = copy.deepcopy(entry)
     second.update(id='second-entry', scope='multi-node', workload_profile='aiperf-agentx-unlimited-context')
     payload['entries'] = [entry, second]
