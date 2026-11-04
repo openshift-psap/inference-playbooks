@@ -1336,7 +1336,7 @@ def test_workflow_serializes_writers_and_uploads_audits():
 
     sync = workflow["jobs"]["sync"]
     assert sync["needs"] == "check"
-    assert sync["permissions"] == {"contents": "read", "issues": "write"}
+    assert sync["permissions"] == {"contents": "read"}
     assert "vars.MODEL_TRACKER_WRITE_ENABLED == 'true'" in sync["if"]
     assert "github.event_name == 'issues'" in sync["if"]
     assert "refs/heads/main" not in sync["if"]
@@ -1390,6 +1390,59 @@ def test_workflow_serializes_writers_and_uploads_audits():
         step for step in check["steps"] if "--apply" in step.get("run", "")
     ]
     assert dry_run_steps == []
+
+
+def test_workflow_mints_environment_scoped_tracker_app_token():
+    path = REPO / ".github" / "workflows" / "model-coverage.yml"
+    text = path.read_text()
+    workflow = yaml.safe_load(text)
+
+    # The static project secret is gone; App credentials are environment-scoped.
+    assert "MODEL_TRACKER_PROJECT_TOKEN" not in text
+    assert "FORGE_INGEST_APP_CLIENT_ID" in text
+    assert "FORGE_INGEST_APP_PRIVATE_KEY" in text
+    assert "FORGE_INGEST_APP_PRIVATE_KEY" not in json.dumps(
+        workflow["jobs"]["check"]
+    )
+
+    for job_name in ("sync", "stale"):
+        job = workflow["jobs"][job_name]
+        assert job["environment"] == "forge-evidence"
+        assert job["permissions"] == {"contents": "read"}
+        assert "vars.MODEL_TRACKER_WRITE_ENABLED == 'true'" in job["if"]
+
+        mint = next(
+            step for step in job["steps"] if step.get("id") == "app-token"
+        )
+        assert mint["uses"] == (
+            "actions/create-github-app-token@"
+            "64ab729a6294000f5aa4a4bc0b73d1f32bc45510"
+        )
+        assert mint["with"] == {
+            "client-id": "${{ vars.FORGE_INGEST_APP_CLIENT_ID }}",
+            "private-key": "${{ secrets.FORGE_INGEST_APP_PRIVATE_KEY }}",
+            "owner": "${{ github.repository_owner }}",
+            "repositories": "${{ github.event.repository.name }}",
+            "permission-organization-projects": "write",
+            "permission-issues": "write",
+            "permission-contents": "read",
+        }
+
+        apply = next(
+            step for step in job["steps"] if "--apply" in step.get("run", "")
+        )
+        assert apply["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
+        assert "MODEL_TRACKER_PROJECT_TOKEN" not in json.dumps(apply)
+        assert job["steps"].index(mint) < job["steps"].index(apply)
+
+    identity = next(
+        step for step in workflow["jobs"]["sync"]["steps"]
+        if step.get("name") == "Resolve tracker comment identity"
+    )
+    assert identity["env"]["APP_SLUG"] == "${{ steps.app-token.outputs.app-slug }}"
+    assert identity["env"]["CONFIGURED_LOGIN"] == "${{ vars.MODEL_TRACKER_BOT_LOGIN }}"
+    assert '"MODEL_TRACKER_BOT_LOGIN=${APP_SLUG}[bot]"' in identity["run"]
+    assert '"MODEL_TRACKER_BOT_LOGIN=$CONFIGURED_LOGIN"' in identity["run"]
 
 
 def test_cli_evaluates_issues_file(tmp_path):

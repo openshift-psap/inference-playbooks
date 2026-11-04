@@ -251,37 +251,39 @@ the project and prints the planned mutations without writing.
 4. Create repository **variables**:
    - `MODEL_TRACKER_PROJECT_OWNER` — organization or user login;
    - `MODEL_TRACKER_PROJECT_NUMBER` — numeric project number;
-   - `MODEL_TRACKER_BOT_LOGIN` — the exact login that authors tracker
-     comments (the PAT/service-account or GitHub App bot login). Set this when
-     the token cannot read `viewer`; otherwise the tool resolves it and falls
-     back to REST `/user`.
+   - `MODEL_TRACKER_BOT_LOGIN` — optional fallback login for tracker
+     comments. The workflow normally derives `<app-slug>[bot]` from the minted
+     App token, so set this only for a non-App credential or a local run whose
+     token cannot read `viewer`.
    - `MODEL_TRACKER_WRITE_ENABLED` — leave unset or `false` until the dry run
      and dashboard are reviewed. Set to `true` only to enable the trusted sync.
-5. Create repository **secret** `MODEL_TRACKER_PROJECT_TOKEN` with the minimum
-   scopes:
-   - classic PAT: `project` and `public_repo` (or `repo` for a private fork);
-   - fine-grained token: organization Projects read/write, repository Issues
-     read/write, Contents read, Metadata read.
-
-   The default `GITHUB_TOKEN` is used only for read-only checks. The project
-   credential is passed only to the sync step. PR jobs never receive it and the
-   workflow never runs sync for a pull request event. Prefer a dedicated
-   service account or GitHub App token: comments are authored by that exact
-   identity, and only marker comments whose `user.login` matches
-   `MODEL_TRACKER_BOT_LOGIN` (or the resolved viewer/`/user` login) are updated.
+5. Reuse the existing organization-owned GitHub App and protected
+   `forge-evidence` environment from benchmark ingestion. No tracker-specific
+   secret or personal access token is required.
+   - Grant the App organization **Projects: write**, repository
+     **Issues: write**, and repository **Contents: read** (Metadata read is
+     implicit), then approve the updated permissions on the installation.
+   - Store `FORGE_INGEST_APP_CLIENT_ID` as an environment variable and
+     `FORGE_INGEST_APP_PRIVATE_KEY` as an environment secret on
+     `forge-evidence`, and restrict that environment's deployment branch
+     policy to `main`.
+   - The `sync` and `stale` jobs mint a repository-scoped installation token
+     only for their write step and revoke it at job completion. `owner` plus
+     `repositories` limits repository access without dropping the
+     organization Projects permission; the job's default `GITHUB_TOKEN` stays
+     read-only.
+   - PR jobs never receive App credentials, and the workflow never runs sync
+     for a pull request event. Comments are authored by the App's
+     `<app-slug>[bot]` identity; only marker comments owned by that exact login
+     (or `MODEL_TRACKER_BOT_LOGIN`) are updated.
 6. Add the `model-coverage` label (see above) and open the first tracking issue.
-
-The current maintainer `gh` token available during this implementation lacks
-`read:project`. No project, field, issue, label, comment, variable, secret, or
-branch was changed. Do not use this environment for the first live setup; use a
-project-scoped credential and follow the steps above.
 
 ### Dry run
 
 With a read-capable project credential:
 
 ```sh
-GH_TOKEN="$MODEL_TRACKER_PROJECT_TOKEN" \
+GH_TOKEN=<project-capable-token> \
 python3 tools/model_coverage_sync.py \
   --repository openshift-psap/inference-playbooks \
   --project-owner ORG \
@@ -306,7 +308,7 @@ from GitHub.
 To rehearse the catalog-failure path without evaluating:
 
 ```sh
-GH_TOKEN="$MODEL_TRACKER_PROJECT_TOKEN" \
+GH_TOKEN=<project-capable-token> \
 python3 tools/model_coverage_sync.py \
   --repository openshift-psap/inference-playbooks \
   --project-owner ORG --project-number NUMBER \
@@ -323,7 +325,7 @@ items or posts comments, and it leaves foreign or human project items alone.
 ```sh
 MODEL_TRACKER_WRITE_ENABLED=true \
 MODEL_TRACKER_ALLOW_LOCAL_WRITE=true \
-GH_TOKEN="$MODEL_TRACKER_PROJECT_TOKEN" \
+GH_TOKEN=<project-capable-token> \
 python3 tools/model_coverage_sync.py \
   --repository openshift-psap/inference-playbooks \
   --project-owner ORG \
@@ -404,14 +406,20 @@ success and failure.
 The `sync` job exists only after a successful `check`, only when
 `MODEL_TRACKER_WRITE_ENABLED == 'true'`, and only for
 default-branch/issues/manual/schedule contexts. It checks out the default
-branch, receives the project secret only in its sync step, and applies the same
-plan used by the dry run. A missing secret fails with an explicit setup
-message. Pull requests cannot reach this job.
+branch, runs in the protected `forge-evidence` environment, mints a
+short-lived repository-scoped App token with organization Projects write,
+Issues write, and Contents read, and applies the same plan used by the dry
+run. The token is passed only to the sync step and revoked at job completion;
+the job's default `GITHUB_TOKEN` remains read-only. Comment ownership is
+resolved from the token's `app-slug` output as `<app-slug>[bot]`, falling back
+to `MODEL_TRACKER_BOT_LOGIN` when no slug is available. Pull requests cannot
+reach this job.
 
 The `stale` job runs when the validation or evaluator step failed (for example
 a schema failure or catalog build failure), not when a test-only step failed,
-and only when the same trusted-context conditions hold. It invokes
-`--mark-stale --apply` and uploads its plan/result. All jobs share one
+and only when the same trusted-context conditions hold. It runs in the same
+`forge-evidence` environment, mints the same narrow App token, and invokes
+`--mark-stale --apply` before uploading its plan/result. All jobs share one
 `model-coverage` concurrency group, so pushes, issue edits, manual runs, and
 the schedule cannot write in parallel or create duplicate comments.
 

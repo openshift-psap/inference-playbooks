@@ -212,7 +212,9 @@ Create protected environment `forge-evidence`, with:
   A custom runner must provide Bash, Git, and the GitHub CLI (`gh`).
 - Variable `FORGE_INGEST_APP_CLIENT_ID` and secret `FORGE_INGEST_APP_PRIVATE_KEY`:
   an organization-owned GitHub App installed only on this repository, with
-  Contents and Pull requests read/write (Metadata read is implicit). No webhooks
+  Contents and Pull requests read/write (Metadata read is implicit). The
+  model-coverage workflow reuses this App and additionally requires
+  organization Projects write and repository Issues write. No webhooks
   or event subscriptions are needed. Restrict the `forge-evidence` environment
   deployment branch policy to `main` before storing the App private key.
   The workflow mints a repository-scoped installation token only for publication
