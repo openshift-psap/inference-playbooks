@@ -158,7 +158,104 @@ use this key to compare/select runs that use the same accelerators but differ
 in CPU, memory, provider, storage, or network configuration. Do not use the
 host-specific profile ID for that comparison.
 
+## Catalog claims and publication
+
+Catalog entries describe actual recipe/platform combinations. Final generated,
+pinned, or overlaid artifacts remain deployment truth; do not invent equivalent
+standalone commands. HF organization/model links derive from canonical model
+identity. Quickstart notes may include `commands` and `expected`; these are inert
+display text. Source prerequisites explicitly rather than guessing storage or
+model-download requirements from deployment scope.
+
+Declared maturity is separate from evidence completeness and engine compatibility.
+Validation badges require applicable benchmark/configuration proof and a resolved
+engine; neither maturity nor a full sweep alone grants one. Preserve the original
+tested platform and engine attribution, including earlier-engine qualifications.
+Filter/display measurements by the recorded per-harness workload and platform,
+not by relabelling them to match the recipe's intended workload. See the
+[catalog contract](docs/catalog-contract.md) and [evidence ingestion](docs/forge-benchmark-ingestion.md).
+
+Local catalog/site builds do not publish. PR checks produce unprivileged preview
+artifacts. The main-branch Pages workflow builds a combined production/staging
+bundle, sourcing staging from `staging/all-pr-manifests`; it does not promote PR
+preview artifacts. Keep build provenance and source revisions intact. Workflow
+definitions are not proof that live environment permissions or protection are
+configured; see `.github/workflows/pages.yml` for publication gates.
+
+## Model coverage ownership
+
+One tracking issue per model owns the planned recipe/platform targets. Catalog
+inputs own implementation, maturity, and evidence status; do not maintain a
+parallel status table. Each target must meet its own completion criterion.
+`validated` completion requires applicable same-engine evidence tested on that
+exact stack/version; an earlier-engine or different-platform badge does not
+satisfy it. Passing CI or closing an issue does not establish completion, and
+closing a tracking issue does not retire its plan.
+
+Use the model-coverage issue form, `tools/model_coverage.py` evaluator, and
+dry-run-default `tools/model_coverage_sync.py`. Dashboard writes are explicit
+opt-in operations; the trusted sync workflow uses a protected environment and
+short-lived GitHub App tokens. See [model tracker](docs/model-tracker.md) for
+target definitions, current authentication, and reviewed sync instructions.
+
 ## Benchmark evidence
+
+### Choose the evidence workflow
+
+- **Forge, after merge:** `benchmark-ingest.yml` selects the latest trusted
+  successful report, routes it to the approved report workspace, and opens or
+  updates a separate evidence PR. Post-merge imports are additive; publication
+  preserves existing import-branch history. See [Forge ingestion](docs/forge-benchmark-ingestion.md).
+- **Forge, open recipe PR:** a maintainer explicitly dispatches
+  `benchmark-import-pr.yml` with the PR number and successful report comment ID.
+  Same-repository branches receive a signed evidence-only commit guarded by the
+  exact prepared head; forks or oversized imports receive a patch. For affected
+  recipes, the selected execution replaces previous evidence in the current
+  tree, retaining all its harnesses. Re-selecting it revalidates the source and
+  makes no commit when evidence matches. See [open-PR import](tests/forge/README.md#maintainer-workflow-open-pr).
+- **Contributor-run benchmarks:** use `tools/prepare_contributor.py`, the packaged
+  `run.sh` and monitor, then `tools/import_contributor.py` for maintainer intake.
+  Prepare committed inputs and a fresh package/run ID and output directory for
+  each attempt. After privacy review, return only the evidence archive and
+  checksum; keep progress files and private diagnostics local. Import is
+  read-only by default. After human privacy/provenance review, use
+  `--apply --reviewed`, inspect the diff, and open an evidence PR. The importer
+  does not commit, push, open a PR, or change maturity. See
+  [contributor benchmarks](docs/contributor-benchmarks.md).
+
+The contributor runner currently supports one serving object on one platform:
+Deployment, LeaderWorkerSet, or PVC-backed LLMInferenceService. Supported
+workloads are `guidellm-8k1k`, `guidellm-smoke`, and `aiperf-smoke`; AgentX is not
+supported. Check the guide's supported-input contract before preparation rather
+than adapting unsupported workloads or resource bundles silently.
+`contributor-forge` records contributor-controlled execution, not independent
+validation. An archive checksum establishes integrity, not execution attestation.
+
+Explicit maintainer-requested evidence publication is an authorized workflow;
+it does not permit ordinary regeneration to silently commit to a contributor's
+branch. Report import outcomes, failures, and patch delivery to the user.
+
+### Preserve attribution and completeness
+
+Preserve the actual tested recipe SHA; never replace it with a later PR head,
+merge SHA, or Forge code SHA. Historical tested revisions must satisfy the
+importer's ancestry and matching-input checks. If deployment inputs changed,
+rerun the benchmark rather than relabel old evidence. Keep recipe revision,
+declared model revision, checkpoint/load path, API alias, and runtime image digest
+distinct. Do not invent immutable model resolution or missing optional harness
+labels to make an import pass.
+
+Current Forge parent imports verify execution and bundle records even when
+attribution tags exist. Bundle v1 permits absent-namespace placement; v2 also
+permits the specifically recorded Deployment CI node-selector transformation.
+Do not apply arbitrary serving repairs. Retain the importer-generated provenance
+and expectation snapshots for offline replay. `smoke`, `partial`, and `full-sweep`
+come from normalization against recorded workload expectations, not just the
+observed concurrency points. A smoke run or successful import does not promote
+maturity or prove the recipe's nominal workload was benchmarked. See
+[the ingestion contract](docs/forge-benchmark-ingestion.md).
+
+### Evidence records
 
 Every published benchmark metric must be traceable to a committed result run.
 A result run records:
