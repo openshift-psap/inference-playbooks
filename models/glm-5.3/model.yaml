@@ -1,0 +1,17 @@
+schema_version: 2
+model_id: glm-5.3
+name: GLM-5.3
+family: GLM
+huggingface_id: zai-org/GLM-5.3
+source: huggingface
+# Verified against the upstream config at this immutable revision:
+# https://huggingface.co/zai-org/GLM-5.3/resolve/ba32f8c19c8738e2c57c71798c601d477a7bf844/config.json
+model_type: glm_moe_dsa
+architectures:
+  - GlmMoeDsaForCausalLM
+quantizations:
+  - name: FP8
+    huggingface_id: zai-org/GLM-5.3
+    # quantization_config: fp8, e4m3, dynamic activations, 128x128 weight blocks.
+    # Selected modules remain unconverted; dtype=bfloat16 is not the weight
+    # quantization method. This metadata does not verify the existing PVC.

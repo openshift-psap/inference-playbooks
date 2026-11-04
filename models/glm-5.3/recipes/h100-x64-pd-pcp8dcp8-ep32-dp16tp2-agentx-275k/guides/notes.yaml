@@ -1,0 +1,18 @@
+schema_version: 1
+profile:
+  label: GLM-5.3 H100 disaggregated offline draft
+  sub: Asymmetric prefill/decode; metadata verification pending
+default_stance: >-
+  Preserve the submitted configuration while verifying the private image and
+  deployed weights. Upstream model metadata is verified. This draft is neither
+  merge-ready nor independently tested.
+known_issues:
+  - issue: Exact engine metadata is unavailable in the submitted files.
+    impact: Full validation and catalog publication remain blocked.
+    mitigation: Complete the evidence checklist in guides/conversion.md.
+  - issue: The recipe schema does not represent asymmetric PCP/DCP role topology.
+    impact: The top-level parallelism describes decode only; the pin is authoritative for execution.
+    mitigation: Maintain both roles in config/disaggregatedset.yaml and regenerate the pin and output together.
+  - issue: Approximate and precise router alternatives use different builds and tuning.
+    impact: Their comparison does not isolate the prefix-cache index.
+    mitigation: Align EPP/chart compatibility and tuning before a controlled experiment.

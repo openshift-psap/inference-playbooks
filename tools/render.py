@@ -316,11 +316,6 @@ def render_recipe(
     if not isinstance(serving, dict):
         return "", [f"{recipe_path}: missing serving block"]
 
-    if serving.get("prefill"):
-        return "", [f"{recipe_path}: prefill/decode disaggregated serving not yet supported by renderer"]
-    if serving.get("router", {}).get("strategy"):
-        return "", [f"{recipe_path}: router configuration not yet supported by renderer"]
-
     model_path = repo / "models" / recipe.get("model_id", "") / "model.yaml"
     if model_path.is_file():
         model = load_yaml_file(model_path)
@@ -383,6 +378,15 @@ def render_recipe(
                 output_path.write_bytes(pinned_bytes)
                 print(f"  wrote {output_path.relative_to(repo)} (pinned)")
             all_rendered.append(rendered)
+            continue
+
+        # Pins preserve unsupported deployments verbatim. These restrictions
+        # apply only to platforms that actually need template rendering.
+        if serving.get("prefill"):
+            errors.append(f"{recipe_path}: prefill/decode disaggregated serving not yet supported by renderer")
+            continue
+        if serving.get("router", {}).get("strategy"):
+            errors.append(f"{recipe_path}: router configuration not yet supported by renderer")
             continue
 
         mode = serving.get("parallelism", {}).get("mode", "")

@@ -498,6 +498,41 @@ class RenderRecipeIntegrationTests(unittest.TestCase):
         self.assertIn("kind: Deployment", rendered)
         self.assertIn("kind: CustomResource", rendered)
 
+    def test_pinned_disaggregated_router_bypasses_template_limitations(self):
+        from render import render_recipe
+        recipe = make_recipe(tp=2)
+        recipe["serving"]["prefill"] = {"args": []}
+        recipe["serving"]["router"] = {"strategy": "disaggregated"}
+        pin = "apiVersion: disaggregatedset.x-k8s.io/v1\nkind: DisaggregatedSet\nmetadata:\n  name: pd\n"
+        source = self.recipe_dir / "manifests" / "source" / "bundle.yaml"
+        source.parent.mkdir(parents=True)
+        source.write_text(pin)
+        recipe["platforms"] = [{
+            "stack": "llm-d", "version": "0.8",
+            "overrides": "platforms/llm-d-0.8.yaml",
+            "pinned_manifest": "manifests/source/bundle.yaml",
+            "pinned_reason": "Asymmetric P/D requires a pin",
+        }]
+        path = self._write_recipe(recipe)
+        rendered, errors = render_recipe(self.tmpdir, path)
+        self.assertFalse(errors, errors)
+        self.assertEqual(rendered, pin)
+        output = self.recipe_dir / "manifests" / "llm-d-0.8" / "bundle.yaml"
+        self.assertEqual(output.read_bytes(), source.read_bytes())
+
+        # A second platform without a pin must still reject unsupported P/D.
+        recipe["platforms"].append({
+            "stack": "vllm", "version": "v0.24.0",
+            "overrides": "platforms/vllm-v0.24.0.yaml",
+        })
+        _, errors = render_recipe(self.tmpdir, self._write_recipe(recipe), dry_run=True)
+        self.assertTrue(any("disaggregated serving not yet supported" in e for e in errors))
+
+        # Router-only configurations also remain unsupported without a pin.
+        recipe["serving"].pop("prefill")
+        _, errors = render_recipe(self.tmpdir, self._write_recipe(recipe), dry_run=True)
+        self.assertTrue(any("router configuration not yet supported" in e for e in errors))
+
     def test_render_pinned_manifest_missing_file_errors(self):
         from render import render_recipe
         recipe = make_recipe(tp=1)

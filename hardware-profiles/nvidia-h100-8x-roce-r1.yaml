@@ -1,0 +1,35 @@
+schema_version: 1
+profile_id: nvidia-h100-8x-roce-r1
+profile_revision: 1
+kind: hardware-profile
+description: Eight H100 80 GB HBM3 GPUs per node with eight GPUDirect RoCE rails.
+accelerator_key: nvidia-h100-x8
+accelerators:
+  vendor: nvidia
+  model: H100
+  count_per_node: 8
+  # Source reports 80 GB HBM3. Exact GiB capacity, form factor and intra-node
+  # topology are not established by the submitted manifest.
+host:
+  cpu_architecture: x86_64
+  cpu_min: 64
+  memory_min_gib: 1500
+  notes: >-
+    Per-pod scheduling requests from the submitted configuration, not measured
+    host capacity. Nodes need additional capacity for system workloads.
+network:
+  inter_node_transport: roce
+  rdma: true
+  accelerator_nic_allocation: nvidia.com/gpu and nvidia.com/roce_gdr device-plugin resources
+  notes: >-
+    Submitted configuration requires eight RoCE resources and eight per-rail
+    NADs per pod, mlx5_1 through mlx5_8, GID index 3, /dev/infiniband,
+    NVSHMEM IBGDA and GDRCopy. NAD interfaces net1 through net8 require
+    per-rail policy routing; target-specific gateways and routing rules must
+    be verified before use. Link bandwidth and physical topology are unknown.
+correction_log:
+  - revision: 1
+    summary: >-
+      Initial requirement profile from curvebender-tools commit
+      aed915a4ebf2d8fc39d526388cc430f399179bc6, deployments/glm-5.3/rits-roce-h100-canary.
+      Hardware capacity and topology have not been independently verified.

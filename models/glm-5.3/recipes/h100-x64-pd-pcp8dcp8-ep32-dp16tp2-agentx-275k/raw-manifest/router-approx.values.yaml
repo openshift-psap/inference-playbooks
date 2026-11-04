@@ -1,0 +1,154 @@
+# EPP + Envoy for the GLM-5.3 PCP P/D DisaggregatedSet (prefill DP4 x PCP8 HT,
+# decode DP16 x TP2 LL), without flow control, using the APPROX prefix index.
+# Alternative to router.values.yaml (precise, KV-event-driven index) for A/B
+# comparison. The plugin chain is the one from
+# ../deployment-pcp-offloading/router.values.yaml: approx-prefix-cache-producer
+# hashes prompts itself and guesses what each rank has cached from its own
+# routing decisions, sized by hand to cover the GPU tier plus the host-RAM
+# offload tier. Unlike the precise index it keeps routing to a rank whose
+# prefix has spilled to CPU, but it does not see real evictions.
+#
+# Installing this over the precise config replaces it (same release, same
+# pool). The prefill pods keep publishing kv events on 5557; with no
+# subscriber they are simply dropped.
+#
+# helm upgrade --install glm53-e2e oci://ghcr.io/llm-d/charts/llm-d-router-standalone --version v0.10.0 -n glm52-canary -f router-approx.values.yaml
+router:
+  epp:
+    replicas: 1
+    image:
+      registry: ghcr.io/llm-d
+      repository: llm-d-router-endpoint-picker
+      tag: main@sha256:790c4f7d61b18d71947b353799bd5c69e309c096c192e55d3354779df9db0795
+      pullPolicy: IfNotPresent
+    flags:
+      ha-enable-leader-election: false
+      metrics-endpoint-auth: false
+
+    env:
+      - name: HF_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: llm-d-hf-token
+            key: HF_TOKEN
+
+    pluginsConfigFile: "plugins.yaml"
+    pluginsCustomConfig:
+      plugins.yaml: |
+        apiVersion: llm-d.ai/v1alpha1
+        kind: EndpointPickerConfig
+        plugins:
+          - type: disagg-headers-handler
+          - type: always-disagg-pd-decider
+          - type: disagg-profile-handler
+            parameters:
+              deciders:
+                prefill: always-disagg-pd-decider
+          - type: prefill-filter
+          - type: decode-filter
+          # autoTune is off because it misreads DCP: vllm:cache_config_info
+          # reports block_size=64 but num_gpu_blocks in 512-token DCP8 blocks
+          # (effective_attention_block_size), so the index held 4946 x 64
+          # ~= 317K tokens per prefill rank against ~2.5M actually cached.
+          # Hash at 512 (prefix hits under DCP8 land on 512-token boundaries
+          # anyway) and size the LRU from the smallest rank's num_gpu_blocks
+          # (4946). The capacity also applies to decode entries, which the
+          # decode profile doesn't score. Match the whole prompt instead of
+          # the 128K default, since max-model-len is 275K.
+          #
+          # lruCapacityPerServer must also cover the host-RAM KV offload
+          # tier prefill runs (disaggregatedset.yaml,
+          # CPU_OFFLOAD_GIB_PER_RANK=512) -- same reasoning as ../v11: the
+          # GPU tier alone is 4946 x 512 ~= 2.5M tokens, and the CPU tier
+          # adds 512 GiB at GLM-5.3's ~53 KB/token fp8 KV ~= 10.4M tokens,
+          # for ~12.9M tokens total / 512 ~= 25200 entries. If the LRU
+          # covered the GPU tier only, the index would drop a rank's
+          # entries at 2.5M tokens, exactly where the CPU tier takes over
+          # and the blocks are still nearly free to hit, and the EPP would
+          # route away from the one rank that can serve the request. Too
+          # high and the EPP keeps picking a rank that has really evicted
+          # the prefix (full re-prefill anyway); too low and it spreads
+          # requests the CPU tier would have served. The KB/token figure is
+          # estimated, not measured -- correct it from a running prefill
+          # pod, which prints both halves at startup ("GPU KV cache size:
+          # N tokens" and the offload tier's capacity):
+          #   lruCapacityPerServer = (gpu_tokens + cpu_tokens) / 512
+          # Each endpoint's LRU is allocated on first insert and never
+          # resized, so this only takes effect on an EPP restart (a helm
+          # upgrade does that).
+          - type: approx-prefix-cache-producer
+            parameters:
+              autoTune: false
+              blockSizeTokens: 512
+              lruCapacityPerServer: 25200
+              maxPrefixTokensToMatch: 0
+          - type: inflight-load-producer
+          # affinityThreshold 0.6 (default 0.8) keeps multi-turn requests
+          # that add a large new turn on the rank that has their history.
+          # maxTTFTPenaltyMs 60000 (default 18000): at 25K tok/s the default
+          # broke stickiness at ~450K in-flight tokens of imbalance, less
+          # than two 275K prompts; 60s is ~1.5M tokens, more than a full
+          # rank at MAX_NUM_SEQS=4.
+          - type: prefix-cache-affinity-filter
+            parameters:
+              affinityThreshold: 0.6
+              maxTTFTPenaltyMs: 60000
+              peakPrefillThroughput: 20000
+          - type: token-load-scorer
+          - type: active-request-scorer
+          - type: max-score-picker
+        schedulingProfiles:
+        - name: prefill
+          plugins:
+          - pluginRef: prefill-filter
+          - pluginRef: prefix-cache-affinity-filter
+          - pluginRef: token-load-scorer
+          - pluginRef: max-score-picker
+        - name: decode
+          plugins:
+          - pluginRef: decode-filter
+          - pluginRef: active-request-scorer
+          - pluginRef: max-score-picker
+
+  # The chart's envoy args use --cpuset-threads, which starts one worker per
+  # visible CPU (160 on these H100 nodes). With RITS's soft nofile limit of 1024
+  # the per-worker listen sockets and event fds run out and envoy crashes at
+  # startup with "socket(2) failed ... Too many open files". Pin the worker count.
+  proxy:
+    # The chart's default envoy image (distroless-v1.33.2, built 2025-03-26) is
+    # rejected by the cluster's StackRox "Block images older than 1 year" policy.
+    image: docker.io/envoyproxy/envoy:distroless-v1.38.4
+    args:
+      - "--service-node"
+      - "envoy-proxy"
+      - "--log-level"
+      - "warn"
+      - "--concurrency"
+      - "16"
+      - "--drain-strategy"
+      - "immediate"
+      - "--drain-time-s"
+      - "60"
+      - "-c"
+      - "/etc/envoy/envoy.yaml"
+
+  extraServicePorts:
+    - name: http
+      port: 80
+      protocol: TCP
+      targetPort: 8081
+
+  modelServers:
+    type: vllm
+    # targetPorts is pool-wide, so it is the union of both roles: decode's
+    # routing-proxy serves its 4 local DP ranks on 8000-8003. Prefill serves one
+    # rank per pod on 8000 and narrows itself to it with the
+    # llm-d.ai/active-ports: "8000" annotation (disaggregatedset.yaml); the EPP
+    # registers targetPorts ∩ active-ports as that pod's endpoints.
+    targetPorts:
+      - number: 8000
+      - number: 8001
+      - number: 8002
+      - number: 8003
+    matchLabels:
+      llm-d.ai/guide: glm53-pcp-canary

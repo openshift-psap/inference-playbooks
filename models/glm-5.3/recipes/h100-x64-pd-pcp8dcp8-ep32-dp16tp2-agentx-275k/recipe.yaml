@@ -1,0 +1,100 @@
+schema_version: 4
+recipe_id: h100-x64-pd-pcp8dcp8-ep32-dp16tp2-agentx-275k
+model_id: glm-5.3
+platforms:
+  - stack: llm-d
+    version: v0.11.0
+    overrides: platforms/llm-d-v0.11.0.yaml
+    pinned_manifest: manifests/pinned/bundle.yaml
+    pinned_reason: >-
+      DisaggregatedSet with asymmetric PCP/DCP and DP/TP roles, startup patch,
+      native routing sidecar and RoCE setup is not supported by templates.
+      Rebuild the pin from config/ as documented in guides/conversion.md.
+hardware_profile: hardware-profiles/nvidia-h100-8x-roce-r1.yaml
+# Provisional closest profile from the submission; no benchmark evidence.
+workload_profile: aiperf-agentx-unlimited-context
+deployment_mode: pd-pcp8dcp8-ep32-dp16tp2
+optimization_intent: long-context agentic serving
+maturity: day-zero
+serving:
+  image: us.icr.io/llmd/llm-d-cuda@sha256:43f1297937b36cd973a2cde4d5137a3ffaebc1de78c8e28c97e8a17515e07d1c
+  image_usage:
+    kind: custom
+    note: >-
+      Submitted llm-d-cuda build sha-bbeed78 with PCP/DCP, DeepEP, tiered KV
+      offload and a startup port of vllm#58625. Private registry; an equivalent
+      public image and exact engine-version provenance remain unverified.
+  # Required engine declaration intentionally absent until its version and
+  # image-bound HTTPS evidence are established. Full validation must fail.
+  model: zai-org/GLM-5.3
+  served_model_name: zai-org/GLM-5.3
+  # Decode topology only: v4 cannot express asymmetric role parallelism here.
+  # The pinned DisaggregatedSet owns the complete prefill/decode topology.
+  parallelism:
+    mode: tp+dp
+    tp: 2
+    dp: 16
+  resources:
+    requests:
+      cpu: "64"
+      memory: 1500Gi
+    limits:
+      cpu: "64"
+      memory: 1500Gi
+  router:
+    strategy: disaggregated
+    values: config/router.values.yaml
+  args:
+    - flag: --max-model-len
+      value: "275000"
+      required: true
+      why: Preserves the submitted context limit; not a measured workload claim.
+    - flag: --kv-cache-dtype
+      value: fp8
+      required: true
+      why: Preserves the submitted KV precision, independent of weight quantization.
+    - flag: --release-weight-page-cache
+      required: true
+      why: Requires the submitted startup patch in both roles.
+    - flag: --enable-expert-parallel
+      required: true
+      why: Preserves expert parallelism across each role's 32 GPUs.
+    - flag: --trust-remote-code
+      required: true
+      why: Preserved from the submitted model-loading command.
+  prefill:
+    args:
+      - flag: --prefill-context-parallel-size
+        value: "8"
+        required: true
+        why: Submitted prefill context parallelism; full role configuration is pinned.
+      - flag: --decode-context-parallel-size
+        value: "8"
+        required: true
+        why: Submitted DCP setting also determines the KV-event block size.
+      - flag: --all2all-backend
+        value: deepep_high_throughput
+        required: true
+        why: Preserves the prefill role's submitted communication backend.
+  decode:
+    args:
+      - flag: --all2all-backend
+        value: deepep_low_latency
+        required: true
+        why: Preserves the decode role's submitted communication backend.
+deployment:
+  scope: multi-node
+  status:
+    state: needs-verification
+    note: Offline conversion draft; engine/model metadata and target-cluster deployment remain unverified.
+  storage:
+    type: pvc
+    pvc:
+      name: glm52-canary-model-cache-rox-pvc
+      access_modes: [ReadOnlyMany]
+    why: Submitted model volume; provision and review target-specific paths before deployment.
+  manifests:
+    - path: manifests/llm-d-v0.11.0/bundle.yaml
+      kind: DisaggregatedSet
+      generated: true
+notes: guides/notes.yaml
