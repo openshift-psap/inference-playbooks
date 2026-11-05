@@ -1,0 +1,27 @@
+schema_version: 1
+profile:
+  label: 'GLM-5.3 P/D: PCP8 x DCP8 prefill -> DP8/EP8 decode'
+  headline: Recommended GLM-5.3 deployment on 16x H200 with vLLM v0.31.0.
+  specs:
+  - label: Node scope
+    source: recipe.yaml#/deployment/scope
+  - label: Router
+    source: recipe.yaml#/serving/router/strategy
+args_lede: serving.parallelism describes the decode node; the prefill node is one TP1 engine with PCP8 x DCP8.
+decisions:
+- subjects:
+  - --prefill-context-parallel-size
+  why: Long agentic prompts prefill on the whole node, which beat DP8 prefill on throughput and time to first token.
+- subjects:
+  - serving.router
+  - --data-parallel-multi-port-external-lb
+  why: The llm-d router sees every decode rank and picks prefill by prefix-cache affinity.
+quickstart:
+- step: Prepare
+  detail: Two 8x H200 nodes with InfiniBand (rdma/ib), 1.5 TiB memory each, and an hf-token Secret.
+- step: Deploy
+  detail: kubectl apply -f manifests/vllm-v0.31.0/pd.yaml, then install the router with config/router-values.yaml.
+known_issues:
+- issue: HiSparse decode with this prefiller fails the NIXL handshake on v0.31.0.
+  impact: Decode uses CPU offload instead.
+  mitigation: Switch to HiSparse decode on the next vLLM release.

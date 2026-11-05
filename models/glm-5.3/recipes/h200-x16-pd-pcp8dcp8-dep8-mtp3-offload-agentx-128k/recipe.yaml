@@ -1,0 +1,186 @@
+schema_version: 4
+recipe_id: glm-5.3-pd-pcp8dcp8-dep8-mtp3-offload
+model_id: glm-5.3
+platforms:
+- stack: vllm
+  version: v0.31.0
+  overrides: platforms/vllm-v0.31.0.yaml
+  pinned_manifest: manifests/vllm-v0.31.0/pd.yaml
+  pinned_reason: No prefill/decode template yet.
+hardware_profile: hardware-profiles/coreweave-h200-sxm-8x-2tib-r1.yaml
+workload_profile: aiperf-agentx-128k
+deployment_mode: pd-pcp8dcp8-dep8-mtp3-offload
+optimization_intent: throughput
+maturity: contributed
+quantization: FP8
+features:
+  tool_calling: true
+  speculative_decoding: mtp
+  reasoning_parser: glm45
+  prefix_caching: true
+  kv_cache_dtype: fp8_ds_mla
+serving:
+  image: docker.io/vllm/vllm-openai:v0.31.0
+  image_usage:
+    kind: default
+    variant: cuda
+  engine:
+    name: vllm
+    version: 0.31.0
+    image: docker.io/vllm/vllm-openai:v0.31.0
+    source: https://github.com/vllm-project/vllm/releases/tag/v0.31.0
+  model: zai-org/GLM-5.3
+  parallelism:
+    mode: dp
+    tp: 1
+    dp: 8
+  resources:
+    requests:
+      cpu: '48'
+      memory: 1500Gi
+    limits:
+      memory: 1500Gi
+  env:
+  - name: HOME
+    value: /tmp
+  - name: HF_HOME
+    value: /home/nobody/.cache/huggingface
+  - name: UCX_TLS
+    value: rc,cuda_copy,cuda_ipc,self,sm,tcp
+  - name: NVSHMEM_QP_DEPTH
+    value: '1026'
+  - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+    value_from:
+      field_ref: status.podIP
+  port: 8000
+  router:
+    strategy: prefill-decode
+    values: config/router-values.yaml
+  args:
+  - flag: --revision
+    value: 30333038ada1f1dacb294a93270305a890b50c14
+    required: true
+    why: Pins the checkpoint.
+  - flag: --trust-remote-code
+    required: true
+    why: Loads the checkpoint's remote code.
+  - flag: --enable-expert-parallel
+    required: true
+    why: EP8 across the node's GPUs.
+  - flag: --kv-cache-dtype
+    value: fp8_ds_mla
+    required: true
+    why: GLM-5.3 sparse-MLA FP8 KV layout; both roles must match.
+  - flag: --moe-backend
+    value: deep_gemm
+    required: true
+    why: DeepGEMM FP8 experts on Hopper.
+  - flag: --kernel-config
+    value: '{"enable_flashinfer_autotune":false,"linear_backend":"deep_gemm"}'
+    required: true
+    why: DeepGEMM dense linears; no autotuning at startup.
+  - flag: --speculative-config
+    value: '{"method":"mtp","num_speculative_tokens":3,"rejection_sample_method":"block"}'
+    required: true
+    why: MTP3.
+  - flag: --max-model-len
+    value: '142000'
+    required: true
+    why: AgentX 128K.
+  - flag: --enable-auto-tool-choice
+    required: true
+    why: Tool calls.
+  - flag: --tool-call-parser
+    value: glm47
+    required: true
+    why: GLM tool-call format.
+  - flag: --reasoning-parser
+    value: glm45
+    required: true
+    why: GLM thinking tokens.
+  prefill:
+    args:
+    - flag: --prefill-context-parallel-size
+      value: '8'
+      required: true
+      why: Each prompt prefills across all 8 GPUs.
+    - flag: --decode-context-parallel-size
+      value: '8'
+      required: true
+      why: KV sharded 8 ways.
+    - flag: --dcp-comm-backend
+      value: ag_rs
+      required: true
+      why: GLM-5.3 defaults DCP to a2a; PCP x DCP needs ag_rs.
+    - flag: --attention-config
+      value: '{"sparse_mla_force_mqa":true}'
+      required: true
+      why: Sparse-MLA MQA path for prefill.
+    - flag: --all2all-backend
+      value: deepep_high_throughput
+      required: true
+      why: DeepEP for large prefill batches.
+    - flag: --compilation-config
+      value: '{"cudagraph_mode":"NONE"}'
+      required: true
+      why: Eager; DeepEP high-throughput cannot be graph-captured.
+    - flag: --gpu-memory-utilization
+      value: '0.94'
+      required: true
+      why: No CUDA graphs to budget.
+    - flag: --max-num-batched-tokens
+      value: '16384'
+      required: true
+      why: Prefill chunk per step.
+    - flag: --max-num-seqs
+      value: '256'
+      required: true
+      why: Prefill admits many chunks per step.
+    - flag: --kv-transfer-config
+      value: '{"kv_connector":"MultiConnector","kv_role":"kv_both","kv_connector_extra_config":{"connectors":[{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_connector_extra_config":{"enforce_handshake_compat":false,"num_threads":1}},{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec","cpu_bytes_to_use":549755813888}}]}}'
+      required: true
+      why: NIXL producer + 512 GiB CPU prefix cache in /dev/shm.
+  decode:
+    args:
+    - flag: --port
+      value: '8200'
+      required: true
+      why: Ranks on 8200-8207; the disagg sidecar owns 8000-8007.
+    - flag: --data-parallel-size-local
+      value: '8'
+      required: true
+      why: All 8 ranks on this node.
+    - flag: --data-parallel-multi-port-external-lb
+      required: true
+      why: One port per rank so the router balances ranks.
+    - flag: --all2all-backend
+      value: deepep_low_latency
+      required: true
+      why: Graph-capturable DeepEP for decode.
+    - flag: --gpu-memory-utilization
+      value: '0.97'
+      required: true
+      why: CUDA graphs come out of this budget; leaves 9.2 GiB KV per rank.
+    - flag: --max-num-batched-tokens
+      value: '512'
+      required: true
+      why: Per rank.
+    - flag: --max-num-seqs
+      value: '64'
+      required: true
+      why: Per rank.
+    - flag: --kv-transfer-config
+      value: '{"kv_connector":"MultiConnector","kv_role":"kv_both","kv_connector_extra_config":{"connectors":[{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"enforce_handshake_compat":false,"num_threads":1}},{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec","cpu_bytes_to_use":68719476736}}]}}'
+      required: true
+      why: NIXL consumer + 64 GiB CPU prefix cache per rank.
+deployment:
+  scope: multi-node
+  status:
+    state: verified
+    date: '2026-10-09'
+    method: Deployed this manifest with the stock image on two H200 nodes behind config/router-values.yaml (weights from a PVC); gsm8k 500 5-shot through the router 0.934, 100% external prefix-cache hits on every decode rank.
+  manifests:
+  - path: manifests/vllm-v0.31.0/pd.yaml
+    kind: Deployment
+    generated: false
+notes: guides/notes.yaml

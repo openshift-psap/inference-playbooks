@@ -1,0 +1,118 @@
+schema_version: 4
+recipe_id: glm-5.3-dep8-mtp3-hisparse
+model_id: glm-5.3
+platforms:
+  - stack: vllm
+    version: v0.31.0
+    overrides: platforms/vllm-v0.31.0.yaml
+hardware_profile: hardware-profiles/coreweave-h200-sxm-8x-2tib-r1.yaml
+workload_profile: aiperf-agentx-128k
+deployment_mode: dep8-mtp3-hisparse
+optimization_intent: throughput
+maturity: contributed
+
+quantization: FP8
+
+features:
+  tool_calling: true
+  speculative_decoding: mtp
+  reasoning_parser: glm45
+  prefix_caching: true
+  kv_cache_dtype: fp8_ds_mla
+
+serving:
+  image: docker.io/vllm/vllm-openai:v0.31.0
+  image_usage:
+    kind: default
+    variant: cuda
+  engine:
+    name: vllm
+    version: 0.31.0
+    image: docker.io/vllm/vllm-openai:v0.31.0
+    source: https://github.com/vllm-project/vllm/releases/tag/v0.31.0
+  model: zai-org/GLM-5.3
+  parallelism:
+    mode: dp
+    tp: 1
+    dp: 8
+  resources:
+    requests:
+      cpu: "32"
+      memory: 800Gi
+    limits:
+      cpu: "128"
+      memory: 1500Gi
+  env:
+    - name: HOME
+      value: /tmp
+    - name: HF_HOME
+      value: /home/nobody/.cache/huggingface
+  port: 8000
+  config_overrides: true
+  args:
+    - flag: --revision
+      value: 30333038ada1f1dacb294a93270305a890b50c14
+      required: true
+      why: Pins the checkpoint.
+    - flag: --trust-remote-code
+      required: true
+      why: Loads the checkpoint's remote code.
+    - flag: --enable-expert-parallel
+      required: true
+      why: EP8 across the 8 DP ranks.
+    - flag: --kv-cache-dtype
+      value: fp8_ds_mla
+      required: true
+      why: GLM-5.3 sparse-MLA FP8 KV layout.
+    - flag: --moe-backend
+      value: deep_gemm
+      required: true
+      why: DeepGEMM FP8 experts on Hopper.
+    - flag: --kernel-config
+      value: '{"enable_flashinfer_autotune":false,"linear_backend":"deep_gemm"}'
+      required: true
+      why: DeepGEMM dense linears; no autotuning at startup.
+    - flag: --speculative-config
+      value: '{"method":"mtp","num_speculative_tokens":3}'
+      required: true
+      why: MTP3.
+    - flag: --attention-config
+      value: '{"hisparse_config":{}}'
+      required: true
+      why: HiSparse keeps sparse-attention KV in host memory and stages the selected pages on the GPU.
+    - flag: --kv-transfer-config
+      value: '{"kv_connector":"MultiConnector","kv_role":"kv_both","kv_connector_extra_config":{"connectors":[{"kv_connector":"HiSparseConnector","kv_role":"kv_both","kv_connector_extra_config":{"host_pool_gib":48}},{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec","cpu_bytes_to_use":17179869184}}]}}'
+      required: true
+      why: Per rank, a 48 GiB HiSparse pool + 16 GiB CPU prefix cache (512 GiB host KV per node).
+    - flag: --max-model-len
+      value: "142000"
+      required: true
+      why: AgentX 128K.
+    - flag: --max-num-seqs
+      value: "64"
+      required: true
+      why: Per rank.
+    - flag: --gpu-memory-utilization
+      value: "0.97"
+      required: true
+      why: CUDA graphs come out of this budget.
+    - flag: --enable-auto-tool-choice
+      required: true
+      why: Tool calls.
+    - flag: --tool-call-parser
+      value: glm47
+      required: true
+      why: GLM tool-call format.
+    - flag: --reasoning-parser
+      value: glm45
+      required: true
+      why: GLM thinking tokens.
+
+deployment:
+  scope: single-node
+  status:
+    state: verified
+    date: "2026-10-09"
+    method: Deployed manifests/vllm-v0.31.0/deployment.yaml with the stock image on one H200 node (weights from a PVC); 13.67 GiB KV per rank, gsm8k 500 5-shot 0.930.
+
+notes: guides/notes.yaml
