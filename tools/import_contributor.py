@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from dataclasses import dataclass
 import json
 import os
 import re
@@ -177,7 +178,18 @@ def atomic_write(path: Path, data: bytes, *, original=None):
                     raise ValueError('immutable run already exists with different evidence') from None
 
 
-def import_bundle(repo: Path, bundle: Path, digest: str, *, apply=False, reviewed=False, s3_prefix=None):
+@dataclass(frozen=True)
+class ImportPlan:
+    recipe: Path
+    original: str
+    updated: str
+    directory: Path
+    files: dict[str, bytes]
+    report: dict
+
+
+def plan_import(repo: Path, bundle: Path, digest: str, *, s3_prefix=None) -> ImportPlan:
+    """Validate and plan exact bytes without writes, uploads, or review claims."""
     envelope, files = read_archive(bundle, digest)
     if envelope['outcome'] != 'succeeded':
         raise ValueError('failed/interrupted/incomplete executions are diagnostic-only, not importable evidence')
@@ -238,25 +250,35 @@ def import_bundle(repo: Path, bundle: Path, digest: str, *, apply=False, reviewe
     updated = finalize()
     report = {'run_id': result['run_id'], 'completeness': result['completeness'],
               'destination': str(directory), 'applied': False, 'maturity_changed': False}
+    return ImportPlan(path, original, updated, directory, output, report)
+
+
+def write_import_plan(plan: ImportPlan):
+    """Materialize validated bytes; callers distinguish private previews from apply."""
+    path, directory = plan.recipe, plan.directory
+    if path.read_text() != plan.original:
+        raise ValueError('recipe changed during import; retry without overwriting concurrent edits')
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, data in plan.files.items():
+        target = directory / name
+        if not target.exists():
+            atomic_write(target, data)
+    if path.read_text() != plan.updated:
+        atomic_write(path, plan.updated.encode(), original=plan.original)
+
+
+def import_bundle(repo: Path, bundle: Path, digest: str, *, apply=False, reviewed=False, s3_prefix=None):
+    plan = plan_import(repo, bundle, digest, s3_prefix=s3_prefix)
     if not apply:
-        return report
+        return plan.report
     if not reviewed:
         raise ValueError('apply requires --reviewed after a maintainer privacy/provenance review')
     if s3_prefix:
         uri = upload_archive(bundle, s3_prefix, digest)
-        if uri != run['artifacts'][-1]['uri']:
+        if uri != archive_destination(s3_prefix, digest)[2]:
             raise ValueError('unexpected storage destination')
-    if path.read_text() != original:
-        raise ValueError('recipe changed during import; retry without overwriting concurrent edits')
-    directory.mkdir(parents=True, exist_ok=True)
-    for name, data in output.items():
-        target = directory / name
-        if not target.exists():
-            atomic_write(target, data)
-    if path.read_text() != updated:
-        atomic_write(path, updated.encode(), original=original)
-    report['applied'] = True
-    return report
+    write_import_plan(plan)
+    return {**plan.report, 'applied': True}
 
 
 def main():
