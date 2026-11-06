@@ -1,0 +1,34 @@
+schema_version: 1
+profile_id: coreweave-h200-sxm-8x-2tib-r1
+profile_revision: 1
+kind: hardware-profile
+description: >
+  CoreWeave eight-H200 SXM node with about 2 TiB of host memory, used for the
+  GLM-5.3 aggregated HiSparse runs. The host memory is what distinguishes it
+  from the generic H200 profile: these recipes keep 512 GiB of KV cache in
+  host memory.
+accelerator_key: nvidia-h200-x8
+
+provider:
+  name: coreweave
+
+accelerators:
+  vendor: nvidia
+  model: H200
+  form_factor: SXM
+  count_per_node: 8
+  memory_per_gpu_gib: 141
+  intra_node_interconnect: nvlink
+
+host:
+  cpu_architecture: x86_64
+  cpu_count: 128
+  memory_gib: 2014
+
+# Single-node recipes on this profile do not use the inter-node network.
+network:
+  required: false
+
+correction_log:
+  - revision: 1
+    summary: Initial profile.

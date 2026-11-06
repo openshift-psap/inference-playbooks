@@ -1,0 +1,32 @@
+{
+  "outputs": [
+    {
+      "benchmark_run_id": "ec1618e0f96e4719a2af4e9b23341ebe",
+      "files": {
+        "kpis.json": "042269a956d8cf7ca4b8864a54cf6e5bb2f7c339",
+        "result.json": "f94647ed28402e69bc8bf4c4ebae02899babf0e6",
+        "run.yaml": "789195a3b1e0337200c3c9f5fc8926bac2bce702"
+      },
+      "harness": "aiperf",
+      "recipe_path": "models/glm-5.3/recipes/h200-x8-dep8-mtp3-hisparse-agentx-128k/recipe.yaml",
+      "run_path": "models/glm-5.3/recipes/h200-x8-dep8-mtp3-hisparse-agentx-128k/results/forge-ec1618e0f96e4719a2af4e9b23341ebe-aiperf/run.yaml"
+    },
+    {
+      "benchmark_run_id": "ec1618e0f96e4719a2af4e9b23341ebe",
+      "files": {
+        "kpis.json": "042269a956d8cf7ca4b8864a54cf6e5bb2f7c339",
+        "result.json": "8f4d4f00a0679590ebe11cdac45c32cd27451434",
+        "run.yaml": "3aa695484c0fb565e53fce8324e806b0312c203d"
+      },
+      "harness": "guidellm",
+      "recipe_path": "models/glm-5.3/recipes/h200-x8-dep8-mtp3-hisparse-agentx-128k/recipe.yaml",
+      "run_path": "models/glm-5.3/recipes/h200-x8-dep8-mtp3-hisparse-agentx-128k/results/forge-ec1618e0f96e4719a2af4e9b23341ebe-guidellm/run.yaml"
+    }
+  ],
+  "parent_run_id": "ec1618e0f96e4719a2af4e9b23341ebe",
+  "pr_number": 40,
+  "tested_revision": "d91ceb69f24b91ce217412444b5d4701a776cea4",
+  "tracking_origin": "https://mlflow.apps.psap-automation.ibm.rhperfscale.org",
+  "version": 1,
+  "workspace": "forge-inference-playbooks"
+}
