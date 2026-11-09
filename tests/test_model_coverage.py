@@ -1336,7 +1336,9 @@ def test_workflow_serializes_writers_and_uploads_audits():
     assert {"push", "pull_request", "issues", "workflow_dispatch", "schedule"} <= set(triggers)
     assert triggers["push"]["branches"] == ["main"]
     assert workflow["concurrency"] == {
-        "group": "model-coverage", "cancel-in-progress": False,
+        "group": "model-coverage",
+        "cancel-in-progress": False,
+        "queue": "max",
     }
     check = workflow["jobs"]["check"]
     assert check["permissions"] == {"contents": "read", "issues": "read"}
@@ -1802,19 +1804,42 @@ def test_delegation_and_rerun_are_idempotent_and_preserve_comments():
     assert all(action.get("comment_id") != 1 for action in rerun["actions"])
 
 
-def test_foreign_feedback_marker_is_not_edited_or_duplicated():
+@pytest.mark.parametrize("login", ["someone-else", "other-bot"])
+def test_foreign_feedback_marker_is_preserved_and_owned_feedback_created(login):
     value = issue(531, definition_without_owner())
     report = evaluate(catalog(), [value])
-    comments = {531: [
-        {"id": 9, "body": intake.FEEDBACK_MARKER + "\nnot ours",
-         "user": {"login": "someone-else"}},
-    ]}
+    foreign = {
+        "id": 9, "body": intake.FEEDBACK_MARKER + "\nnot ours",
+        "user": {"login": login},
+    }
     plan = intake.build_intake_plan(
-        report, value, action="edited", comments=comments,
+        report, value, action="edited", comments={531: [foreign]},
         comment_owner_login="github-actions[bot]",
     )
-    assert plan["actions"] == []
-    assert any("not authored by" in warning for warning in plan["warnings"])
+    created = next(action for action in plan["actions"]
+                   if action["action"] == "create_comment")
+    assert created["body"].startswith(intake.FEEDBACK_MARKER)
+    assert all(action.get("comment_id") != 9 for action in plan["actions"])
+    assert any("separate owned comment" in warning for warning in plan["warnings"])
+
+    owned = {
+        "id": 10, "body": created["body"], "user": {"login": "github-actions[bot]"},
+    }
+    rerun = intake.build_intake_plan(
+        report, value, action="edited", comments={531: [foreign, owned]},
+        comment_owner_login="github-actions[bot]",
+    )
+    assert rerun["actions"] == []
+    assert all(action.get("comment_id") != 9 for action in rerun["actions"])
+
+    stale = {**owned, "body": intake.FEEDBACK_MARKER + "\nstale"}
+    updated = intake.build_intake_plan(
+        report, value, action="edited", comments={531: [foreign, stale]},
+        comment_owner_login="github-actions[bot]",
+    )
+    assert len(updated["actions"]) == 1
+    assert updated["actions"][0]["comment_id"] == 10
+    assert all(action.get("comment_id") != 9 for action in updated["actions"])
 
 
 def test_changed_valid_feedback_updates_only_owned_marker_comment():
@@ -2006,11 +2031,13 @@ def test_apply_revalidates_plan_apply_gap_and_skips_stale_assignment(
     assert result["applied_actions"] == 1
     assert result["skipped_actions"][0]["action"] == "assign_default_owner"
     assert reason in result["skipped_actions"][0]["reason"]
-    assert result["summary"] == {"applied": 1, "skipped": 1}
+    assert result["summary"] == {
+        "applied": 1, "skipped": 1, "failed": 0, "uncertain": 0,
+    }
     assert any(path.endswith("/comments") for _, path, _ in client.calls)
 
 
-def test_apply_skips_assignment_the_api_silently_ignores():
+def test_apply_records_assignment_the_api_silently_ignores_as_failed():
     value = issue(553, definition_without_owner())
     report = evaluate(catalog(), [value])
     plan = intake.build_intake_plan(
@@ -2021,10 +2048,249 @@ def test_apply_skips_assignment_the_api_silently_ignores():
     result = intake.apply_intake_plan(client, plan, "o/r")
 
     assert result["applied_actions"] == 1
-    assert result["skipped_actions"][0]["action"] == "assign_default_owner"
-    assert "not an assignee on read-back" in result["skipped_actions"][0]["reason"]
+    assert result["skipped_actions"] == []
+    assert result["summary"] == {
+        "applied": 1, "skipped": 0, "failed": 1, "uncertain": 0,
+    }
+    failed = result["failed_actions"][0]
+    assert failed["action"] == "assign_default_owner"
+    assert "not an assignee on read-back" in failed["reason"]
+    assert result["operational_failure"] is True
     assert any("may not be assignable" in warning for warning in result["warnings"])
     assert any(path.endswith("/comments") for _, path, _ in client.calls)
+
+
+class _IntakeFlowClient:
+    """Fake client for the refreshed apply sequence used by ``run_intake``."""
+
+    def __init__(
+        self, initial: dict, *, refresh_issue: dict | None = None,
+        refresh_read_index: int | None = None, events: list[dict] | None = None,
+        comments: list[dict] | None = None, fail_assign: bool = False,
+        fail_readback: bool = False, ignore_assignment: bool = False,
+        fail_comment: bool = False,
+    ):
+        self.current = dict(initial)
+        self.refresh_issue = refresh_issue
+        self.refresh_read_index = refresh_read_index
+        self.events = events or []
+        self.comments = list(comments or [])
+        self.fail_assign = fail_assign
+        self.fail_readback = fail_readback
+        self.ignore_assignment = ignore_assignment
+        self.fail_comment = fail_comment
+        self.reads = 0
+        self.calls = []
+        self.comment_posts = 0
+
+    def _issue(self) -> dict:
+        self.reads += 1
+        if self.fail_readback and self.reads == 3:
+            raise intake.SyncError("read-back unavailable")
+        if (
+            self.refresh_issue is not None
+            and self.refresh_read_index is not None
+            and self.reads >= self.refresh_read_index
+        ):
+            return self.refresh_issue
+        return self.current
+
+    def rest(self, method, path, payload=None):
+        self.calls.append((method, path, payload))
+        if method == "GET" and path == "repos/o/r/issues/570":
+            return self._issue()
+        if method == "GET" and path == "user":
+            return {"login": "github-actions[bot]"}
+        if method == "POST" and path.endswith("/assignees"):
+            if self.fail_assign:
+                raise intake.SyncError("assignment API unavailable")
+            if not self.ignore_assignment:
+                self.current = {
+                    **self.current,
+                    "assignees": [
+                        {"login": login} for login in payload["assignees"]
+                    ],
+                }
+            return self.current
+        if method == "POST" and path.endswith("/comments"):
+            if self.fail_comment:
+                raise intake.SyncError("comment API unavailable")
+            self.comment_posts += 1
+            return {"id": 900 + self.comment_posts}
+        if method == "PATCH" and "/comments/" in path:
+            return {}
+        return {}
+
+    def rest_paginated(self, path):
+        self.calls.append(("GET", path, None))
+        if "/events" in path:
+            return list(self.events)
+        if "/comments" in path:
+            return list(self.comments)
+        if "/issues?" in path:
+            return [self.current]
+        return []
+
+
+def test_assignment_post_failure_continues_to_feedback():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_assign=True)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert result["summary"] == {
+        "applied": 1, "skipped": 0, "failed": 1, "uncertain": 0,
+        "planned": 2,
+    }
+    assert result["failed_actions"][0]["action"] == "assign_default_owner"
+    assert result["completed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+    assert plan["owner_source"] == "default"
+    created = next(
+        action for action in plan["actions"] if action["action"] == "create_comment"
+    )
+    assert DEFAULT_TRIAGE_OWNER in created["body"]
+
+
+def test_assignment_readback_failure_is_uncertain_and_feedback_continues():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_readback=True)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert result["summary"] == {
+        "applied": 1, "skipped": 0, "failed": 0, "uncertain": 1,
+        "planned": 2,
+    }
+    assert result["uncertain_actions"][0]["action"] == "assign_default_owner"
+    assert "outcome is uncertain" in result["uncertain_actions"][0]["reason"]
+    assert result["completed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+
+
+def test_comment_failure_after_assignment_is_recorded_not_swallowed():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_comment=True)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert result["summary"] == {
+        "applied": 1, "skipped": 0, "failed": 1, "uncertain": 0,
+        "planned": 2,
+    }
+    assert result["completed_actions"][0]["action"] == "assign_default_owner"
+    assert result["failed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+
+
+def test_feedback_is_built_after_assignment_from_refreshed_issue():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert report["models"][0]["owner_source"] == "assignees"
+    assert plan["owner_source"] == "assignees"
+    created = next(
+        action for action in plan["actions"] if action["action"] == "create_comment"
+    )
+    assert DEFAULT_TRIAGE_OWNER in created["body"]
+    assert "current issue assignees" in created["body"]
+    assert result["summary"] == {
+        "applied": 2, "skipped": 0, "failed": 0, "uncertain": 0,
+        "planned": 2,
+    }
+
+
+def test_feedback_reflects_concurrent_owner_edit_after_assignment():
+    value = issue(570, definition_without_owner())
+    edited = issue(570, definition(owner="@octocat"))
+    client = _IntakeFlowClient(
+        value, refresh_issue=edited, refresh_read_index=4,
+    )
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert report["models"][0]["owner_source"] == "explicit"
+    assert plan["owner_source"] == "explicit"
+    created = next(
+        action for action in plan["actions"] if action["action"] == "create_comment"
+    )
+    assert "@octocat" in created["body"]
+    assert "explicit YAML owner" in created["body"]
+    assert result["completed_actions"][0]["action"] == "assign_default_owner"
+
+
+def test_feedback_updates_owned_comment_after_refresh_and_preserves_foreign():
+    value = issue(570, definition_without_owner())
+    foreign = {
+        "id": 7, "body": intake.FEEDBACK_MARKER + "\nforeign",
+        "user": {"login": "other-bot"},
+    }
+    owned = {
+        "id": 8, "body": intake.FEEDBACK_MARKER + "\nstale",
+        "user": {"login": "github-actions[bot]"},
+    }
+    client = _IntakeFlowClient(value, comments=[foreign, owned])
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    updates = [
+        action for action in result["completed_actions"]
+        if action["action"] == "update_comment"
+    ]
+    assert updates and updates[0]["comment_id"] == 8
+    assert all(action.get("comment_id") != 7 for action in result["completed_actions"])
+    assert result["summary"]["applied"] == 2
+
+
+def test_dry_run_remains_pure_planning():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=False, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert result["dry_run"] is True
+    assert result["summary"] == {
+        "applied": 0, "skipped": 0, "failed": 0, "uncertain": 0,
+        "planned": 2,
+    }
+    assert not any(
+        method != "GET" for method, _, _ in client.calls
+    )
+    assert [action["action"] for action in plan["actions"]] == [
+        "assign_default_owner", "create_comment",
+    ]
+
+
+def test_apply_empty_plan_reports_accurate_noop():
+    result = intake.apply_intake_plan(
+        _StatefulIntakeClient(issue(553, definition_without_owner())),
+        {"actions": []}, "o/r",
+    )
+    assert result["applied_actions"] == 0
+    assert result["completed_actions"] == []
+    assert result["skipped_actions"] == []
+    assert result["failed_actions"] == []
+    assert result["uncertain_actions"] == []
+    assert result["summary"] == {
+        "applied": 0, "skipped": 0, "failed": 0, "uncertain": 0,
+    }
+    assert result["operational_failure"] is False
 
 
 def test_assignment_events_update_feedback_owner_without_assigning():
@@ -2118,6 +2384,88 @@ def test_invalid_intake_cli_applies_feedback_then_exits_red(tmp_path, monkeypatc
     assert applied["repository"] == "o/r"
     assert applied["plan"]["result"] == "invalid"
     assert applied["plan"]["summary"]["comments"] == 1
+
+
+def _intake_cli_argv(event, tmp_path, *, summary=False):
+    arguments = [
+        "model_coverage_intake.py",
+        "--repo", str(REPO),
+        "--event", str(event),
+        "--apply",
+        "--plan-out", str(tmp_path / "plan.json"),
+        "--report-out", str(tmp_path / "report.json"),
+        "--result-out", str(tmp_path / "result.json"),
+    ]
+    if summary:
+        arguments.extend(["--summary-out", str(tmp_path / "summary.md")])
+    return arguments
+
+
+def _prepare_intake_cli(monkeypatch, client, event, tmp_path, *, summary=False):
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps({
+        "action": "opened",
+        "repository": {"full_name": "o/r"},
+        "issue": event,
+    }))
+    monkeypatch.setattr(intake, "GhClient", lambda: client)
+    monkeypatch.setattr(intake, "build_catalog", lambda *args: catalog())
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("MODEL_TRACKER_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("MODEL_TRACKER_BOT_LOGIN", "github-actions[bot]")
+    monkeypatch.setattr(
+        sys, "argv", _intake_cli_argv(event_path, tmp_path, summary=summary),
+    )
+
+
+def test_cli_persists_assignment_result_when_comment_fails(tmp_path, monkeypatch):
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_comment=True)
+    _prepare_intake_cli(monkeypatch, client, value, tmp_path, summary=True)
+
+    assert intake.main() == 2
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["completed_actions"][0]["action"] == "assign_default_owner"
+    assert result["failed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+    summary = (tmp_path / "summary.md").read_text()
+    assert "- Applied: 1" in summary
+    assert "- Failed: 1" in summary
+
+
+def test_cli_readback_error_exits_two_after_feedback_succeeds(tmp_path, monkeypatch):
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_readback=True)
+    _prepare_intake_cli(monkeypatch, client, value, tmp_path)
+
+    assert intake.main() == 2
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["uncertain_actions"][0]["action"] == "assign_default_owner"
+    assert result["completed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+
+
+def test_cli_concurrent_definition_edit_controls_feedback_and_exit(
+    tmp_path, monkeypatch,
+):
+    value = issue(570, definition_without_owner())
+    edited = issue(570, body=f"{TRACKER_MARKER}\n```yaml\nbad: yaml\n```\n")
+    client = _IntakeFlowClient(
+        value, refresh_issue=edited, refresh_read_index=4,
+    )
+    _prepare_intake_cli(monkeypatch, client, value, tmp_path)
+
+    assert intake.main() == 1
+    plan = json.loads((tmp_path / "plan.json").read_text())
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert plan["result"] == "invalid"
+    assert result["operational_failure"] is False
+    created = next(
+        action for action in plan["actions"] if action["action"] == "create_comment"
+    )
+    assert "unknown key" in created["body"]
 
 
 def test_intake_write_context_rejects_unsafe_events_and_refs():

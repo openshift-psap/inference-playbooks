@@ -43,8 +43,8 @@ body:
         may override the model-level `completion`. Remove the leading `#` from
         `jira` only when an internal Jira issue exists. `owner` is optional:
         omit it, leave it empty, or leave the example commented out to use the
-        default triage owner. Quote numeric-looking versions, especially RHOAI
-        `version: "3.6"`.
+        default triage owner. Quote numeric-looking versions; for RHOAI 3.6 use
+        `version: "3.6"`. Other quoted versions are accepted.
       value: |
         <!-- inference-playbooks:model-coverage-tracker -->
         ```yaml
@@ -96,9 +96,10 @@ body:
           meant to be an existing recipe.
         - `targets[].platforms[]` entries are exact `stack` and `version`
           values declared by that recipe. A target platform missing from the
-          recipe stays planned. RHOAI requires a string version such as
-          `version: "3.6"`; unquoted `3.6` is a number and is rejected with a
-          quoting hint.
+          recipe stays planned. RHOAI 3.6 examples use a quoted string such as
+          `version: "3.6"`; other quoted versions are accepted and may remain
+          planned. Unquoted `3.6` is a number and is rejected with a quoting
+          hint.
         - Only `targets` counts toward automated completion. Required coverage
           belongs there. Stretch goals belong in the prose field below and are
           **not** counted, so optional work never blocks required completion.
@@ -172,6 +173,6 @@ body:
         remains visible without blocking completion.
       placeholder: |
         - Optional: 16x H200 variant after the required 8x target
-        - Optional: additional stack/version after required 3.6 coverage
+        - Optional: additional stack/version after the required platform coverage
     validations:
       required: false

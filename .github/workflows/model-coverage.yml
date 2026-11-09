@@ -30,6 +30,9 @@ permissions:
 concurrency:
   group: model-coverage
   cancel-in-progress: false
+  # Queue pending runs instead of replacing them. GitHub bounds the pending
+  # queue at 100; this is not an unbounded delivery guarantee.
+  queue: max
 
 jobs:
   check:

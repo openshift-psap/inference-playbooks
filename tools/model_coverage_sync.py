@@ -747,7 +747,7 @@ def _field_actions(
 def comment_actions(
     body: str, issue_number: int, comments: list[dict],
     owner_login: str | None, warnings: list[str],
-    *, marker: str = COMMENT_MARKER,
+    *, marker: str = COMMENT_MARKER, create_when_foreign: bool = False,
 ) -> list[dict]:
     """Update only a marker comment authored by the exact sync identity.
 
@@ -756,6 +756,10 @@ def comment_actions(
     deleted, because deletion is not reversible. Callers may pass a distinct
     marker so independent bot-owned comments (for example intake validation
     feedback) never edit the dashboard sync comment.
+
+    By default a foreign marker comment suppresses a new owned comment. Intake
+    passes ``create_when_foreign=True`` so a squatted marker cannot suppress
+    validation feedback; the foreign comment is still left untouched.
     """
     matching = [c for c in comments if (c.get("body") or "").startswith(marker)]
     if not owner_login:
@@ -785,6 +789,14 @@ def comment_actions(
             "body": body,
         }]
     if matching:
+        if create_when_foreign:
+            warnings.append(
+                f"issue #{issue_number} has a tracker marker comment not authored by "
+                f"{owner_login}; left it untouched and created a separate owned comment"
+            )
+            return [{
+                "action": "create_comment", "issue": issue_number, "body": body,
+            }]
         warnings.append(
             f"issue #{issue_number} has a tracker marker comment not authored by "
             f"{owner_login}; left it untouched and did not create a duplicate"

@@ -190,9 +190,11 @@ completion counters.
 - `platforms` are exact `stack`/`version` values declared by that recipe. An
   absent pair stays `planned`, which is the normal state for a backlog entry.
   An optional `completion` on a platform overrides the model-level bar for that
-  platform only. RHOAI requires the exact quoted string `version: "3.6"`;
-  unquoted `3.6` is parsed as a number and fails with a quoting hint.
-  Numeric-looking versions from any stack should be quoted.
+  platform only. RHOAI 3.6 examples use the quoted string `version: "3.6"`;
+  other quoted versions are accepted and evaluated, with absent pairs remaining
+  planned. Unquoted numeric-looking versions such as `3.6` are parsed as numbers
+  and fail with a quoting hint. Numeric-looking versions from any stack should be
+  quoted.
 - `blockers` is an optional public list (at most 20). Do not include
   confidential details.
 - `jira` is an optional internal Jira **key only**. The evaluator never calls
@@ -248,25 +250,36 @@ default branch and does not receive project credentials or the
   reassignment or retroactive backfill. Immediately before writing, the apply
   step re-reads the issue and assignment history and skips the assignment if a
   manual assignment, owner edit, closure, or prior history appeared after
-  planning. It also verifies that the default login appears in the read-back
-  assignee list and records the assignment as skipped if the API ignored it.
+  planning. It verifies that the default login appears in the read-back
+  assignee list and records a failure if the API ignored it; a read-back request
+  failure is recorded as an uncertain outcome, not as success or a skip.
 - The job creates or updates one issue-specific validation comment with marker
   `<!-- inference-playbooks:model-coverage-feedback -->`. It is authored by the
   workflow identity (`github-actions[bot]`), is idempotent, and only edits a
   comment with that exact marker and author. Human comments and the separate
   dashboard-sync marker `<!-- inference-playbooks:model-coverage -->` are never
-  edited. Assignment and unassignment events update this feedback comment to
-  show the new effective owner without assigning anyone.
+  edited. A foreign comment with the feedback marker is preserved and does not
+  suppress creation of a separate owned feedback comment. Assignment and
+  unassignment events update this feedback comment to show the new effective
+  owner without assigning anyone.
+- After assignment handling, the apply path refreshes the authoritative issue,
+  re-evaluates it against the already loaded catalog and issue snapshot, and
+  re-reads comments before building feedback. A concurrent owner or definition
+  edit therefore drives the posted result, and a no-longer-tracked issue skips
+  stale feedback. The workflow summary and result artifact report planned versus
+  applied, skipped, failed, and uncertain actions separately.
 - The feedback comment states whether the definition is valid, the effective
   owner and its source, coverage status, unknown-recipe warnings, and correction
   guidance. It also states that dashboard sync is disabled when
   `MODEL_TRACKER_WRITE_ENABLED` is not `true`.
 - If the triggering definition is invalid, the intake job posts or updates the
-  feedback comment and then fails, so a green issue-event run cannot be mistaken
-  for valid intake. The read-only check job still uses `--allow-errors`,
-  publishes the same errors in its workflow summary and artifacts, and allows
-  valid models to be processed. Warnings such as an unknown planned recipe ID
-  do not fail the run.
+  feedback comment and then exits with status 1, so a green issue-event run
+  cannot be mistaken for valid intake. Operational API failures exit with status
+  2 even when feedback or assignment succeeded, and the audit result is still
+  written. The read-only check job still uses `--allow-errors`, publishes the
+  same errors in its workflow summary and artifacts, and allows valid models to
+  be processed. Warnings such as an unknown planned recipe ID do not fail the
+  run.
 - The read-only parser and evaluator remain pure; they do not assign, comment,
   or call the GitHub API. Only the explicit intake apply step performs those
   writes.
@@ -578,14 +591,18 @@ and only when the same trusted-context conditions hold. It runs in the same
 `forge-evidence` environment, mints the same narrow App token, and invokes
 `--mark-stale --apply` before uploading its plan/result. All jobs share one
 `model-coverage` concurrency group, so pushes, issue edits, manual runs, and
-the schedule cannot write in parallel or create duplicate comments.
+the schedule cannot write in parallel. `cancel-in-progress: false` protects an
+active run, and `queue: max` queues up to GitHub's documented maximum of 100
+pending runs instead of replacing a pending run. This is a bounded queue, not
+an unbounded delivery guarantee; a burst beyond the bound can still drop
+pending runs.
 
 ## Pilot verification
 
 The RHOAI 3.6 pilot tracking issue
 [#120](https://github.com/openshift-psap/inference-playbooks/issues/120)
 uses the form's target-definition format, has the `model-coverage` label, declares an explicit
-owner, and uses the required quoted `version: "3.6"`. Its issue-event workflow
+owner, and uses the quoted `version: "3.6"` example for RHOAI 3.6. Its issue-event workflow
 run completed the read-only check and skipped project sync:
 https://github.com/openshift-psap/inference-playbooks/actions/runs/42649345183.
 
