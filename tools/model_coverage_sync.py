@@ -626,13 +626,13 @@ def _stale_state_fields(project: dict, source_sha: str, reason: str) -> list[dic
         STATUS_FIELD: "Stale",
         COMPLETED_FIELD: "Unknown",
         BLOCKED_FIELD: "Unknown",
-        "Coverage": f"unknown — reconciliation failed: {_safe_comment_text(reason, 200)}",
+        "Coverage": f"unknown — reconciliation failed: {safe_comment_text(reason, 200)}",
         LAST_EVALUATED_FIELD: source_sha or "unknown",
     }
     return _resolve_desired(values, project, tuple(values))
 
 
-def _safe_comment_text(value: object, limit: int = 500) -> str:
+def safe_comment_text(value: object, limit: int = 500) -> str:
     """Keep issue-authored text inert and bounded in a bot comment."""
     return (
         str(value).replace("@", "&#64;").replace("\r", " ").replace("\n", " ").strip()[:limit]
@@ -686,7 +686,7 @@ def _comment_body(model: dict, source_sha: str = "unknown") -> str:
         lines.extend(["", f"Jira: {model['jira']['key']} — {model['jira']['note']}"])
     if model.get("blockers"):
         lines.extend(["", "Blockers:"])
-        lines.extend(f"- {_safe_comment_text(blocker)}" for blocker in model["blockers"])
+        lines.extend(f"- {safe_comment_text(blocker)}" for blocker in model["blockers"])
     lines.extend([
         "",
         "_Maintained by the model-coverage workflow. Edit the issue's fenced YAML definition; "
@@ -705,7 +705,7 @@ def _error_comment_body(error: dict, source_sha: str = "unknown") -> str:
         f"`{source_sha or 'unknown'}`. The previous status is marked `Error` and "
         "coverage is unknown until the definition is fixed.",
         "",
-        f"**Error:** {_safe_comment_text(error.get('error'))}",
+        f"**Error:** {safe_comment_text(error.get('error'))}",
         "",
         "Fix the fenced YAML definition in the issue body. Unknown keys, duplicate "
         "model declarations, placeholders, and invalid completion criteria are hard errors.",
@@ -744,17 +744,20 @@ def _field_actions(
     return actions
 
 
-def _comment_actions(
+def comment_actions(
     body: str, issue_number: int, comments: list[dict],
     owner_login: str | None, warnings: list[str],
+    *, marker: str = COMMENT_MARKER,
 ) -> list[dict]:
     """Update only a marker comment authored by the exact sync identity.
 
     Any ``Bot`` user can write a marker, so authorship is matched on the
     authenticated identity. Duplicate owned comments are reported, never
-    deleted, because deletion is not reversible.
+    deleted, because deletion is not reversible. Callers may pass a distinct
+    marker so independent bot-owned comments (for example intake validation
+    feedback) never edit the dashboard sync comment.
     """
-    marker = [c for c in comments if (c.get("body") or "").startswith(COMMENT_MARKER)]
+    matching = [c for c in comments if (c.get("body") or "").startswith(marker)]
     if not owner_login:
         warnings.append(
             f"issue #{issue_number}: comment ownership identity is unknown; set "
@@ -763,7 +766,7 @@ def _comment_actions(
         )
         return []
     owned = sorted(
-        [c for c in marker if (c.get("user") or {}).get("login") == owner_login],
+        [c for c in matching if (c.get("user") or {}).get("login") == owner_login],
         key=lambda c: c.get("id") or 0,
     )
     if len(owned) > 1:
@@ -781,7 +784,7 @@ def _comment_actions(
             "previous_body": owned[0].get("body") or "",
             "body": body,
         }]
-    if marker:
+    if matching:
         warnings.append(
             f"issue #{issue_number} has a tracker marker comment not authored by "
             f"{owner_login}; left it untouched and did not create a duplicate"
@@ -828,7 +831,7 @@ def build_sync_plan(
     def add_comments(reference: dict, body: str) -> None:
         number = reference.get("number")
         if include_comments and number:
-            actions.extend(_comment_actions(
+            actions.extend(comment_actions(
                 body, number, (comments or {}).get(number, []),
                 comment_owner_login, warnings,
             ))

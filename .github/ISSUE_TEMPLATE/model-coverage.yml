@@ -6,13 +6,20 @@ body:
   - type: markdown
     attributes:
       value: |
-        This issue is the single maintained plan for one model's coverage. The
+        **Do not include customer data.** Use public model and platform details
+        and sanitized evidence only. Do not include customer names, customer
+        data or prompts, customer environment identifiers, private hostnames or
+        IPs, private logs, credentials, or confidential blockers. This issue and
+        every linked reproduction must contain no customer data.
+
+        This issue is the single maintained plan for **one model**. The
         repository catalog remains the source of truth for recipe maturity and
         committed benchmark evidence. CI success does not mean validated.
 
-        Edit the fenced YAML block below. Keep the marker comment and the
-        fences, use one issue per model, and do not add a second YAML block.
-        The model tracker reads only that block. See
+        Only the single fenced `yaml` block is machine-readable. Keep the marker
+        comment and the fences, do not add a second fenced YAML block, and use the
+        prose fields below for public links, hardware, scope, required features,
+        and stretch goals. See
         [docs/model-tracker.md](https://github.com/openshift-psap/inference-playbooks/blob/main/docs/model-tracker.md)
         for status rules and examples.
 
@@ -20,30 +27,47 @@ body:
         `RHOAIENG-123`. The tracker renders the fixed note
         "Refer to internal Jira for more details on this task." and never reads
         Jira content. Do not paste Jira descriptions or discussions here.
+
+        Repository prerequisite: the `model-coverage` label must exist before
+        the form can apply it. The tracker also recognizes the marker comment, so
+        an existing issue remains tracked without the label. Maintainers should
+        verify the label with `gh label list --search model-coverage`; a fork
+        must create it once.
   - type: textarea
     id: target-definition
     attributes:
       label: Machine-readable target definition
       description: >-
         Required. Replace the placeholders. `completion` is `contributed` or
-        `validated`. List every planned recipe and platform pair. A platform may
-        override the model-level `completion`. Remove the leading `#` from
-        `jira` only when an internal Jira issue exists.
+        `validated`. List every **required** recipe and platform pair. A platform
+        may override the model-level `completion`. Remove the leading `#` from
+        `jira` only when an internal Jira issue exists. `owner` is optional:
+        omit it, leave it empty, or leave the example commented out to use the
+        default triage owner. Quote numeric-looking versions, especially RHOAI
+        `version: "3.6"`.
       value: |
         <!-- inference-playbooks:model-coverage-tracker -->
         ```yaml
         schema_version: 1
         model_id: replace-with-model-id
-        owner: "@your-github-handle"
+        # owner is optional. Omit it or leave it empty to use @thameem-abbas for
+        # triage; the tracker follows current issue assignees after delegation.
+        # owner: "@your-github-handle"
         completion: contributed  # contributed or validated
         # jira: RHOAIENG-123
         blockers: []
         targets:
+          # Use the recipe's recipe_id field from recipe.yaml, not its directory name.
           - recipe_id: replace-with-recipe-id
             platforms:
-              - stack: vllm
-                version: v0.24.0
-                # completion: validated  # optional per-platform override
+              - stack: rhoai
+                version: "3.6"  # quote numeric-looking versions
+              # Add additional required platforms as more entries, for example:
+              # - stack: vllm
+              #   version: v0.24.0
+          # Add each required hardware target as another targets[] entry, for
+          # example a second recipe_id for a different GPU count. Do not use an
+          # `optional` target key; put stretch goals in the prose field below.
         ```
     validations:
       required: true
@@ -54,7 +78,10 @@ body:
 
         - `model_id` must match `models/<model-id>/model.yaml` when the model
           exists. A planned model may not exist in the repository yet.
-        - `owner` is the accountable GitHub user or team.
+        - `owner` is optional. Omit it, use YAML `null`, or leave it empty to
+          use `@thameem-abbas` as the default triage owner. An explicit valid
+          GitHub user or team handle (`@octocat` or `@org/team`) is
+          authoritative. Obvious placeholders such as `TBD` are rejected.
         - `completion` is the model-level bar for every listed platform:
           `contributed` accepts contributed, validated, or production maturity;
           `validated` requires same-engine committed benchmark evidence for the
@@ -62,13 +89,89 @@ body:
           platform, or an earlier-engine compatibility run. A single
           `platforms[]` entry may set its own `completion` to override the
           model-level bar.
-        - `targets[].recipe_id` is the v4 `recipe_id` field. Recipe IDs are
-          scoped by model: the same recipe ID may exist under different models.
+        - `targets[].recipe_id` is the v4 `recipe_id` field inside `recipe.yaml`,
+          not the recipe directory name. Recipe IDs are scoped by model: the same
+          recipe ID may exist under different models. An ID that is not in the
+          catalog is a warning and remains planned; check the field if it was
+          meant to be an existing recipe.
         - `targets[].platforms[]` entries are exact `stack` and `version`
           values declared by that recipe. A target platform missing from the
-          recipe stays planned.
+          recipe stays planned. RHOAI requires a string version such as
+          `version: "3.6"`; unquoted `3.6` is a number and is rejected with a
+          quoting hint.
+        - Only `targets` counts toward automated completion. Required coverage
+          belongs there. Stretch goals belong in the prose field below and are
+          **not** counted, so optional work never blocks required completion.
         - `blockers` is an optional public list. Do not include confidential
           information.
         - Duplicate model declarations invalidate every issue that declares the
-          same model. Duplicate targets, unknown keys, and malformed YAML fail
-          the tracker check with an actionable error.
+          same model. Duplicate targets, unknown keys, malformed YAML, and
+          unfilled placeholders fail the tracker check with an actionable error.
+        - The validation feedback comment is posted for the tracking issue even
+          when the Projects dashboard sync is disabled. A failed intake job means
+          the definition is invalid, not that CI validated the target.
+  - type: textarea
+    id: public-model-links
+    attributes:
+      label: Public model and checkpoint links
+      description: >-
+        Public Hugging Face model, exact revision, or checkpoint URL(s). Do not
+        include private links, tokens, customer data, or credentials.
+      placeholder: |
+        - Model: https://huggingface.co/ORG/MODEL
+        - Revision/checkpoint: https://huggingface.co/ORG/MODEL/tree/REVISION
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware type, count, and topology
+      description: >-
+        Public accelerator type and count per node, node count, and relevant
+        interconnect. This is prose context; automated completion still uses the
+        recipe_id and platforms in the YAML block. Do not include hostnames, IPs,
+        or customer environment identifiers.
+      placeholder: |
+        - 8x NVIDIA H200 (HBM3e), single node
+        - 2 nodes x 8x NVIDIA H100, RoCE interconnect
+    validations:
+      required: true
+  - type: dropdown
+    id: work-scope
+    attributes:
+      label: Work scope
+      description: Choose whether this plan is new work or a refresh of existing coverage.
+      options:
+        - New recipe
+        - Refresh existing recipe
+        - New platform for an existing recipe
+    validations:
+      required: true
+  - type: textarea
+    id: required-features
+    attributes:
+      label: Required serving features or flag changes
+      description: >-
+        Required features and flags that affect deployment or evidence, for
+        example speculative decoding, prefix caching, EP/DP, tool calling, or a
+        required runtime change. Do not include secrets or customer data.
+      placeholder: |
+        - Required: ...
+        - Compatibility blockers: ...
+    validations:
+      required: false
+  - type: textarea
+    id: stretch-goals
+    attributes:
+      label: Stretch goals (not counted toward automated completion)
+      description: >-
+        Optional. Describe extra hardware, platforms, or recipes you would like
+        but do not require, such as a 16-GPU variant. Keep stretch goals here in
+        prose only; do not add a second fenced YAML block or an `optional` key.
+        The tracker counts only the required `targets` above, so stretch work
+        remains visible without blocking completion.
+      placeholder: |
+        - Optional: 16x H200 variant after the required 8x target
+        - Optional: additional stack/version after required 3.6 coverage
+    validations:
+      required: false
