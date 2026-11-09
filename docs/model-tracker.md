@@ -17,11 +17,12 @@ a different platform never completes a target by itself.
 
 | Piece | Purpose |
 |-------|---------|
-| `.github/ISSUE_TEMPLATE/model-coverage.yml` | Issue form with the machine-readable fenced YAML target definition. |
+| `.github/ISSUE_TEMPLATE/model-coverage.yml` | Issue form with the machine-readable fenced YAML target definition and prose intake fields. |
 | `tools/model_coverage.py` | Deterministic evaluator. Reads issues JSON plus the catalog and emits JSON or Markdown. |
 | `tools/model_coverage_sync.py` | Read-only/dry-run planner and opt-in GitHub Projects v2 writer. |
-| `.github/workflows/model-coverage.yml` | Read-only checks on PR/main/issue events; trusted default-branch-only sync. |
-| `tests/test_model_coverage.py` | Offline tests for parsing, completion rules, idempotence, pagination, and write guards. |
+| `tools/model_coverage_intake.py` | Issue-event helper for first-intake default assignment and idempotent validation feedback without project access. |
+| `.github/workflows/model-coverage.yml` | Read-only checks on PR/main/issue events; issue intake feedback; trusted default-branch-only sync. |
+| `tests/test_model_coverage.py` | Offline tests for parsing, completion rules, idempotence, pagination, write guards, and intake feedback. |
 
 ## Status and completion rules
 
@@ -93,59 +94,132 @@ for operational decisions, but it is never accepted as independent validation
 of the current engine. It is not inferred from a green CI run or a
 compatibility claim.
 
-## Issue definition
+## Issue definition and intake
 
 Create one issue per model using the **Model coverage target** form. The form
-prefills the marker comment and a fenced block in the editable body. Keep both,
-keep exactly one fenced `yaml` block, and edit the block in place:
+prefills the marker comment and one fenced block in the editable body. Keep both,
+keep exactly one fenced `yaml` block, and edit the block in place.
+
+**Do not include customer data.** Use public model and platform details and
+sanitized evidence only. Do not include customer names, customer data or prompts,
+customer environment identifiers, private hostnames or IPs, private logs,
+credentials, or confidential blockers. This issue and every linked reproduction
+must contain no customer data.
+
+The form's prose fields collect public model/checkpoint links, hardware type and
+count, new-versus-refresh work scope, required serving features, and stretch
+goals. Those fields are not parsed. Only the single fenced YAML block affects
+automated completion, so do not add a second fenced YAML block.
 
 ```yaml
 schema_version: 1
-model_id: kimi-k3
-owner: "@kimi-owner"
-completion: contributed
+model_id: glm-5.3
+# owner: "@octocat"  # optional; omit or leave empty for the default triage owner
+completion: validated
 # jira: RHOAIENG-123
 blockers: []
 targets:
-  - recipe_id: kimi-k3-vllm-h200-pp2-tp8
+  - recipe_id: glm-5.3-dep8-mtp3-hisparse
     platforms:
+      - stack: rhoai
+        version: "3.6"
       - stack: vllm
-        version: v0.29.0
+        version: v0.31.0
+  # Add another required hardware target as a second targets[] entry.
+  - recipe_id: another-required-hardware-recipe
+    platforms:
+      - stack: rhoai
+        version: "3.6"
 ```
 
-Rules:
+### Required versus stretch scope
+
+Every entry under `targets` is **required** and counts toward model completion.
+Add one `targets[]` entry per required hardware target, using the recipe's
+distinct `recipe_id`; a second required GPU count or node topology is another
+entry, not an optional key.
+
+Stretch goals are optional work that should stay visible without blocking
+required completion. Describe them in the form's **Stretch goals** prose field
+(and, if useful, in additional prose below the YAML block). Do **not** add an
+`optional` target key, a second fenced YAML block, or optional entries under
+`targets`; the evaluator rejects unknown target keys and would count any entry
+there as required. Stretch prose is never parsed and never affects coverage or
+completion counters.
+
+### Rules
 
 - `model_id` matches `models/<model-id>/model.yaml` when the model exists. A
   model that is not yet in the repository is a valid planned entry; it is
   reported under `planned_models`.
-- `owner` is one GitHub user or team handle (`@octocat` or `@org/team`).
+- `owner` is optional. Omit it, use YAML `null`, or leave it empty to use
+  `@thameem-abbas` as the default triage owner. An explicit valid GitHub user or
+  team handle (`@octocat` or `@org/team`) is authoritative and is never replaced
+  by assignment changes. Obvious textual placeholders such as `TBD` are rejected
+  with an actionable error that points back to the default-owner policy.
+  - For an ownerless definition, the evaluator uses the issue's current
+    assignees as the tracker owner. One assignee renders as `@login`; multiple
+    assignees render in GitHub's assignment order as `@first, @second`. This
+    keeps the dashboard consistent when a maintainer delegates ownership
+    without editing YAML.
+  - If an ownerless issue has no assignees, the evaluator uses the default
+    triage owner. The issue-event intake workflow attempts a one-time assignment
+    to `@thameem-abbas` on the first `opened` event. Assignment is best-effort
+    and requires all of: a readable open issue and catalog, a parseable ownerless
+    YAML definition, no current assignees, and no `assigned`/`unassigned` event
+    in GitHub's paginated issue history. Any prior assignment history, including
+    a later manual unassignment, blocks replay, so rerunning an old `opened`
+    event can never reassign the issue. Malformed YAML is not assignment-eligible
+    and receives feedback only. A failed issue or catalog read skips assignment;
+    feedback is still attempted where possible. The workflow never clears or
+    replaces existing assignees, does not backfill existing issues, and does not
+    reassign after an edit or manual unassignment. A later delegation is
+    preserved.
+  - A team handle is a valid explicit tracker owner but is never treated as a
+    GitHub user login for automatic assignment.
+  - The form intentionally does not set a default assignee. Doing so would also
+    assign explicitly owned issues, which the YAML owner must control.
 - `completion` is `contributed` or `validated` and applies to every platform
   unless a platform entry sets its own `completion`.
-- `recipe_id` is the v4 `recipe_id` field, not the directory name. Recipe IDs
-  are scoped by model: the same recipe ID may legitimately exist under another
-  model.
+- `recipe_id` is the v4 `recipe_id` field inside `recipe.yaml`, not the recipe
+  directory name. Recipe IDs are scoped by model: the same recipe ID may
+  legitimately exist under another model. An ID that matches no catalog recipe
+  for this model produces a warning and remains `planned`; that is expected for
+  a planned recipe. The warning points out the lookup rule so a directory-name
+  typo or a cross-model copy is visible without rejecting future work.
 - `platforms` are exact `stack`/`version` values declared by that recipe. An
   absent pair stays `planned`, which is the normal state for a backlog entry.
   An optional `completion` on a platform overrides the model-level bar for that
-  platform only.
+  platform only. RHOAI 3.6 examples use the quoted string `version: "3.6"`;
+  other quoted versions are accepted and evaluated, with absent pairs remaining
+  planned. Unquoted numeric-looking versions such as `3.6` are parsed as numbers
+  and fail with a quoting hint. Numeric-looking versions from any stack should be
+  quoted.
 - `blockers` is an optional public list (at most 20). Do not include
   confidential details.
 - `jira` is an optional internal Jira **key only**. The evaluator never calls
   Jira and renders only:
   **Refer to internal Jira for more details on this task.**
   Do not paste Jira descriptions, links, comments, or discussions.
-- Replace the form’s placeholder values. Unknown keys, duplicate model
+- Replace the form's placeholder values. Unknown keys, duplicate model
   declarations, duplicate target platforms, malformed YAML, non-string mapping
-  keys, a non-integer `schema_version`, invalid Jira keys, and unfilled
-  placeholders are hard errors. They include the issue number and field
-  location. Two issues declaring the same `model_id` invalidate **both**; the
-  tracker does not publish the first one as complete.
-- The label `model-coverage` must exist before the form is used. Create it
-  manually once (this repository change did not create it):
+  keys, a non-integer `schema_version`, invalid Jira keys, unquoted
+  numeric-looking versions, and unfilled placeholders are hard errors. They
+  include the issue number and field location. Two issues declaring the same
+  `model_id` invalidate **both**; the tracker does not publish the first one as
+  complete. Split hardware variants across separate `targets` entries under one
+  model issue, not across duplicate model issues.
+- The `model-coverage` label is a one-time repository setup prerequisite. Verify
+  it before relying on label-based recognition:
+  `gh label list --repo openshift-psap/inference-playbooks --search model-coverage`.
+  The repository's label has been created for the RHOAI 3.6 pilot; a fork or
+  renamed repository must create it once with
   `gh label create model-coverage --color 5319E7 --description "Model coverage tracker entry"`.
-  The form's label and the marker comment both identify a tracking issue;
-  either one is sufficient. The marker lives inside the editable target
-  definition because GitHub issue forms do not submit `markdown` block content.
+  The form's label and the marker comment both identify a tracking issue; either
+  one is sufficient. If the label is absent, the marker still identifies an
+  existing tracking issue, but label-based queues will not include it. The
+  marker lives inside the editable target definition because GitHub issue forms
+  do not submit `markdown` block content.
 
 Closing a tracking issue does not retire the plan or free the model ID. The
 evaluator reads the issue body and ignores issue state, so a closed issue still
@@ -157,6 +231,59 @@ without removing both identifiers produces an invalid tracked definition
 (`Error`); it does not untrack the model. Transfer or delete the issue if it
 should disappear entirely.
 
+## Intake assignment and validation feedback
+
+The issue-event intake job (`tools/model_coverage_intake.py`) runs on tracking
+issues for `opened`, `edited`, `reopened`, `assigned`, and `unassigned` events
+with a job-scoped `issues: write` `GITHUB_TOKEN`. It checks out the trusted
+default branch and does not receive project credentials or the
+`forge-evidence` App secret. It remains active when
+`MODEL_TRACKER_WRITE_ENABLED` is unset or `false`.
+
+- On the first `opened` event, an ownerless definition is assigned to
+  `@thameem-abbas` only when the issue is open, the YAML parses and omits
+  `owner`, the issue has no assignees, and the paginated issue history contains
+  no `assigned`/`unassigned` event. Any assignment history means first-intake
+  assignment already happened or a human delegated it; it is never replayed.
+  Existing assignees are preserved; explicit YAML owners are never assigned;
+  edits, later unassignment, and assignment/unassignment events do not trigger
+  reassignment or retroactive backfill. Immediately before writing, the apply
+  step re-reads the issue and assignment history and skips the assignment if a
+  manual assignment, owner edit, closure, or prior history appeared after
+  planning. It verifies that the default login appears in the read-back
+  assignee list and records a failure if the API ignored it; a read-back request
+  failure is recorded as an uncertain outcome, not as success or a skip.
+- The job creates or updates one issue-specific validation comment with marker
+  `<!-- inference-playbooks:model-coverage-feedback -->`. It is authored by the
+  workflow identity (`github-actions[bot]`), is idempotent, and only edits a
+  comment with that exact marker and author. Human comments and the separate
+  dashboard-sync marker `<!-- inference-playbooks:model-coverage -->` are never
+  edited. A foreign comment with the feedback marker is preserved and does not
+  suppress creation of a separate owned feedback comment. Assignment and
+  unassignment events update this feedback comment to show the new effective
+  owner without assigning anyone.
+- After assignment handling, the apply path refreshes the authoritative issue,
+  re-evaluates it against the already loaded catalog and issue snapshot, and
+  re-reads comments before building feedback. A concurrent owner or definition
+  edit therefore drives the posted result, and a no-longer-tracked issue skips
+  stale feedback. The workflow summary and result artifact report planned versus
+  applied, skipped, failed, and uncertain actions separately.
+- The feedback comment states whether the definition is valid, the effective
+  owner and its source, coverage status, unknown-recipe warnings, and correction
+  guidance. It also states that dashboard sync is disabled when
+  `MODEL_TRACKER_WRITE_ENABLED` is not `true`.
+- If the triggering definition is invalid, the intake job posts or updates the
+  feedback comment and then exits with status 1, so a green issue-event run
+  cannot be mistaken for valid intake. Operational API failures exit with status
+  2 even when feedback or assignment succeeded, and the audit result is still
+  written. The read-only check job still uses `--allow-errors`, publishes the
+  same errors in its workflow summary and artifacts, and allows valid models to
+  be processed. Warnings such as an unknown planned recipe ID do not fail the
+  run.
+- The read-only parser and evaluator remain pure; they do not assign, comment,
+  or call the GitHub API. Only the explicit intake apply step performs those
+  writes.
+
 ## Existing untracked models
 
 Any model in the catalog without a tracking issue appears under
@@ -167,9 +294,12 @@ models as untracked.
 
 Malformed definitions return exit code 1 locally. The workflow check runs the
 evaluator with `--allow-errors`, writes the report and errors as artifacts, and
-lets the sync job mark each affected project item `Error` while continuing to
-update valid models. Untracked models do not fail the run; they are kept visible
-so the backlog cannot silently disappear.
+publishes them in the workflow summary. When dashboard sync is enabled, the sync
+job marks each affected project item `Error` while continuing to update valid
+models; when it is disabled, the intake feedback comment and the check summary
+are the discoverable validation result. The issue-event intake job also fails
+for the invalid triggering issue after posting its feedback. Untracked models do
+not fail the run; they are kept visible so the backlog cannot silently disappear.
 
 ## Local evaluation
 
@@ -205,6 +335,9 @@ normal catalog build identity.
 The CLI exits:
 
 - `0` — evaluation succeeded, including untracked/planned model reports;
+- `0` with warnings — unknown recipe IDs and other non-blocking definition
+  warnings are printed to stderr and included in the report, but do not fail the
+  run;
 - `0` with `--allow-errors` — issue definitions are invalid but the report was
   written (catalog/input failures still exit 2); this is the workflow mode;
 - `1` — one or more tracking issue definitions are invalid;
@@ -276,7 +409,10 @@ the project and prints the planned mutations without writing.
      for a pull request event. Comments are authored by the App's
      `<app-slug>[bot]` identity; only marker comments owned by that exact login
      (or `MODEL_TRACKER_BOT_LOGIN`) are updated.
-6. Add the `model-coverage` label (see above) and open the first tracking issue.
+6. Verify the `model-coverage` label exists (see above) and open the first
+   tracking issue. The label is repository setup, not created by the workflow.
+   The issue-event intake job uses only the workflow `GITHUB_TOKEN` with
+   repository Issues write; it does not need project or App credentials.
 
 ### Dry run
 
@@ -377,13 +513,32 @@ same-repository project items that are no longer in the report `Stale`/`Unknown`
 and leaves them in the project for manual review. It does not add items for the
 stale path, write comments, delete items, or touch human fields.
 
+### Sync disabled mode
+
+`MODEL_TRACKER_WRITE_ENABLED` unset or `false` is an explicit supported
+operating mode, not proof of a runtime failure. In this mode:
+
+- the read-only `check` job still validates, tests, evaluates, uploads its report
+  artifact, and publishes the report and definition errors in the workflow
+  summary, which also states that dashboard sync is disabled;
+- the issue-event intake job still assigns the default triage owner on first
+  intake when appropriate and still posts or updates the issue-specific feedback
+  comment;
+- the `sync` and `stale` jobs are skipped, so no Project items, fields, or
+  dashboard sync comments are written, and no App token is minted.
+
+Do not enable the sync, change repository variables, or alter authentication to
+obtain intake feedback. The feedback comment and workflow summary are the
+intended feedback path while sync remains disabled. Enabling sync later is a
+separate reviewed operation with the project setup and App permissions above.
+
 ## Workflow
 
 `.github/workflows/model-coverage.yml` runs:
 
 - on every push to `main`;
 - on tracking-issue changes (`opened`, `edited`, `reopened`, `closed`,
-  `labeled`, `unlabeled`, `transferred`);
+  `assigned`, `unassigned`, `labeled`, `unlabeled`, `transferred`);
 - manually with `workflow_dispatch`;
 - daily for reconciliation, so merged evidence updates coverage even without a
   tracker edit;
@@ -400,8 +555,23 @@ token. It runs `python3 tools/validate.py --current` and
 `python3 -m pytest tests/test_model_coverage.py -q` — the same commands used
 locally — then evaluates issues without project access. It uses
 `--allow-errors` so invalid definitions still produce report/error artifacts
-instead of blocking every valid model update. Report artifacts are uploaded on
-success and failure.
+instead of blocking every valid model update. The report, including a
+`## Validation` section with definition errors and warnings, is written to the
+workflow summary. Report artifacts are uploaded on success and failure.
+
+The `feedback` job runs on tracking-issue `opened`, `edited`, `reopened`,
+`assigned`, and `unassigned` events, independent of
+`MODEL_TRACKER_WRITE_ENABLED`. It checks out the trusted default branch, has
+only `contents: read` and `issues: write`, and uses the workflow
+`GITHUB_TOKEN`. It never receives the `forge-evidence` App secret or project
+credentials. It attempts the default triage-owner assignment only on first
+intake: open issue, ownerless parseable YAML, no assignees, and no
+`assigned`/`unassigned` history. It writes the issue-specific feedback comment
+for every listed event and revalidates assignment eligibility immediately
+before writing. If the triggering definition is invalid, the job posts or
+updates the feedback and then fails so the run is not mistaken for valid
+intake; valid models in the same evaluation are unaffected because the check
+job uses `--allow-errors`.
 
 The `sync` job exists only after a successful `check`, only when
 `MODEL_TRACKER_WRITE_ENABLED == 'true'`, and only for
@@ -421,13 +591,42 @@ and only when the same trusted-context conditions hold. It runs in the same
 `forge-evidence` environment, mints the same narrow App token, and invokes
 `--mark-stale --apply` before uploading its plan/result. All jobs share one
 `model-coverage` concurrency group, so pushes, issue edits, manual runs, and
-the schedule cannot write in parallel or create duplicate comments.
+the schedule cannot write in parallel. `cancel-in-progress: false` protects an
+active run, and `queue: max` queues up to GitHub's documented maximum of 100
+pending runs instead of replacing a pending run. This is a bounded queue, not
+an unbounded delivery guarantee; a burst beyond the bound can still drop
+pending runs.
+
+## Pilot verification
+
+The RHOAI 3.6 pilot tracking issue
+[#120](https://github.com/openshift-psap/inference-playbooks/issues/120)
+uses the form's target-definition format, has the `model-coverage` label, declares an explicit
+owner, and uses the quoted `version: "3.6"` example for RHOAI 3.6. Its issue-event workflow
+run completed the read-only check and skipped project sync:
+https://github.com/openshift-psap/inference-playbooks/actions/runs/42649345183.
+
+An offline evaluator run against the submitted issue body and the local catalog
+at `a1c43c0` produced zero definition errors and zero warnings. It parsed
+`glm-5.3` as planned with owner `@thameem-abbas` from the YAML definition; the
+target `glm-5.3-dep8-mtp3-hisparse` / `rhoai 3.6` remains planned because that
+platform is not yet in the repository. This verifies submitted-body parsing and
+evaluator output, not a live dashboard write.
+
+Live Project and dashboard-comment sync remain untested with
+`MODEL_TRACKER_WRITE_ENABLED` disabled. The separate intake feedback job
+introduced with this change remains untested live until it is merged; it does
+not require that switch. After merge, the next tracking issue edit exercises
+the feedback path without enabling project sync.
 
 ## Ownership and maintenance
 
-- Each model has exactly one tracking issue and one owner.
+- Each model has exactly one tracking issue. An explicit YAML owner, or the
+  effective owner derived from issue assignees for an ownerless definition, is
+  the accountable owner shown in the report and dashboard.
 - Owners update blockers, Jira keys, and target scope by editing the fenced YAML
-  in their issue.
+  in their issue. Delegating an ownerless issue by changing assignees does not
+  require a YAML edit; an explicit YAML owner remains authoritative.
 - Maintainers add planned models by opening a new issue from the form. To retire
   a plan, remove both the `model-coverage` label and the tracker marker after an
   explicit decision; closing the issue alone does not retire it or free the
@@ -443,10 +642,24 @@ the schedule cannot write in parallel or create duplicate comments.
 
 ## Limitations
 
-- The tracker cannot infer a planned recipe ID from prose. A typo in a target
-  `recipe_id` that matches no recipe is reported as `planned`, not a hard
-  error, because planned recipes legitimately do not exist yet. Recipe IDs are
-  scoped per model; the same ID under a different model does not conflict.
+- The tracker cannot infer a planned recipe ID from prose. A target
+  `recipe_id` that matches no catalog recipe for this model is reported as a
+  warning and stays `planned`, not a hard error, because planned recipes
+  legitimately do not exist yet. Check the recipe's `recipe_id` field rather
+  than its directory name. Recipe IDs are scoped per model; the same ID under a
+  different model produces a scoped warning but does not conflict.
+- Stretch goals are prose only. They are intentionally not represented in the
+  YAML schema, are never parsed, and never count toward coverage or completion.
+  Required work must stay in `targets`.
+- Automatic default assignment is best-effort and limited to the first `opened`
+  event. It requires readable issue and catalog state, parseable ownerless YAML,
+  an open issue, no current assignees, and no prior `assigned`/`unassigned`
+  history. Malformed YAML is deliberately not assignment-eligible, and a failed
+  issue or catalog read can skip assignment; feedback is still attempted where
+  possible. There is no retroactive backfill for existing ownerless issues, and
+  later edits or manual unassignment do not reassign the issue. Replaying an
+  original `opened` event cannot reassign because assignment history blocks it.
+  An explicit YAML owner is never auto-assigned.
 - `validated` completion requires the catalog's `same-engine` badge for the
   exact target platform. An `earlier-engine` run is compatible evidence, not
   independent validation of the current engine; neither a different
@@ -454,7 +667,8 @@ the schedule cannot write in parallel or create duplicate comments.
 - The tracker does not call Jira, copy Jira content, or verify that a Jira key
   exists.
 - The sync does not create the Project, label, fields, options, variables, or
-  secrets. Those are one-time manual setup steps.
+  secrets. Those are one-time manual setup steps. The intake feedback job also
+  does not create the label.
 - Read-only GitHub issue/GraphQL reads were exercised from this worktree; no
   live Project or issue was mutated. A live dashboard demonstration requires
   project credentials. Opening a tracking issue and merging a matching recipe

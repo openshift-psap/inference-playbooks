@@ -14,8 +14,9 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 
 from model_coverage import (  # noqa: E402
-    DefinitionError, JIRA_NOTE, TRACKER_MARKER, build_catalog, evaluate,
-    is_tracking_issue, parse_definition, to_markdown,
+    DEFAULT_TRIAGE_OWNER, DefinitionError, JIRA_NOTE, TRACKER_MARKER,
+    build_catalog, evaluate, is_tracking_issue, issue_assignees,
+    owner_is_omitted, parse_definition, to_markdown,
 )
 from model_coverage_sync import (  # noqa: E402
     BLOCKED_FIELD, COMMENT_MARKER, COMPLETED_FIELD, COMPLETION_FIELD,
@@ -25,6 +26,7 @@ from model_coverage_sync import (  # noqa: E402
     fetch_items, main, resolve_comment_owner,
 )
 import model_coverage_sync as sync_module  # noqa: E402
+import model_coverage_intake as intake  # noqa: E402
 
 
 SIGNATURE = {
@@ -367,6 +369,12 @@ def test_current_repository_kimi_k3_reaches_contributed_without_ci_validation():
     (f"{TRACKER_MARKER}\n```yaml\nschema_version: 1\nmodel_id: a\nowner: o\ncompletion: maybe\ntargets:\n  - recipe_id: r\n    platforms: [{{stack: vllm, version: v1}}]\n```\n", "contributed"),
     (f"{TRACKER_MARKER}\n```yaml\nschema_version: 1\nmodel_id: a\nowner: o\ncompletion: contributed\njira: 'a description, not a key'\ntargets:\n  - recipe_id: r\n    platforms: [{{stack: vllm, version: v1}}]\n```\n", "Jira issue key"),
     (f"{TRACKER_MARKER}\n```yaml\nschema_version: 1\nmodel_id: a\nowner: o\ncompletion: contributed\ntargets:\n  - recipe_id: r\n    platforms: [{{stack: vllm, version: v1}}, {{stack: vllm, version: v1}}]\n```\n", "duplicate target platform"),
+    (
+        f"{TRACKER_MARKER}\n```yaml\nschema_version: 1\nmodel_id: a\nowner: o\n"
+        "completion: contributed\ntargets:\n  - recipe_id: r\n    platforms:\n"
+        "      - stack: rhoai\n        version: \"3.6\"\n        hardware: 8x\n```\n",
+        "Platform entries accept only `stack`, `version`",
+    ),
 ])
 def test_malformed_definitions_are_actionable(body, message):
     report = evaluate(catalog(entry("a", "r")), [issue(107, body=body)])
@@ -1296,20 +1304,27 @@ def test_issue_form_default_definition_parses():
         "number": 400, "body": textarea["attributes"]["value"], "labels": [],
     }
     assert is_tracking_issue(submitted) is True
-    with pytest.raises(DefinitionError, match="placeholders"):
+    with pytest.raises(DefinitionError, match="model placeholder"):
         parse_definition(textarea["attributes"]["value"])
     filled = textarea["attributes"]["value"].replace(
         "replace-with-model-id", "model-a"
-    ).replace("@your-github-handle", "@owner").replace(
+    ).replace(
         "replace-with-recipe-id", "recipe-a"
     )
     parsed = parse_definition(filled)
     assert parsed["model_id"] == "model-a"
+    # The form's owner example is commented out on purpose: an untouched form
+    # submission is ownerless and follows the documented default/delegation.
+    assert parsed["owner"] == DEFAULT_TRIAGE_OWNER
+    assert parsed["owner_declared"] is False
     assert parsed["completion"] == "contributed"
-    target_platform = parsed["targets"][0]["platforms"][0]
-    assert target_platform["stack"] == "vllm"
-    assert target_platform["version"] == "v0.24.0"
-    assert target_platform["completion"] is None
+    target_platforms = parsed["targets"][0]["platforms"]
+    assert [item["stack"] for item in target_platforms] == ["rhoai"]
+    assert target_platforms[0]["version"] == "3.6"
+    # The vllm alternative stays commented out so it is not submitted as
+    # accidental extra required scope.
+    assert "# - stack: vllm" in textarea["attributes"]["value"]
+    assert all(item["completion"] is None for item in target_platforms)
     assert is_tracking_issue({**submitted, "body": filled}) is True
 
 
@@ -1321,7 +1336,9 @@ def test_workflow_serializes_writers_and_uploads_audits():
     assert {"push", "pull_request", "issues", "workflow_dispatch", "schedule"} <= set(triggers)
     assert triggers["push"]["branches"] == ["main"]
     assert workflow["concurrency"] == {
-        "group": "model-coverage", "cancel-in-progress": False,
+        "group": "model-coverage",
+        "cancel-in-progress": False,
+        "queue": "max",
     }
     check = workflow["jobs"]["check"]
     assert check["permissions"] == {"contents": "read", "issues": "read"}
@@ -1489,3 +1506,1056 @@ def test_cli_returns_actionable_failure_for_malformed_issue(tmp_path):
     assert result.returncode == 1
     assert "Issue #300" in result.stderr
     assert "unknown key" in result.stderr
+
+
+def definition_without_owner(model_id="model-a", targets=None, **extra):
+    value = definition(model_id=model_id, targets=targets, **extra)
+    value.pop("owner", None)
+    return value
+
+
+def issue_with_assignees(value, *logins):
+    return {
+        **value,
+        "assignees": [{"login": login} for login in logins],
+    }
+
+
+def test_new_model_is_valid_planned_intake():
+    report = evaluate(catalog(), [issue(500, definition_without_owner(
+        model_id="brand-new-model",
+        targets=[{
+            "recipe_id": "brand-new-recipe",
+            "platforms": [platform("rhoai", "3.6")],
+        }],
+    ))])
+    assert report["errors"] == []
+    model = report["models"][0]
+    assert model["model_id"] == "brand-new-model"
+    assert model["in_repository"] is False
+    assert model["status"] == "planned"
+    assert model["coverage"]["target_platforms"] == 1
+    assert report["planned_models"] == ["brand-new-model"]
+    # A planned recipe is a warning, never a rejected model intake.
+    assert len(report["warnings"]) == 1
+    assert "treated as planned" in report["warnings"][0]["warning"]
+    assert "Definition warnings" in to_markdown(report)
+
+
+def test_existing_recipe_refresh_counts_platform_completion():
+    repository = catalog(entry("model-a", "recipe-a", maturity="contributed"))
+    report = evaluate(repository, [issue(501, definition())])
+    assert report["errors"] == []
+    model = report["models"][0]
+    assert model["in_repository"] is True
+    assert model["status"] == "contributed"
+    assert model["completed"] is True
+    assert model["coverage"]["completed_platforms"] == 1
+
+
+def test_two_required_hardware_targets_count_independently():
+    repository = catalog(
+        entry("model-a", "recipe-8x", maturity="contributed"),
+        entry("model-a", "recipe-16x", maturity="contributed"),
+    )
+    report = evaluate(repository, [issue(502, definition(targets=[
+        {"recipe_id": "recipe-8x", "platforms": [platform()]},
+        {"recipe_id": "recipe-16x", "platforms": [platform()]},
+    ]))])
+    model = report["models"][0]
+    assert report["errors"] == []
+    assert model["coverage"]["target_recipes"] == 2
+    assert model["coverage"]["target_platforms"] == 2
+    assert model["coverage"]["completed_platforms"] == 2
+    assert model["completed"] is True
+
+
+def test_quoted_version_parses_and_unquoted_numeric_version_is_actionable():
+    parsed = parse_definition(issue(
+        503,
+        definition(targets=[{
+            "recipe_id": "recipe-a",
+            "platforms": [platform("rhoai", "3.6")],
+        }]),
+    )["body"])
+    assert parsed["targets"][0]["platforms"][0]["version"] == "3.6"
+
+    with pytest.raises(DefinitionError, match="quoted version"):
+        parse_definition(issue(
+            504,
+            definition(targets=[{
+                "recipe_id": "recipe-a",
+                "platforms": [platform("rhoai", 3.6)],
+            }]),
+        )["body"])
+
+
+def test_malformed_definition_feedback_is_field_specific():
+    cases = [
+        (
+            f"{TRACKER_MARKER}\n```yaml\nbad: yaml\n```\n",
+            "unknown key",
+        ),
+        (
+            f"{TRACKER_MARKER}\n```yaml\nschema_version: 1\n"
+            "model_id: model-a\nowner: '@owner'\ncompletion: contributed\n"
+            "blockers: []\ntargets: []\n```\n",
+            "targets",
+        ),
+        (
+            f"{TRACKER_MARKER}\n```yaml\n"
+            + yaml.safe_dump(definition(optional=[{"hardware": "16x"}]))
+            + "```\n",
+            "stretch goals",
+        ),
+    ]
+    for body, expected in cases:
+        with pytest.raises(DefinitionError, match=expected):
+            parse_definition(body)
+
+
+def test_duplicate_model_declarations_invalidate_every_issue():
+    report = evaluate(catalog(), [
+        issue(505, definition_without_owner()),
+        issue(506, definition_without_owner()),
+    ])
+    assert {error["number"] for error in report["errors"]} == {505, 506}
+    assert all("more than one tracking issue" in error["error"]
+               for error in report["errors"])
+    assert report["models"] == []
+    assert "#505" in to_markdown(report)
+
+
+def test_stretch_goals_in_prose_are_ignored_by_completion():
+    body = (
+        f"{TRACKER_MARKER}\n```yaml\n"
+        + yaml.safe_dump(definition())
+        + "```\n\n## Stretch goals\n\n"
+        "- Optional: a 16x H200 variant.\n"
+        "- Optional: another stack/version.\n"
+    )
+    report = evaluate(
+        catalog(entry("model-a", "recipe-a", maturity="contributed")),
+        [issue(507, body=body)],
+    )
+    model = report["models"][0]
+    assert report["errors"] == []
+    assert model["coverage"]["target_recipes"] == 1
+    assert model["coverage"]["target_platforms"] == 1
+    assert model["completed"] is True
+
+
+@pytest.mark.parametrize(
+    ("owner", "expected_owner", "declared"),
+    [
+        (None, DEFAULT_TRIAGE_OWNER, False),
+        ("", DEFAULT_TRIAGE_OWNER, False),
+        ("   ", DEFAULT_TRIAGE_OWNER, False),
+        ("@octocat", "@octocat", True),
+        ("octocat", "octocat", True),
+        ("@org/team", "@org/team", True),
+    ],
+)
+def test_optional_owner_values(owner, expected_owner, declared):
+    value = definition()
+    if owner is None:
+        value.pop("owner")
+    else:
+        value["owner"] = owner
+    parsed = parse_definition(issue(508, value)["body"])
+    assert parsed["owner"] == expected_owner
+    assert parsed["owner_declared"] is declared
+
+
+@pytest.mark.parametrize("owner", ["TBD", "todo", "{{ owner }}", "@not a handle"])
+def test_placeholder_or_invalid_owner_is_rejected_with_guidance(owner):
+    with pytest.raises(DefinitionError, match="default triage owner"):
+        parse_definition(issue(509, definition(owner=owner))["body"])
+
+
+def test_explicit_yaml_null_owner_defaults_without_being_declared():
+    value = definition()
+    value["owner"] = None
+    parsed = parse_definition(issue(5091, value)["body"])
+    assert parsed["owner"] == DEFAULT_TRIAGE_OWNER
+    assert parsed["owner_declared"] is False
+
+
+def test_missing_owner_helpers_are_read_only_and_tolerate_malformed_bodies():
+    absent = f"{TRACKER_MARKER}\n```yaml\nmodel_id: model-a\n```\n"
+    assert owner_is_omitted(absent) is True
+    blank = f"{TRACKER_MARKER}\n```yaml\nmodel_id: model-a\nowner: '  '\n```\n"
+    assert owner_is_omitted(blank) is True
+    explicit = f"{TRACKER_MARKER}\n```yaml\nmodel_id: model-a\nowner: '@octocat'\n```\n"
+    assert owner_is_omitted(explicit) is False
+    assert owner_is_omitted("not a definition") is False
+    assert issue_assignees({"assignees": [
+        {"login": "alice"}, {"login": "alice"}, {"login": "bob"},
+    ]}) == ["alice", "bob"]
+
+
+def test_ownerless_definition_follows_current_assignees():
+    value = issue_with_assignees(issue(510, definition_without_owner()), "delegate")
+    model = evaluate(catalog(), [value])["models"][0]
+    assert model["owner"] == "@delegate"
+    assert model["owner_source"] == "assignees"
+    assert model["assignees"] == ["delegate"]
+
+
+def test_ownerless_unassigned_definition_uses_default_triage_owner():
+    model = evaluate(catalog(), [issue(511, definition_without_owner())])["models"][0]
+    assert model["owner"] == DEFAULT_TRIAGE_OWNER
+    assert model["owner_source"] == "default"
+    assert model["assignees"] == []
+
+
+def test_explicit_owner_beats_assignees():
+    value = issue_with_assignees(issue(512, definition(owner="@explicit")), "delegate")
+    model = evaluate(catalog(), [value])["models"][0]
+    assert model["owner"] == "@explicit"
+    assert model["owner_source"] == "explicit"
+    assert model["assignees"] == ["delegate"]
+
+
+def test_initial_opened_intake_assigns_only_ownerless_unassigned_issue():
+    value = issue(520, definition_without_owner())
+    report = evaluate(catalog(), [value])
+    plan = intake.build_intake_plan(
+        report, value, action="opened",
+        comments={}, comment_owner_login="github-actions[bot]",
+        assignment_events=[],
+    )
+    assert [action["action"] for action in plan["actions"]] == [
+        "assign_default_owner", "create_comment",
+    ]
+    assert plan["summary"]["skipped"] == 0
+    assert plan["actions"][0]["login"] == "thameem-abbas"
+    assert "attempts a one-time assignment" in plan["actions"][1]["body"]
+
+
+def test_intake_does_not_assign_explicit_owner_assignee_or_later_actions():
+    explicit = issue(521, definition(owner="@octocat"))
+    report = evaluate(catalog(), [explicit])
+    plan = intake.build_intake_plan(
+        report, explicit, action="opened", comments={},
+        comment_owner_login="github-actions[bot]",
+    )
+    assert all(action["action"] != "assign_default_owner" for action in plan["actions"])
+
+    assigned = issue_with_assignees(issue(522, definition_without_owner()), "alice")
+    report = evaluate(catalog(), [assigned])
+    plan = intake.build_intake_plan(
+        report, assigned, action="opened", comments={},
+        comment_owner_login="github-actions[bot]",
+    )
+    assert all(action["action"] != "assign_default_owner" for action in plan["actions"])
+
+    report = evaluate(catalog(), [issue(523, definition_without_owner())])
+    for action in ("edited", "reopened"):
+        plan = intake.build_intake_plan(
+            report, report["models"][0]["issue"], action=action,
+            comments={}, comment_owner_login="github-actions[bot]",
+        )
+        assert all(action["action"] != "assign_default_owner" for action in plan["actions"])
+
+
+def test_team_owner_is_never_auto_assigned_as_a_user():
+    body = (
+        f"{TRACKER_MARKER}\n```yaml\n"
+        + yaml.safe_dump(definition(owner="@org/team"))
+        + "```\n"
+    )
+    value = issue(524, body=body)
+    report = evaluate(catalog(), [value])
+    assert report["errors"] == []
+    plan = intake.build_intake_plan(
+        report, value, action="opened", comments={},
+        comment_owner_login="github-actions[bot]",
+    )
+    assert all(action["action"] != "assign_default_owner" for action in plan["actions"])
+
+
+def test_delegation_and_rerun_are_idempotent_and_preserve_comments():
+    delegated = issue_with_assignees(issue(530, definition_without_owner()), "alice")
+    report = evaluate(catalog(), [delegated])
+    first = intake.build_intake_plan(
+        report, delegated, action="edited", comments={},
+        comment_owner_login="github-actions[bot]", dashboard_sync_enabled=False,
+    )
+    created = next(action for action in first["actions"]
+                   if action["action"] == "create_comment")
+    assert "current issue assignees" in created["body"]
+    assert "@alice" in created["body"]
+    assert "MODEL_TRACKER_WRITE_ENABLED" in created["body"]
+    assert "disabled" in created["body"]
+
+    comments = {530: [
+        {"id": 1, "body": "human context", "user": {"login": "reviewer"}},
+        {"id": 2, "body": COMMENT_MARKER + "\ndashboard", "user": {"login": "github-actions[bot]"}},
+        {"id": 3, "body": created["body"], "user": {"login": "github-actions[bot]"}},
+    ]}
+    rerun = intake.build_intake_plan(
+        report, delegated, action="edited", comments=comments,
+        comment_owner_login="github-actions[bot]", dashboard_sync_enabled=False,
+    )
+    assert rerun["actions"] == []
+    assert rerun["summary"]["comments"] == 0
+    # The human and dashboard comments were never represented as mutations.
+    assert all(action.get("comment_id") != 1 for action in rerun["actions"])
+
+
+@pytest.mark.parametrize("login", ["someone-else", "other-bot"])
+def test_foreign_feedback_marker_is_preserved_and_owned_feedback_created(login):
+    value = issue(531, definition_without_owner())
+    report = evaluate(catalog(), [value])
+    foreign = {
+        "id": 9, "body": intake.FEEDBACK_MARKER + "\nnot ours",
+        "user": {"login": login},
+    }
+    plan = intake.build_intake_plan(
+        report, value, action="edited", comments={531: [foreign]},
+        comment_owner_login="github-actions[bot]",
+    )
+    created = next(action for action in plan["actions"]
+                   if action["action"] == "create_comment")
+    assert created["body"].startswith(intake.FEEDBACK_MARKER)
+    assert all(action.get("comment_id") != 9 for action in plan["actions"])
+    assert any("separate owned comment" in warning for warning in plan["warnings"])
+
+    owned = {
+        "id": 10, "body": created["body"], "user": {"login": "github-actions[bot]"},
+    }
+    rerun = intake.build_intake_plan(
+        report, value, action="edited", comments={531: [foreign, owned]},
+        comment_owner_login="github-actions[bot]",
+    )
+    assert rerun["actions"] == []
+    assert all(action.get("comment_id") != 9 for action in rerun["actions"])
+
+    stale = {**owned, "body": intake.FEEDBACK_MARKER + "\nstale"}
+    updated = intake.build_intake_plan(
+        report, value, action="edited", comments={531: [foreign, stale]},
+        comment_owner_login="github-actions[bot]",
+    )
+    assert len(updated["actions"]) == 1
+    assert updated["actions"][0]["comment_id"] == 10
+    assert all(action.get("comment_id") != 9 for action in updated["actions"])
+
+
+def test_changed_valid_feedback_updates_only_owned_marker_comment():
+    delegated = issue_with_assignees(issue(532, definition_without_owner()), "alice")
+    report = evaluate(catalog(), [delegated])
+    comments = {532: [
+        {"id": 6, "body": "human note", "user": {"login": "reviewer"}},
+        {"id": 8, "body": COMMENT_MARKER + "\nsync", "user": {"login": "github-actions[bot]"}},
+        {"id": 7, "body": intake.FEEDBACK_MARKER + "\nstale",
+         "user": {"login": "github-actions[bot]"}},
+    ]}
+    plan = intake.build_intake_plan(
+        report, delegated, action="edited", comments=comments,
+        comment_owner_login="github-actions[bot]",
+    )
+    assert len(plan["actions"]) == 1
+    update = next(action for action in plan["actions"]
+                  if action["action"] == "update_comment")
+    assert update["comment_id"] == 7
+    assert update["body"].startswith(intake.FEEDBACK_MARKER)
+
+
+def test_invalid_intake_feedback_is_issue_specific_and_still_disabled_aware():
+    value = issue(540, body=f"{TRACKER_MARKER}\n```yaml\nbad: yaml\n```\n")
+    report = evaluate(catalog(), [value])
+    plan = intake.build_intake_plan(
+        report, value, action="edited", comments={},
+        comment_owner_login="github-actions[bot]", dashboard_sync_enabled=False,
+    )
+    assert plan["result"] == "invalid"
+    assert plan["error"]
+    created = next(action for action in plan["actions"]
+                   if action["action"] == "create_comment")
+    assert "issue #540" in created["body"]
+    assert "Quote numeric-looking versions" in created["body"]
+    assert "MODEL_TRACKER_WRITE_ENABLED" in created["body"]
+    assert "disabled" in created["body"]
+
+
+def test_apply_intake_plan_uses_only_issue_assignment_and_comment_endpoints():
+    value = issue(550, definition_without_owner())
+    report = evaluate(catalog(), [value])
+    plan = intake.build_intake_plan(
+        report, value, action="opened", comments={},
+        comment_owner_login="github-actions[bot]", assignment_events=[],
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+            self.current = dict(value)
+
+        def rest(self, method, path, payload=None):
+            self.calls.append((method, path, payload))
+            if method == "GET" and path == "repos/o/r/issues/550":
+                return self.current
+            if method == "POST" and path.endswith("/assignees"):
+                self.current = {
+                    **self.current,
+                    "assignees": [{"login": login} for login in payload["assignees"]],
+                }
+                return self.current
+            if path.endswith("/comments"):
+                return {"id": 901}
+            return {}
+
+        def rest_paginated(self, path):
+            self.calls.append(("GET", path, None))
+            return []
+
+    client = FakeClient()
+    result = intake.apply_intake_plan(client, plan, "o/r")
+    assert result["applied_actions"] == 2
+    assert result["skipped_actions"] == []
+    assert client.calls[0] == ("GET", "repos/o/r/issues/550", None)
+    assert client.calls[1] == (
+        "GET", "repos/o/r/issues/550/events?per_page=100", None,
+    )
+    assert client.calls[2] == (
+        "POST", "repos/o/r/issues/550/assignees",
+        {"assignees": ["thameem-abbas"]},
+    )
+    assert client.calls[3] == ("GET", "repos/o/r/issues/550", None)
+    assert client.calls[4][0:2] == ("POST", "repos/o/r/issues/550/comments")
+    assert all("projects" not in path for _, path, _ in client.calls)
+
+
+@pytest.mark.parametrize("history", [
+    [{"event": "assigned"}, {"event": "unassigned"}],
+    [{"event": "assigned"}],
+])
+def test_replayed_opened_after_unassignment_or_delegation_never_reassigns(history):
+    value = issue(551, definition_without_owner())
+    report = evaluate(catalog(), [value])
+    plan = intake.build_intake_plan(
+        report, value, action="opened", comments={},
+        comment_owner_login="github-actions[bot]", assignment_events=history,
+    )
+    assert all(
+        action["action"] != "assign_default_owner" for action in plan["actions"]
+    )
+    assert plan["skipped_actions"] == [{
+        "action": "assign_default_owner",
+        "issue": 551,
+        "reason": (
+            "issue assignment history already exists; first-intake assignment "
+            "is not replayed"
+        ),
+    }]
+    # Feedback still renders; only the stale assignment is skipped.
+    assert any(action["action"] == "create_comment" for action in plan["actions"])
+
+
+def test_unverifiable_assignment_history_skips_assignment_but_posts_feedback():
+    value = issue(552, definition_without_owner())
+    report = evaluate(catalog(), [value])
+    plan = intake.build_intake_plan(
+        report, value, action="opened", comments={},
+        comment_owner_login="github-actions[bot]", assignment_events=None,
+    )
+    assert all(
+        action["action"] != "assign_default_owner" for action in plan["actions"]
+    )
+    assert "could not be verified" in plan["skipped_actions"][0]["reason"]
+    assert any(action["action"] == "create_comment" for action in plan["actions"])
+
+
+class _StatefulIntakeClient:
+    """Small fake GitHub client with issue, event, and write state."""
+
+    def __init__(self, current, *, events=None, ignore_assignment=False):
+        self.current = dict(current)
+        self.events = events or []
+        self.ignore_assignment = ignore_assignment
+        self.calls = []
+
+    def rest(self, method, path, payload=None):
+        self.calls.append((method, path, payload))
+        if method == "GET" and path == "repos/o/r/issues/553":
+            return self.current
+        if method == "POST" and path.endswith("/assignees"):
+            if not self.ignore_assignment:
+                self.current = {
+                    **self.current,
+                    "assignees": [
+                        {"login": login} for login in payload["assignees"]
+                    ],
+                }
+            return self.current
+        if method == "POST" and path.endswith("/comments"):
+            return {"id": 902}
+        return {}
+
+    def rest_paginated(self, path):
+        self.calls.append(("GET", path, None))
+        return self.events
+
+
+@pytest.mark.parametrize(("label", "current", "reason"), [
+    (
+        "manual delegation",
+        issue_with_assignees(issue(553, definition_without_owner()), "bob"),
+        "already has assignee",
+    ),
+    (
+        "owner edit",
+        issue(553, definition(owner="@octocat")),
+        "declares an owner",
+    ),
+    (
+        "closed issue",
+        {**issue(553, definition_without_owner()), "state": "closed"},
+        "not open",
+    ),
+])
+def test_apply_revalidates_plan_apply_gap_and_skips_stale_assignment(
+    label, current, reason,
+):
+    value = issue(553, definition_without_owner())
+    report = evaluate(catalog(), [value])
+    plan = intake.build_intake_plan(
+        report, value, action="opened", comments={},
+        comment_owner_login="github-actions[bot]", assignment_events=[],
+    )
+    client = _StatefulIntakeClient(current)
+    result = intake.apply_intake_plan(client, plan, "o/r")
+
+    assert not any(path.endswith("/assignees") for _, path, _ in client.calls), label
+    assert result["applied_actions"] == 1
+    assert result["skipped_actions"][0]["action"] == "assign_default_owner"
+    assert reason in result["skipped_actions"][0]["reason"]
+    assert result["summary"] == {
+        "applied": 1, "skipped": 1, "failed": 0, "uncertain": 0,
+    }
+    assert any(path.endswith("/comments") for _, path, _ in client.calls)
+
+
+def test_apply_records_assignment_the_api_silently_ignores_as_failed():
+    value = issue(553, definition_without_owner())
+    report = evaluate(catalog(), [value])
+    plan = intake.build_intake_plan(
+        report, value, action="opened", comments={},
+        comment_owner_login="github-actions[bot]", assignment_events=[],
+    )
+    client = _StatefulIntakeClient(value, ignore_assignment=True)
+    result = intake.apply_intake_plan(client, plan, "o/r")
+
+    assert result["applied_actions"] == 1
+    assert result["skipped_actions"] == []
+    assert result["summary"] == {
+        "applied": 1, "skipped": 0, "failed": 1, "uncertain": 0,
+    }
+    failed = result["failed_actions"][0]
+    assert failed["action"] == "assign_default_owner"
+    assert "not an assignee on read-back" in failed["reason"]
+    assert result["operational_failure"] is True
+    assert any("may not be assignable" in warning for warning in result["warnings"])
+    assert any(path.endswith("/comments") for _, path, _ in client.calls)
+
+
+class _IntakeFlowClient:
+    """Fake client for the refreshed apply sequence used by ``run_intake``."""
+
+    def __init__(
+        self, initial: dict, *, refresh_issue: dict | None = None,
+        refresh_read_index: int | None = None, events: list[dict] | None = None,
+        comments: list[dict] | None = None, fail_assign: bool = False,
+        fail_readback: bool = False, ignore_assignment: bool = False,
+        fail_comment: bool = False,
+    ):
+        self.current = dict(initial)
+        self.refresh_issue = refresh_issue
+        self.refresh_read_index = refresh_read_index
+        self.events = events or []
+        self.comments = list(comments or [])
+        self.fail_assign = fail_assign
+        self.fail_readback = fail_readback
+        self.ignore_assignment = ignore_assignment
+        self.fail_comment = fail_comment
+        self.reads = 0
+        self.calls = []
+        self.comment_posts = 0
+
+    def _issue(self) -> dict:
+        self.reads += 1
+        if self.fail_readback and self.reads == 3:
+            raise intake.SyncError("read-back unavailable")
+        if (
+            self.refresh_issue is not None
+            and self.refresh_read_index is not None
+            and self.reads >= self.refresh_read_index
+        ):
+            return self.refresh_issue
+        return self.current
+
+    def rest(self, method, path, payload=None):
+        self.calls.append((method, path, payload))
+        if method == "GET" and path == "repos/o/r/issues/570":
+            return self._issue()
+        if method == "GET" and path == "user":
+            return {"login": "github-actions[bot]"}
+        if method == "POST" and path.endswith("/assignees"):
+            if self.fail_assign:
+                raise intake.SyncError("assignment API unavailable")
+            if not self.ignore_assignment:
+                self.current = {
+                    **self.current,
+                    "assignees": [
+                        {"login": login} for login in payload["assignees"]
+                    ],
+                }
+            return self.current
+        if method == "POST" and path.endswith("/comments"):
+            if self.fail_comment:
+                raise intake.SyncError("comment API unavailable")
+            self.comment_posts += 1
+            return {"id": 900 + self.comment_posts}
+        if method == "PATCH" and "/comments/" in path:
+            return {}
+        return {}
+
+    def rest_paginated(self, path):
+        self.calls.append(("GET", path, None))
+        if "/events" in path:
+            return list(self.events)
+        if "/comments" in path:
+            return list(self.comments)
+        if "/issues?" in path:
+            return [self.current]
+        return []
+
+
+def test_assignment_post_failure_continues_to_feedback():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_assign=True)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert result["summary"] == {
+        "applied": 1, "skipped": 0, "failed": 1, "uncertain": 0,
+        "planned": 2,
+    }
+    assert result["failed_actions"][0]["action"] == "assign_default_owner"
+    assert result["completed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+    assert plan["owner_source"] == "default"
+    created = next(
+        action for action in plan["actions"] if action["action"] == "create_comment"
+    )
+    assert DEFAULT_TRIAGE_OWNER in created["body"]
+
+
+def test_assignment_readback_failure_is_uncertain_and_feedback_continues():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_readback=True)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert result["summary"] == {
+        "applied": 1, "skipped": 0, "failed": 0, "uncertain": 1,
+        "planned": 2,
+    }
+    assert result["uncertain_actions"][0]["action"] == "assign_default_owner"
+    assert "outcome is uncertain" in result["uncertain_actions"][0]["reason"]
+    assert result["completed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+
+
+def test_comment_failure_after_assignment_is_recorded_not_swallowed():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_comment=True)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert result["summary"] == {
+        "applied": 1, "skipped": 0, "failed": 1, "uncertain": 0,
+        "planned": 2,
+    }
+    assert result["completed_actions"][0]["action"] == "assign_default_owner"
+    assert result["failed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+
+
+def test_feedback_is_built_after_assignment_from_refreshed_issue():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert report["models"][0]["owner_source"] == "assignees"
+    assert plan["owner_source"] == "assignees"
+    created = next(
+        action for action in plan["actions"] if action["action"] == "create_comment"
+    )
+    assert DEFAULT_TRIAGE_OWNER in created["body"]
+    assert "current issue assignees" in created["body"]
+    assert result["summary"] == {
+        "applied": 2, "skipped": 0, "failed": 0, "uncertain": 0,
+        "planned": 2,
+    }
+
+
+def test_feedback_reflects_concurrent_owner_edit_after_assignment():
+    value = issue(570, definition_without_owner())
+    edited = issue(570, definition(owner="@octocat"))
+    client = _IntakeFlowClient(
+        value, refresh_issue=edited, refresh_read_index=4,
+    )
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert report["models"][0]["owner_source"] == "explicit"
+    assert plan["owner_source"] == "explicit"
+    created = next(
+        action for action in plan["actions"] if action["action"] == "create_comment"
+    )
+    assert "@octocat" in created["body"]
+    assert "explicit YAML owner" in created["body"]
+    assert result["completed_actions"][0]["action"] == "assign_default_owner"
+
+
+def test_feedback_updates_owned_comment_after_refresh_and_preserves_foreign():
+    value = issue(570, definition_without_owner())
+    foreign = {
+        "id": 7, "body": intake.FEEDBACK_MARKER + "\nforeign",
+        "user": {"login": "other-bot"},
+    }
+    owned = {
+        "id": 8, "body": intake.FEEDBACK_MARKER + "\nstale",
+        "user": {"login": "github-actions[bot]"},
+    }
+    client = _IntakeFlowClient(value, comments=[foreign, owned])
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=True, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    updates = [
+        action for action in result["completed_actions"]
+        if action["action"] == "update_comment"
+    ]
+    assert updates and updates[0]["comment_id"] == 8
+    assert all(action.get("comment_id") != 7 for action in result["completed_actions"])
+    assert result["summary"]["applied"] == 2
+
+
+def test_dry_run_remains_pure_planning():
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value)
+    plan, report, result = intake.run_intake(
+        client, "o/r", "opened", 570, apply=False, catalog=catalog(),
+        comment_owner_login="github-actions[bot]",
+    )
+
+    assert result["dry_run"] is True
+    assert result["summary"] == {
+        "applied": 0, "skipped": 0, "failed": 0, "uncertain": 0,
+        "planned": 2,
+    }
+    assert not any(
+        method != "GET" for method, _, _ in client.calls
+    )
+    assert [action["action"] for action in plan["actions"]] == [
+        "assign_default_owner", "create_comment",
+    ]
+
+
+def test_apply_empty_plan_reports_accurate_noop():
+    result = intake.apply_intake_plan(
+        _StatefulIntakeClient(issue(553, definition_without_owner())),
+        {"actions": []}, "o/r",
+    )
+    assert result["applied_actions"] == 0
+    assert result["completed_actions"] == []
+    assert result["skipped_actions"] == []
+    assert result["failed_actions"] == []
+    assert result["uncertain_actions"] == []
+    assert result["summary"] == {
+        "applied": 0, "skipped": 0, "failed": 0, "uncertain": 0,
+    }
+    assert result["operational_failure"] is False
+
+
+def test_assignment_events_update_feedback_owner_without_assigning():
+    assigned = issue_with_assignees(issue(560, definition_without_owner()), "alice")
+    report = evaluate(catalog(), [assigned])
+    first = intake.build_intake_plan(
+        report, assigned, action="assigned", comments={},
+        comment_owner_login="github-actions[bot]",
+    )
+    assert all(
+        action["action"] != "assign_default_owner" for action in first["actions"]
+    )
+    created = next(
+        action for action in first["actions"] if action["action"] == "create_comment"
+    )
+    assert "@alice" in created["body"]
+    assert "current issue assignees" in created["body"]
+
+    comments = {560: [{
+        "id": 12, "body": created["body"], "user": {"login": "github-actions[bot]"},
+    }]}
+    rerun = intake.build_intake_plan(
+        report, assigned, action="assigned", comments=comments,
+        comment_owner_login="github-actions[bot]",
+    )
+    assert rerun["actions"] == []
+
+    unassigned = issue(560, definition_without_owner())
+    report = evaluate(catalog(), [unassigned])
+    updated = intake.build_intake_plan(
+        report, unassigned, action="unassigned", comments=comments,
+        comment_owner_login="github-actions[bot]",
+    )
+    assert all(
+        action["action"] != "assign_default_owner" for action in updated["actions"]
+    )
+    assert len(updated["actions"]) == 1
+    assert updated["actions"][0]["action"] == "update_comment"
+    assert updated["actions"][0]["comment_id"] == 12
+    assert DEFAULT_TRIAGE_OWNER in updated["actions"][0]["body"]
+
+    stable = intake.build_intake_plan(
+        report, unassigned, action="unassigned",
+        comments={560: [{
+            "id": 12, "body": updated["actions"][0]["body"],
+            "user": {"login": "github-actions[bot]"},
+        }]},
+        comment_owner_login="github-actions[bot]",
+    )
+    assert stable["actions"] == []
+
+
+def test_invalid_intake_cli_applies_feedback_then_exits_red(tmp_path, monkeypatch):
+    value = issue(560, body=f"{TRACKER_MARKER}\n```yaml\nbad: yaml\n```\n")
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({
+        "action": "edited",
+        "repository": {"full_name": "o/r"},
+        "issue": value,
+    }))
+    applied = {}
+
+    def fake_apply(_client, plan, repository):
+        applied["plan"] = plan
+        applied["repository"] = repository
+        return {"applied_actions": len(plan["actions"])}
+
+    monkeypatch.setattr(intake, "GhClient", lambda: object())
+    monkeypatch.setattr(intake, "fetch_issue", lambda *args: value)
+    monkeypatch.setattr(intake, "fetch_issues", lambda *args: [value])
+    monkeypatch.setattr(intake, "build_catalog", lambda *args: catalog())
+    monkeypatch.setattr(intake, "fetch_comments", lambda *args: {560: []})
+    monkeypatch.setattr(
+        intake, "resolve_comment_owner", lambda *args, **kwargs: "github-actions[bot]",
+    )
+    monkeypatch.setattr(intake, "apply_intake_plan", fake_apply)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("MODEL_TRACKER_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("MODEL_TRACKER_BOT_LOGIN", "github-actions[bot]")
+    monkeypatch.setattr(sys, "argv", [
+        "model_coverage_intake.py",
+        "--repo", str(REPO),
+        "--event", str(event),
+        "--apply",
+        "--result-out", str(tmp_path / "result.json"),
+    ])
+
+    assert intake.main() == 1
+    assert applied["repository"] == "o/r"
+    assert applied["plan"]["result"] == "invalid"
+    assert applied["plan"]["summary"]["comments"] == 1
+
+
+def _intake_cli_argv(event, tmp_path, *, summary=False):
+    arguments = [
+        "model_coverage_intake.py",
+        "--repo", str(REPO),
+        "--event", str(event),
+        "--apply",
+        "--plan-out", str(tmp_path / "plan.json"),
+        "--report-out", str(tmp_path / "report.json"),
+        "--result-out", str(tmp_path / "result.json"),
+    ]
+    if summary:
+        arguments.extend(["--summary-out", str(tmp_path / "summary.md")])
+    return arguments
+
+
+def _prepare_intake_cli(monkeypatch, client, event, tmp_path, *, summary=False):
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps({
+        "action": "opened",
+        "repository": {"full_name": "o/r"},
+        "issue": event,
+    }))
+    monkeypatch.setattr(intake, "GhClient", lambda: client)
+    monkeypatch.setattr(intake, "build_catalog", lambda *args: catalog())
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("MODEL_TRACKER_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("MODEL_TRACKER_BOT_LOGIN", "github-actions[bot]")
+    monkeypatch.setattr(
+        sys, "argv", _intake_cli_argv(event_path, tmp_path, summary=summary),
+    )
+
+
+def test_cli_persists_assignment_result_when_comment_fails(tmp_path, monkeypatch):
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_comment=True)
+    _prepare_intake_cli(monkeypatch, client, value, tmp_path, summary=True)
+
+    assert intake.main() == 2
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["completed_actions"][0]["action"] == "assign_default_owner"
+    assert result["failed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+    summary = (tmp_path / "summary.md").read_text()
+    assert "- Applied: 1" in summary
+    assert "- Failed: 1" in summary
+
+
+def test_cli_readback_error_exits_two_after_feedback_succeeds(tmp_path, monkeypatch):
+    value = issue(570, definition_without_owner())
+    client = _IntakeFlowClient(value, fail_readback=True)
+    _prepare_intake_cli(monkeypatch, client, value, tmp_path)
+
+    assert intake.main() == 2
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["uncertain_actions"][0]["action"] == "assign_default_owner"
+    assert result["completed_actions"][0]["action"] == "create_comment"
+    assert result["operational_failure"] is True
+
+
+def test_cli_concurrent_definition_edit_controls_feedback_and_exit(
+    tmp_path, monkeypatch,
+):
+    value = issue(570, definition_without_owner())
+    edited = issue(570, body=f"{TRACKER_MARKER}\n```yaml\nbad: yaml\n```\n")
+    client = _IntakeFlowClient(
+        value, refresh_issue=edited, refresh_read_index=4,
+    )
+    _prepare_intake_cli(monkeypatch, client, value, tmp_path)
+
+    assert intake.main() == 1
+    plan = json.loads((tmp_path / "plan.json").read_text())
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert plan["result"] == "invalid"
+    assert result["operational_failure"] is False
+    created = next(
+        action for action in plan["actions"] if action["action"] == "create_comment"
+    )
+    assert "unknown key" in created["body"]
+
+
+def test_intake_write_context_rejects_unsafe_events_and_refs():
+    with pytest.raises(intake.SyncError, match="local intake writes require"):
+        intake.assert_trusted_intake_context({})
+    intake.assert_trusted_intake_context({"MODEL_TRACKER_ALLOW_LOCAL_WRITE": "true"})
+
+    with pytest.raises(intake.SyncError, match="only issue events"):
+        intake.assert_trusted_intake_context({
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REPOSITORY": "o/r",
+        })
+    with pytest.raises(intake.SyncError, match="trusted default branch"):
+        intake.assert_trusted_intake_context({
+            "GITHUB_EVENT_NAME": "issues",
+            "GITHUB_REPOSITORY": "o/r",
+            "GITHUB_REF": "refs/pull/1/merge",
+        })
+    intake.assert_trusted_intake_context({
+        "GITHUB_EVENT_NAME": "issues",
+        "GITHUB_REPOSITORY": "o/r",
+        "GITHUB_REF": "refs/heads/main",
+    })
+
+
+def test_issue_form_has_one_yaml_block_and_prose_intake_fields():
+    template = yaml.safe_load(
+        (REPO / ".github" / "ISSUE_TEMPLATE" / "model-coverage.yml").read_text()
+    )
+    assert template["labels"] == ["model-coverage"]
+    fields = {element.get("id"): element for element in template["body"]}
+    assert {"target-definition", "public-model-links", "hardware", "work-scope",
+            "required-features", "stretch-goals"} <= set(fields)
+    assert fields["public-model-links"]["validations"]["required"] is True
+    assert fields["hardware"]["validations"]["required"] is True
+    assert fields["work-scope"]["type"] == "dropdown"
+    assert fields["stretch-goals"]["validations"]["required"] is False
+    definition_text = fields["target-definition"]["attributes"]["value"]
+    assert definition_text.count("```yaml") == 1
+    assert definition_text.count("```") == 2
+    assert 'version: "3.6"' in definition_text
+    default_definition = yaml.safe_load(
+        definition_text.split("```yaml")[1].split("```")[0]
+    )
+    assert "optional" not in default_definition
+    assert all(
+        "optional" not in target for target in default_definition["targets"]
+    )
+    # Every other submitted prose field has no fenced YAML block.
+    for field_id in ("public-model-links", "hardware", "required-features", "stretch-goals"):
+        assert "```yaml" not in fields[field_id]["attributes"].get("placeholder", "")
+
+
+def test_workflow_intake_feedback_job_is_scoped_and_sync_independent():
+    workflow = yaml.safe_load(
+        (REPO / ".github" / "workflows" / "model-coverage.yml").read_text()
+    )
+    triggers = workflow.get("on") or workflow.get(True)
+    # Assignee changes must re-evaluate an ownerless definition promptly.
+    assert {"assigned", "unassigned"} <= set(triggers["issues"]["types"])
+    feedback = workflow["jobs"]["feedback"]
+    assert feedback["permissions"] == {"contents": "read", "issues": "write"}
+    assert feedback.get("environment") is None
+    assert "github.event_name == 'issues'" in feedback["if"]
+    for action in ("opened", "edited", "reopened", "assigned", "unassigned"):
+        assert f"github.event.action == '{action}'" in feedback["if"]
+    assert "MODEL_TRACKER_WRITE_ENABLED" not in feedback["if"]
+    feedback_text = json.dumps(feedback)
+    assert "FORGE_INGEST_APP_PRIVATE_KEY" not in feedback_text
+    assert "MODEL_TRACKER_PROJECT_TOKEN" not in feedback_text
+    assert "tools/model_coverage_intake.py" in feedback_text
+    assert "--apply" in feedback_text
+    assert "${{ github.event.repository.default_branch }}" in feedback_text
+    intake_step = next(
+        step for step in feedback["steps"] if "--apply" in step.get("run", "")
+    )
+    assert intake_step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    feedback_uploads = [
+        step for step in feedback["steps"]
+        if str(step.get("uses", "")).startswith("actions/upload-artifact")
+    ]
+    assert feedback_uploads and all(step["if"] == "always()" for step in feedback_uploads)
+
+    check = workflow["jobs"]["check"]
+    summary = next(
+        step for step in check["steps"]
+        if "GITHUB_STEP_SUMMARY" in step.get("run", "")
+        and "report.md" in step.get("run", "")
+    )
+    assert summary["env"]["MODEL_TRACKER_WRITE_ENABLED"] == (
+        "${{ vars.MODEL_TRACKER_WRITE_ENABLED }}"
+    )
+    assert "Dashboard sync: disabled" in summary["run"]
