@@ -12,10 +12,11 @@ on:
       - .github/workflows/model-coverage.yml
       - tools/model_coverage.py
       - tools/model_coverage_sync.py
+      - tools/model_coverage_intake.py
       - tests/test_model_coverage.py
       - docs/model-tracker.md
   issues:
-    types: [opened, edited, reopened, closed, labeled, unlabeled, transferred]
+    types: [opened, edited, reopened, closed, assigned, unassigned, labeled, unlabeled, transferred]
   workflow_dispatch:
   schedule:
     # Reconciliation also catches evidence merged without a tracker edit.
@@ -29,6 +30,9 @@ permissions:
 concurrency:
   group: model-coverage
   cancel-in-progress: false
+  # Queue pending runs instead of replacing them. GitHub bounds the pending
+  # queue at 100; this is not an unbounded delivery guarantee.
+  queue: max
 
 jobs:
   check:
@@ -86,11 +90,97 @@ jobs:
         if: always() && (steps.validate.outcome == 'failure' || steps.evaluate.outcome == 'failure')
         id: record_failure
         run: echo "reconciliation_failure=true" >> "$GITHUB_OUTPUT"
+      - name: Publish validation summary
+        if: always()
+        env:
+          MODEL_TRACKER_WRITE_ENABLED: ${{ vars.MODEL_TRACKER_WRITE_ENABLED }}
+        run: |
+          {
+            echo "## Model coverage validation"
+            echo ""
+            if [ "${MODEL_TRACKER_WRITE_ENABLED}" = "true" ]; then
+              echo "Dashboard sync: enabled, subject to the trusted-context guards."
+            else
+              echo "Dashboard sync: disabled. This summary and issue intake comments are the validation feedback path."
+            fi
+            echo ""
+            if [ -f .build/model-coverage/report.md ]; then
+              cat .build/model-coverage/report.md
+            else
+              echo "Evaluation did not produce a report; see the evaluate step log."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload read-only coverage report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: model-coverage-${{ github.run_id }}
+          path: .build/model-coverage
+          retention-days: 14
+          if-no-files-found: warn
+
+  feedback:
+    name: Intake assignment and validation feedback
+    # This is intentionally independent of the Projects write switch. The
+    # default-branch checkout plus issue-event gate keep it off pull requests,
+    # and the job's token has only repository Issues write.
+    if: >-
+      github.event_name == 'issues' &&
+      (github.event.action == 'opened' ||
+      github.event.action == 'edited' ||
+      github.event.action == 'reopened' ||
+      github.event.action == 'assigned' ||
+      github.event.action == 'unassigned')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned validation dependencies
+        run: python3 -m pip install -r tools/requirements.txt
+      - name: Assign ownerless tracking issue and post validation feedback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          MODEL_TRACKER_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          MODEL_TRACKER_BOT_LOGIN: github-actions[bot]
+          MODEL_TRACKER_WRITE_ENABLED: ${{ vars.MODEL_TRACKER_WRITE_ENABLED }}
+        run: |
+          mkdir -p .build/model-coverage
+          python3 tools/model_coverage_intake.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --apply \
+            --plan-out .build/model-coverage/intake-plan.json \
+            --report-out .build/model-coverage/intake-report.json \
+            --result-out .build/model-coverage/intake-result.json \
+            --summary-out .build/model-coverage/intake-summary.md
+      - name: Publish intake result
+        if: always()
+        run: |
+          if [ -f .build/model-coverage/intake-summary.md ]; then
+            cat .build/model-coverage/intake-summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Model coverage intake"
+              echo ""
+              echo "Intake did not produce a summary; see the intake step log."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload intake plan, report, and result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-coverage-intake-${{ github.run_id }}
           path: .build/model-coverage
           retention-days: 14
           if-no-files-found: warn
