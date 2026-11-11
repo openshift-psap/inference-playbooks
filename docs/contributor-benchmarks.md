@@ -41,7 +41,8 @@ For Apple Silicon, prepare with `--runner macos-arm64`. That package runs
 natively without Docker or Podman. It requires macOS ARM64 and Python 3.12; at
 launch it downloads the pinned Forge source and macOS ARM64 OpenShift CLI,
 verifies their SHA-256 digests, and installs the hash-locked Python dependencies
-in a temporary virtual environment.
+in a temporary virtual environment. Preparation packages the native runner files
+from the selected Git commit and rejects uncommitted changes to them.
 
 Set `HARNESS_IMAGE` to an audited compatible GuideLLM v0.7.4 or AIPerf 0.12.0 image
 by digest. The harness image must be pullable by your cluster. For the GuideLLM

@@ -18,7 +18,6 @@ from recipe_evidence import load_unique_yaml, load_unique_yaml_all
 
 # Host-side release metadata is recorded after publication, not baked into itself.
 RELEASE_FILE = Path(__file__).resolve().parents[1] / 'benchmarks/runner/release.json'
-RUNNER_LOCK_FILE = RELEASE_FILE.with_name('requirements.lock')
 MACOS_RUNNER_MODULES = (
     'contributor_bundle.py', 'contributor_security.py', 'fetch_forge_evidence.py',
     'forge_model_identity.py', 'forge_serving_contract.py', 'monitor_contributor.py',
@@ -92,6 +91,21 @@ def prepare(repo: Path, recipe_path: str, stack: str, version: str, workload: st
     request['runner_image' if runner_mode == 'container' else 'runner_mode'] = (
         runner_image if runner_mode == 'container' else runner_mode)
     validate_request(request, files)
+    native_runner = {}
+    if runner_mode == 'macos-arm64':
+        runner_sources = ('tools/prepare_contributor.py', 'tools/bootstrap_macos.py',
+                          'benchmarks/runner/requirements.lock',
+                          *(f'tools/{name}' for name in MACOS_RUNNER_MODULES))
+        for name in runner_sources:
+            try:
+                committed = git(repo, 'show', f'{revision}:{name}')
+            except subprocess.CalledProcessError as error:
+                raise ValueError(f'native runner input is not committed: {name}') from error
+            if (repo / name).read_bytes() != committed:
+                raise ValueError(f'native runner input has uncommitted changes: {name}')
+            native_runner[name] = committed
+        if Path(__file__).resolve().read_bytes() != native_runner['tools/prepare_contributor.py']:
+            raise ValueError('preparation tool differs from committed runner input')
     output.mkdir(parents=True)
     for name, data in files.items():
         target = output / 'playbooks' / name.removeprefix('inputs/')
@@ -101,12 +115,12 @@ def prepare(repo: Path, recipe_path: str, stack: str, version: str, workload: st
     if runner_mode == 'macos-arm64':
         runner = output / 'runner'
         runner.mkdir()
-        shutil.copyfile(Path(__file__).with_name('bootstrap_macos.py'), output / 'bootstrap_macos.py')
-        shutil.copyfile(RUNNER_LOCK_FILE, runner / 'requirements.lock')
+        (output / 'bootstrap_macos.py').write_bytes(native_runner['tools/bootstrap_macos.py'])
+        (runner / 'requirements.lock').write_bytes(native_runner['benchmarks/runner/requirements.lock'])
         tool_dir = runner / 'tools'
         tool_dir.mkdir()
         for name in MACOS_RUNNER_MODULES:
-            shutil.copyfile(Path(__file__).with_name(name), tool_dir / name)
+            (tool_dir / name).write_bytes(native_runner[f'tools/{name}'])
         launcher = '''#!/bin/sh
 set -eu
 case "$0" in
@@ -147,7 +161,9 @@ exec "$engine" run --rm --init --network host --user "$(id -u):$(id -g)" \\
 '''.replace('  IMAGE ', '  ' + shlex.quote(runner_image) + ' ')
     (output / 'run.sh').write_text(launcher)
     (output / 'run.sh').chmod(0o755)
-    (output / 'monitor.py').write_bytes(Path(__file__).with_name('monitor_contributor.py').read_bytes())
+    monitor_source = (native_runner['tools/monitor_contributor.py'] if runner_mode == 'macos-arm64'
+                      else Path(__file__).with_name('monitor_contributor.py').read_bytes())
+    (output / 'monitor.py').write_bytes(monitor_source)
     monitor = '''#!/bin/sh
 set -eu
 package=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

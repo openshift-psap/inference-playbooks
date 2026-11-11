@@ -124,12 +124,21 @@ def test_prepare_is_pinned_scoped_and_portable(evidence, tmp_path):
 
 def test_macos_runner_prepares_native_package(source, tmp_path, monkeypatch):
     repo, root, _ = source
+    runner_sources = ('tools/prepare_contributor.py', 'tools/bootstrap_macos.py',
+                      'benchmarks/runner/requirements.lock',
+                      *(f'tools/{name}' for name in preparation.MACOS_RUNNER_MODULES))
+    for name in runner_sources:
+        target = repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((REPO / name).read_bytes())
+    commit(repo)
     output = tmp_path / 'macos-package'
     monkeypatch.setattr(preparation, 'RELEASE_FILE', tmp_path / 'no-linux-release.json')
+    harness_image = 'ghcr.io/vllm-project/guidellm@sha256:' + 'b' * 64
     arguments = ['prepare_contributor.py', str((root / 'recipe.yaml').relative_to(repo)),
                  '--repo', str(repo), '--stack', 'vllm', '--version', 'v0.24.0',
                  '--workload', 'guidellm-smoke', '--runner', 'macos-arm64', '--harness-image',
-                 'ghcr.io/vllm-project/guidellm@sha256:' + 'b' * 64, '--output', str(output)]
+                 harness_image, '--output', str(output)]
     monkeypatch.setattr(sys, 'argv', arguments)
     assert preparation.main() == 0
     request = json_load((output / 'request.json').read_bytes())
@@ -141,6 +150,13 @@ def test_macos_runner_prepares_native_package(source, tmp_path, monkeypatch):
     subprocess.run(['sh', '-n', str(output / 'run.sh')], check=True)
     assert (output / 'runner/requirements.lock').read_bytes() == (REPO / 'benchmarks/runner/requirements.lock').read_bytes()
     assert {path.name for path in (output / 'runner/tools').iterdir()} == set(preparation.MACOS_RUNNER_MODULES)
+
+    (repo / 'tools/bootstrap_macos.py').write_text('uncommitted change\n')
+    dirty_output = tmp_path / 'dirty-macos-package'
+    with pytest.raises(ValueError, match='native runner input has uncommitted changes: tools/bootstrap_macos.py'):
+        prepare(repo, str((root / 'recipe.yaml').relative_to(repo)), 'vllm', 'v0.24.0',
+                'guidellm-smoke', None, harness_image, dirty_output, runner_mode='macos-arm64')
+    assert not dirty_output.exists()
 
 
 def test_macos_request_remains_importable(evidence, tmp_path):
