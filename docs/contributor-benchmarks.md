@@ -37,6 +37,12 @@ build or publish an image. Preparation reads the release's immutable digest from
 moving tag. The launcher pulls that digest when you run the package; anonymous
 pulls are supported. No registry write credentials are needed.
 
+For Apple Silicon, prepare with `--runner macos-arm64`. That package runs
+natively without Docker or Podman. It requires macOS ARM64 and Python 3.12; at
+launch it downloads the pinned Forge source and macOS ARM64 OpenShift CLI,
+verifies their SHA-256 digests, and installs the hash-locked Python dependencies
+in a temporary virtual environment.
+
 Set `HARNESS_IMAGE` to an audited compatible GuideLLM v0.7.4 or AIPerf 0.12.0 image
 by digest. The harness image must be pullable by your cluster. For the GuideLLM
 example, this is the Linux AMD64 v0.7.4 image used in
@@ -54,21 +60,26 @@ python3 tools/prepare_contributor.py \
 
 `guidellm-smoke` selects Forge's `ci-quick` plumbing check, not performance
 validation. For the full 8K/1K sweep, prepare a separate package with
-`--workload guidellm-8k1k`. The package directory must not already exist.
+`--workload guidellm-8k1k`. To select native Apple Silicon support, add
+`--runner macos-arm64`. The package directory must not already exist.
 
 Keep the **complete directory**: `run.sh`, `monitor.sh`, `monitor.py`,
-`request.json`, and `playbooks/`. Preserve the shell scripts' executable bits.
+`request.json`, and `playbooks/`; macOS packages also contain `runner/`. Preserve
+the shell scripts' executable bits.
 The scripts are trusted checkout code; the returned evidence archive is data only.
-The request pins the tested commit, platform, workload, Forge revision, images,
-input checksums, and unique run ID. A package contains no Git checkout, credentials,
-model weights, or existing results. One package is one attempt.
+The request pins the tested commit, platform, workload, Forge revision, harness
+image, runner mode or container image, input checksums, and unique run ID. A
+package contains no Git checkout, credentials, model weights, or existing results.
+One package is one attempt.
 
 ### 2. Check cluster prerequisites
 
 Review `request.json` and the selected manifest under `playbooks/`. Do not edit
 the generated package; make any necessary changes in the source checkout instead.
 
-- Use a Linux AMD64 machine with Podman or Docker and access to the runner image.
+- For the default runner, use Linux AMD64 with Podman or Docker and access to the
+  runner image. For `macos-arm64`, use an Apple Silicon Mac with Python 3.12 and
+  network access to PyPI, the pinned Forge archive, and the OpenShift mirror.
 - Provide a self-contained kubeconfig with embedded credentials/certificates and
   an explicit context. External exec authentication plugins are unsupported.
 - Use an existing namespace with enough NVIDIA GPU capacity, required controllers,
@@ -91,12 +102,13 @@ render, validate, and commit the changes, then prepare a fresh package. Keep
 make the test run. Include your source branch/commit or PR when returning evidence
 so reviewers can obtain the exact tested revision.
 
-The launcher mounts only the selected kubeconfig file read-only, not its parent
-directory or sibling credentials. Supply a dedicated, self-contained file with
-only the credentials you intend to expose; all contexts inside that file remain
-readable by the runner. On SELinux hosts, give the file a container-readable
-label. The launcher does not relabel it. The file must be readable by your
-container user.
+The Linux launcher mounts only the selected kubeconfig file read-only, not its
+parent directory or sibling credentials. The native Mac runner copies that one
+file into a temporary private directory and removes it after execution. Supply a
+dedicated, self-contained file with only the credentials you intend to expose;
+all contexts inside that file remain readable by the runner. On SELinux hosts,
+give the file a container-readable label. The launcher does not relabel it. The
+file must be readable by the container user on Linux or your account on macOS.
 
 ### 3. Run once
 
@@ -109,11 +121,13 @@ context, and namespace. The output directory must **not already exist**.
   "$HOME/playbooks-runs/gemma-output-001"
 ```
 
-Podman is preferred when both engines exist; set `CONTAINER_ENGINE=docker` to
-override. The launcher uses your UID, host networking, and inherited proxy
-variables. It does not mount your home directory or forward AWS credentials.
-The Forge test phase has a default six-hour timeout. Preflight, evidence collection,
-and packaging can take additional time.
+The default Linux launcher uses Podman when available; set
+`CONTAINER_ENGINE=docker` to override. It uses your UID, host networking, and
+inherited proxy variables. The native Mac launcher uses no container engine and
+passes only proxy variables to the runner process. Neither path mounts your home
+directory or forwards AWS credentials. The Forge test phase has a default
+six-hour timeout. Preflight, evidence collection, and packaging can take
+additional time.
 
 ### 4. Monitor from another terminal (optional)
 
@@ -223,11 +237,15 @@ under durable retention, not an expiring intake policy.
   `sha256:4b8dc7e0d2f05a40949992a322a103e6650ad9136616edd60ab26e55b811ce88`.
   The image records source commit `92c37ef84658daf997df2000c403a4abca8a033f`.
   Release metadata is recorded after publication; it is not embedded into its
-  own image. The runtime uses the digest captured in each request.
-- Runner: Linux AMD64, Python 3.12, OpenShift CLI 4.19.0, Forge cleanup fix
+  own image. Container-mode requests capture this digest; native macOS requests
+  record their runner mode and use the pinned downloads described below.
+- Default runner: Linux AMD64, Python 3.12, OpenShift CLI 4.19.0, Forge cleanup fix
   `df3c14a5eab5e8f502402f51c48765b35067fca8`, based on PR #322 and published
   on `thameem-abbas/forge` branch `fix/guidellm-failure-cleanup`. Archives/base image are pinned and
   checksummed; Python dependencies are hash-locked.
+- Optional native runner: Apple Silicon macOS with Python 3.12, the matching
+  macOS ARM64 OpenShift CLI 4.19.0, and the same pinned Forge revision. It uses
+  the same hash-locked dependencies as the Linux image.
 - One platform and one self-contained manifest containing one Deployment,
   LeaderWorkerSet, or PVC-backed LLMInferenceService. Authored Services, companion
   objects, P/D, InferenceService, custom DRA, LLMInferenceService hostPath volumes,
@@ -362,6 +380,18 @@ Both smoke tests invoke the real Forge CLI and Caliper; only Kubernetes and
 benchmark Jobs are simulated. Rerun these proofs after pin/CLI/dependency changes.
 Regenerate `requirements.lock` from `requirements.in` deliberately, not at runtime.
 
+On Apple Silicon with Python 3.12, run the same request/import tests and native
+Forge/Caliper smokes without a container engine:
+
+```sh
+python3.12 -m pip install -r tools/requirements.txt pytest==8.3.4
+python3.12 -m pytest tests/test_contributor.py -q
+python3.12 tests/contributor_macos_smoke.py
+```
+
+The native smoke downloads the pinned Forge archive and OpenShift CLI, then
+exercises GuideLLM, AIPerf, and cleanup with synthetic Kubernetes calls.
+
 ### Development runner override
 
 Normal contributors use the published default. To test runner changes locally,
@@ -438,10 +468,11 @@ Committed recipe + platform
                                       -> import and open evidence PR
 ```
 
-The **runner image** contains Forge and the supporting tools and runs on your
-machine. The **harness image** contains GuideLLM or AIPerf and runs in your
-cluster. The **serving image** comes from the recipe and serves the model in
-your cluster. You do not need to install Forge locally or build the runner.
+The default **runner image** contains Forge and the supporting tools and runs on
+your machine. The native macOS runner downloads those pinned tools at launch. The
+**harness image** contains GuideLLM or AIPerf and runs in your cluster. The
+**serving image** comes from the recipe and serves the model in your cluster.
+You do not need to build a runner image.
 
 Preparation is offline with respect to the cluster. Running deploys a workload
 and consumes cluster resources. Import is a separate maintainer operation;
@@ -450,8 +481,10 @@ No AWS, MLflow, or internal artifact credentials are needed by the contributor.
 
 ### 1. Set up the tools and select a recipe
 
-Use a Linux AMD64 runner host with Git, Python, and Podman or Docker. Run these
-commands in a new checkout:
+This walkthrough uses the default Linux AMD64 container runner. For Apple
+Silicon, add `--runner macos-arm64` when preparing the package and use Python
+3.12 when launching `run.sh`. For the Linux path, use Git, Python, and Podman or
+Docker in a new checkout:
 
 ```sh
 git clone https://github.com/openshift-psap/inference-playbooks.git
@@ -526,9 +559,10 @@ python3 -m json.tool "$PACKAGE_DIR/request.json"
 ```
 
 The package contains `run.sh`, `monitor.sh`, `monitor.py`, `request.json`, and
-`playbooks/`. If moving it to another runner host, copy the **whole directory**
-and preserve executable bits. It contains the input snapshot, not credentials,
-model weights, or a Git checkout. One package represents one execution attempt.
+`playbooks/`; native macOS packages also contain `runner/`. If moving it to
+another runner host, copy the **whole directory** and preserve executable bits.
+It contains the input snapshot, not credentials, model weights, or a Git checkout.
+One package represents one execution attempt.
 
 ### 3. Run against your cluster
 
@@ -544,11 +578,12 @@ NAMESPACE=your-benchmark-namespace
 "$PACKAGE_DIR/run.sh" "$KUBECONFIG_FILE" "$CONTEXT" "$NAMESPACE" "$OUTPUT_DIR"
 ```
 
-The launcher pulls the pinned runner image and mounts the package and kubeconfig
-read-only. Podman is preferred; prefix the command with `CONTAINER_ENGINE=docker`
-to select Docker. Keep the runner terminal alive until completion. The Forge
-test phase has a six-hour default timeout; preflight and evidence collection can
-take additional time.
+The default Linux launcher pulls the pinned runner image and mounts the package
+and kubeconfig read-only. Podman is preferred; prefix the command with
+`CONTAINER_ENGINE=docker` to select Docker. The native Mac launcher uses no
+container engine and removes its temporary environment after the run. Keep the
+runner terminal alive until completion. The Forge test phase has a six-hour
+default timeout; preflight and evidence collection can take additional time.
 
 In another terminal, watch the **same output directory** using local Python 3.9+:
 
