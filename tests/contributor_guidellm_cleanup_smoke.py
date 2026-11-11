@@ -12,8 +12,9 @@ from types import SimpleNamespace
 
 import yaml
 
-sys.path.insert(0, '/opt/forge')
-os.chdir('/opt/forge')
+FORGE_ROOT = Path(os.environ.get('FORGE_ROOT', '/opt/forge'))
+sys.path.insert(0, str(FORGE_ROOT))
+os.chdir(FORGE_ROOT)
 
 from projects.core.dsl.runtime import TaskExecutionError
 from projects.core.library import env
