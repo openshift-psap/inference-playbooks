@@ -12,13 +12,15 @@ from types import SimpleNamespace
 
 import yaml
 
-sys.path.insert(0, '/opt/playbooks/tools')
-sys.path.insert(0, '/opt/forge/projects/inference_playbooks/orchestration')
+TOOLS_ROOT = Path(os.environ.get('TOOLS_ROOT', '/opt/playbooks/tools'))
+FORGE_ROOT = Path(os.environ.get('FORGE_ROOT', '/opt/forge'))
+sys.path.insert(0, str(TOOLS_ROOT))
+sys.path.insert(0, str(FORGE_ROOT / 'projects/inference_playbooks/orchestration'))
 import run_contributor as runner
 from contributor_bundle import FORGE_REVISION, checksum, json_bytes, read_archive
 
-assert not list(Path('/opt/playbooks/tools').rglob('__pycache__')), 'host Python caches entered the image'
-assert not list(Path('/opt/playbooks/tools').rglob('*.pyc')), 'host bytecode entered the image'
+assert not list(TOOLS_ROOT.rglob('__pycache__')), 'runner source acquired Python caches'
+assert not list(TOOLS_ROOT.rglob('*.pyc')), 'runner source acquired Python bytecode'
 
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -138,7 +140,7 @@ with tempfile.TemporaryDirectory() as tmp:
     runner.preflight = lambda *args: {'synthetic_fixture': True}
     os.environ['KUBECONFIG'] = str(root / 'nonexistent-test-kubeconfig')
     output = root / 'outputs'
-    code = runner.execute(request, inputs, output, 'benchmark', 'fixture', Path('/opt/forge'), 60)
+    code = runner.execute(request, inputs, output, 'benchmark', 'fixture', FORGE_ROOT, 60)
     if code:
         for path in (output / 'private-diagnostics').glob('*-error.txt'):
             print(path.read_text(), file=sys.stderr)

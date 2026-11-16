@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import uuid
@@ -17,6 +18,11 @@ from recipe_evidence import load_unique_yaml, load_unique_yaml_all
 
 # Host-side release metadata is recorded after publication, not baked into itself.
 RELEASE_FILE = Path(__file__).resolve().parents[1] / 'benchmarks/runner/release.json'
+MACOS_RUNNER_MODULES = (
+    'contributor_bundle.py', 'contributor_security.py', 'fetch_forge_evidence.py',
+    'forge_model_identity.py', 'forge_serving_contract.py', 'monitor_contributor.py',
+    'normalize_kpis.py', 'recipe_evidence.py', 'run_contributor.py',
+)
 
 
 def released_runner_image():
@@ -60,7 +66,9 @@ def source_files(repo, recipe_path, revision, folder):
 
 
 def prepare(repo: Path, recipe_path: str, stack: str, version: str, workload: str,
-            runner_image: str, harness_image: str, output: Path):
+            runner_image: str | None, harness_image: str, output: Path, runner_mode='container'):
+    if runner_mode not in {'container', 'macos-arm64'} or (runner_mode == 'container') != bool(runner_image):
+        raise ValueError('container mode requires a runner image; macos-arm64 does not use one')
     revision = git(repo, 'rev-parse', 'HEAD').decode().strip()
     path, recipe = tested_inputs(repo, recipe_path, revision)
     if output.exists():
@@ -79,16 +87,53 @@ def prepare(repo: Path, recipe_path: str, stack: str, version: str, workload: st
                'recipe_path': recipe_path, 'tested_revision': revision,
                'platform': {'stack': stack, 'version': version}, 'manifest_path': manifest,
                'inputs': {name.removeprefix('inputs/'): checksum(data) for name, data in files.items()},
-               'forge_revision': FORGE_REVISION, 'runner_image': runner_image,
-               'harness_image': harness_image, 'workload': workload}
+               'forge_revision': FORGE_REVISION, 'harness_image': harness_image, 'workload': workload}
+    request['runner_image' if runner_mode == 'container' else 'runner_mode'] = (
+        runner_image if runner_mode == 'container' else runner_mode)
     validate_request(request, files)
+    native_runner = {}
+    if runner_mode == 'macos-arm64':
+        runner_sources = ('tools/prepare_contributor.py', 'tools/bootstrap_macos.py',
+                          'benchmarks/runner/requirements.lock',
+                          *(f'tools/{name}' for name in MACOS_RUNNER_MODULES))
+        for name in runner_sources:
+            try:
+                committed = git(repo, 'show', f'{revision}:{name}')
+            except subprocess.CalledProcessError as error:
+                raise ValueError(f'native runner input is not committed: {name}') from error
+            if (repo / name).read_bytes() != committed:
+                raise ValueError(f'native runner input has uncommitted changes: {name}')
+            native_runner[name] = committed
+        if Path(__file__).resolve().read_bytes() != native_runner['tools/prepare_contributor.py']:
+            raise ValueError('preparation tool differs from committed runner input')
     output.mkdir(parents=True)
     for name, data in files.items():
         target = output / 'playbooks' / name.removeprefix('inputs/')
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
     (output / 'request.json').write_bytes(json_bytes(request))
-    launcher = '''#!/bin/sh
+    if runner_mode == 'macos-arm64':
+        runner = output / 'runner'
+        runner.mkdir()
+        (output / 'bootstrap_macos.py').write_bytes(native_runner['tools/bootstrap_macos.py'])
+        (runner / 'requirements.lock').write_bytes(native_runner['benchmarks/runner/requirements.lock'])
+        tool_dir = runner / 'tools'
+        tool_dir.mkdir()
+        for name in MACOS_RUNNER_MODULES:
+            (tool_dir / name).write_bytes(native_runner[f'tools/{name}'])
+        launcher = '''#!/bin/sh
+set -eu
+case "$0" in
+  */*) package_dir=${0%/*}; [ -n "$package_dir" ] || package_dir=/ ;;
+  *) package_dir=. ;;
+esac
+package=$(CDPATH= cd "$package_dir" && pwd -P)
+command -v python3.12 >/dev/null 2>&1 || { echo "Python 3.12 is required" >&2; exit 127; }
+export PYTHONDONTWRITEBYTECODE=1
+exec python3.12 "$package/bootstrap_macos.py" "$@"
+'''
+    else:
+        launcher = '''#!/bin/sh
 set -eu
 if [ "$#" -ne 4 ]; then
   echo "Usage: $0 KUBECONFIG CONTEXT NAMESPACE NEW_OUTPUT_DIRECTORY" >&2
@@ -116,7 +161,9 @@ exec "$engine" run --rm --init --network host --user "$(id -u):$(id -g)" \\
 '''.replace('  IMAGE ', '  ' + shlex.quote(runner_image) + ' ')
     (output / 'run.sh').write_text(launcher)
     (output / 'run.sh').chmod(0o755)
-    (output / 'monitor.py').write_bytes(Path(__file__).with_name('monitor_contributor.py').read_bytes())
+    monitor_source = (native_runner['tools/monitor_contributor.py'] if runner_mode == 'macos-arm64'
+                      else Path(__file__).with_name('monitor_contributor.py').read_bytes())
+    (output / 'monitor.py').write_bytes(monitor_source)
     monitor = '''#!/bin/sh
 set -eu
 package=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -134,14 +181,21 @@ def main():
     parser.add_argument('--stack', choices=['vllm', 'rhoai'], required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--workload', choices=sorted(WORKLOADS), required=True)
-    parser.add_argument('--runner-image', help='digest-pinned override; defaults to benchmarks/runner/release.json')
+    parser.add_argument('--runner', choices=['container', 'macos-arm64'], default='container',
+                        help='execution host; container is the Linux default')
+    parser.add_argument('--runner-image', help='digest-pinned container override; defaults to benchmarks/runner/release.json')
     parser.add_argument('--harness-image', required=True, help='audited GuideLLM/AIPerf image@sha256:digest')
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()
     try:
-        runner_image = args.runner_image or released_runner_image()
+        if args.runner == 'container':
+            runner_image = args.runner_image or released_runner_image()
+        else:
+            if args.runner_image:
+                raise ValueError('--runner-image only applies to the container runner')
+            runner_image = None
         request = prepare(args.repo.resolve(), args.recipe, args.stack, args.version, args.workload,
-                          runner_image, args.harness_image, args.output)
+                          runner_image, args.harness_image, args.output, runner_mode=args.runner)
         print(json.dumps({'run_id': request['run_id'], 'package': str(args.output)}))
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         print(f'Cannot prepare contributor package: {error}', file=sys.stderr)

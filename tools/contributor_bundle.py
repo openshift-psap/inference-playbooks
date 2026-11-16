@@ -152,17 +152,20 @@ def write_archive(path: Path, request: dict, outcome: str, files: dict[str, byte
 
 
 def validate_request(request: dict, files: dict[str, bytes]):
-    required = {'schema_version', 'recipe_path', 'tested_revision', 'platform', 'manifest_path',
-                'inputs', 'forge_revision', 'runner_image', 'harness_image', 'workload', 'run_id'}
-    if (not isinstance(request, dict) or set(request) != required
-            or type(request['schema_version']) is not int or request['schema_version'] != 1):
+    common = {'schema_version', 'recipe_path', 'tested_revision', 'platform', 'manifest_path',
+              'inputs', 'forge_revision', 'harness_image', 'workload', 'run_id'}
+    if not isinstance(request, dict) or type(request.get('schema_version')) is not int or request['schema_version'] != 1:
+        raise ValueError('unsupported request format')
+    native_macos = set(request) == common | {'runner_mode'} and request['runner_mode'] == 'macos-arm64'
+    container = set(request) == common | {'runner_image'}
+    if not (native_macos or container):
         raise ValueError('unsupported request format')
     shareable(request)
     if not re.fullmatch(r'[a-f0-9]{40}', request['tested_revision']):
         raise ValueError('tested revision must be an immutable Git commit')
     if request['forge_revision'] not in NAMESPACE_ONLY_FORGE_REVISIONS | {LEGACY_FORGE_REVISION}:
         raise ValueError('unsupported Forge revision')
-    for key in ('runner_image', 'harness_image'):
+    for key in (('harness_image',) if native_macos else ('runner_image', 'harness_image')):
         registry = request[key].split('/')[0]
         if (not re.fullmatch(IMAGE, request[key])
                 or (registry != 'localhost' and '.' not in registry and ':' not in registry)):

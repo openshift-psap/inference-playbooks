@@ -1,7 +1,9 @@
 """Synthetic tooling proof only; none of these metrics are model evidence."""
 import copy
+import hashlib
 import io
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -21,6 +23,7 @@ from contributor_security import UIDAdmissionRejected, admit_manifest, check_run
 from import_contributor import import_bundle, upload_archive
 from prepare_contributor import prepare
 import prepare_contributor as preparation
+import bootstrap_macos as macos_bootstrap
 from run_contributor import execute, snapshot_transport, standalone_overrides
 from validate import validate_benchmark_run
 
@@ -117,6 +120,135 @@ def test_prepare_is_pinned_scoped_and_portable(evidence, tmp_path):
     assert 'AWS' not in launcher
     assert not (tmp_path / 'package/playbooks/.git').exists()
     assert read_archive(bundle, digest)[0]['request'] == request
+
+
+def test_macos_runner_prepares_native_package(source, tmp_path, monkeypatch):
+    repo, root, _ = source
+    runner_sources = ('tools/prepare_contributor.py', 'tools/bootstrap_macos.py',
+                      'benchmarks/runner/requirements.lock',
+                      *(f'tools/{name}' for name in preparation.MACOS_RUNNER_MODULES))
+    for name in runner_sources:
+        target = repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((REPO / name).read_bytes())
+    commit(repo)
+    output = tmp_path / 'macos-package'
+    monkeypatch.setattr(preparation, 'RELEASE_FILE', tmp_path / 'no-linux-release.json')
+    harness_image = 'ghcr.io/vllm-project/guidellm@sha256:' + 'b' * 64
+    arguments = ['prepare_contributor.py', str((root / 'recipe.yaml').relative_to(repo)),
+                 '--repo', str(repo), '--stack', 'vllm', '--version', 'v0.24.0',
+                 '--workload', 'guidellm-smoke', '--runner', 'macos-arm64', '--harness-image',
+                 harness_image, '--output', str(output)]
+    monkeypatch.setattr(sys, 'argv', arguments)
+    assert preparation.main() == 0
+    request = json_load((output / 'request.json').read_bytes())
+    assert request['runner_mode'] == 'macos-arm64'
+    assert 'runner_image' not in request
+    assert (output / 'bootstrap_macos.py').read_bytes() == (REPO / 'tools/bootstrap_macos.py').read_bytes()
+    launcher = (output / 'run.sh').read_text()
+    assert 'python3.12' in launcher and 'bootstrap_macos.py' in launcher
+    subprocess.run(['sh', '-n', str(output / 'run.sh')], check=True)
+    assert (output / 'runner/requirements.lock').read_bytes() == (REPO / 'benchmarks/runner/requirements.lock').read_bytes()
+    assert {path.name for path in (output / 'runner/tools').iterdir()} == set(preparation.MACOS_RUNNER_MODULES)
+
+    (repo / 'tools/bootstrap_macos.py').write_text('uncommitted change\n')
+    dirty_output = tmp_path / 'dirty-macos-package'
+    with pytest.raises(ValueError, match='native runner input has uncommitted changes: tools/bootstrap_macos.py'):
+        prepare(repo, str((root / 'recipe.yaml').relative_to(repo)), 'vllm', 'v0.24.0',
+                'guidellm-smoke', None, harness_image, dirty_output, runner_mode='macos-arm64')
+    assert not dirty_output.exists()
+
+
+def test_macos_request_remains_importable(evidence, tmp_path):
+    repo, _, request, files, _, _ = evidence
+    native_request = copy.deepcopy(request)
+    native_request.pop('runner_image')
+    native_request['runner_mode'] = 'macos-arm64'
+    validate_request(native_request, files)
+    native_request['runner_image'] = request['runner_image']
+    with pytest.raises(ValueError, match='unsupported request format'):
+        validate_request(native_request, files)
+    native_request.pop('runner_image')
+    bundle = tmp_path / 'native-macos.tar.gz'
+    digest = write_archive(bundle, native_request, 'succeeded', files)
+    assert read_archive(bundle, digest)[0]['request'] == native_request
+    assert import_bundle(repo, bundle, digest)['applied'] is False
+
+
+def test_macos_bootstrap_rejects_other_platforms_and_bad_downloads(tmp_path, monkeypatch):
+    monkeypatch.setattr(macos_bootstrap.sys, 'platform', 'linux')
+    with pytest.raises(ValueError, match='Apple Silicon macOS and Python 3.12'):
+        macos_bootstrap.check_platform()
+
+    payload = b'fixed archive bytes'
+    monkeypatch.setattr(macos_bootstrap.urllib.request, 'urlopen', lambda *_args, **_kwargs: io.BytesIO(payload))
+    archive = tmp_path / 'valid.tar.gz'
+    macos_bootstrap.download('https://example.test/archive', archive, hashlib.sha256(payload).hexdigest())
+    assert archive.read_bytes() == payload
+    invalid = tmp_path / 'invalid.tar.gz'
+    with pytest.raises(ValueError, match='checksum mismatch'):
+        macos_bootstrap.download('https://example.test/archive', invalid, '0' * 64)
+    assert not invalid.exists()
+
+
+def test_macos_runner_forwards_sighup_to_child(monkeypatch):
+    handlers = {}
+    forwarded = []
+
+    class Child:
+        def poll(self):
+            return None
+
+        def send_signal(self, signum):
+            forwarded.append(signum)
+
+        def wait(self):
+            handlers[macos_bootstrap.signal.SIGHUP](macos_bootstrap.signal.SIGHUP, None)
+            return 0
+
+    def set_signal(signum, handler):
+        previous = handlers.get(signum)
+        handlers[signum] = handler
+        return previous
+
+    monkeypatch.setattr(macos_bootstrap.subprocess, 'Popen', lambda *_args, **_kwargs: Child())
+    monkeypatch.setattr(macos_bootstrap.signal, 'signal', set_signal)
+
+    assert macos_bootstrap.run_child(['runner'], {}) == 0
+    assert forwarded == [macos_bootstrap.signal.SIGHUP]
+
+
+def test_macos_bootstrap_isolates_kubeconfig_and_host_environment(tmp_path, monkeypatch):
+    package = tmp_path / 'native package'
+    (package / 'runner/tools').mkdir(parents=True)
+    (package / 'playbooks').mkdir()
+    bootstrap = package / 'bootstrap_macos.py'
+    monkeypatch.setattr(macos_bootstrap, '__file__', str(bootstrap))
+    monkeypatch.setattr(macos_bootstrap, 'check_platform', lambda: None)
+    python, forge, oc = tmp_path / 'python', tmp_path / 'forge', tmp_path / 'oc'
+    monkeypatch.setattr(macos_bootstrap, 'install_runtime', lambda _work, _runner: (python, forge, oc))
+    for name in macos_bootstrap.PROXY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('HTTPS_PROXY', 'http://proxy.example.test')
+    monkeypatch.setenv('AWS_ACCESS_KEY_ID', 'must-not-be-forwarded')
+    kubeconfig = tmp_path / 'selected.kubeconfig'
+    kubeconfig.write_text('synthetic credentials')
+    output = tmp_path / 'outputs'
+    launched = {}
+
+    def run_child(command, environment):
+        launched.update(command=command, environment=environment)
+        private = Path(environment['KUBECONFIG'])
+        assert private.read_text() == 'synthetic credentials'
+        assert stat.S_IMODE(private.stat().st_mode) == 0o400
+        return 0
+
+    monkeypatch.setattr(macos_bootstrap, 'run_child', run_child)
+    assert macos_bootstrap.main([str(kubeconfig), 'context', 'benchmark', str(output)]) == 0
+    assert stat.S_IMODE(output.stat().st_mode) == 0o700
+    assert launched['command'][0] == str(python)
+    assert launched['environment']['HTTPS_PROXY'] == 'http://proxy.example.test'
+    assert 'AWS_ACCESS_KEY_ID' not in launched['environment']
 
 
 def test_archive_is_reproducible(evidence, tmp_path):
@@ -276,6 +408,10 @@ def test_pin_is_consistent_with_image_and_guide():
     containerfile = (REPO / 'benchmarks/runner/Containerfile').read_text()
     assert f'forge-revision="{FORGE_REVISION}"' in containerfile
     assert f"revision = '{FORGE_REVISION}'" in containerfile
+    assert macos_bootstrap.FORGE_REVISION == FORGE_REVISION
+    assert macos_bootstrap.FORGE_SHA256 == 'af97c678b08cd802d2aeafed6e238a228f1de525977c7c5c80bdfcd5eec3f47e'
+    assert macos_bootstrap.OC_VERSION == '4.19.0'
+    assert macos_bootstrap.OC_SHA256 == 'b58c16cd2a7be6253c74f7727871e816dc8bcba1969cc3848e1727d2cb6a93ce'
     assert FORGE_REVISION in (REPO / 'docs/contributor-benchmarks.md').read_text()
 
 
@@ -865,8 +1001,17 @@ def test_launcher_mounts_only_selected_kubeconfig(evidence, tmp_path):
     engine.write_text('#!' + sys.executable + '\nimport json,sys\nfrom pathlib import Path\n'
                       + 'Path(' + repr(str(capture)) + ').write_text(json.dumps(sys.argv[1:]))\n')
     engine.chmod(0o755)
+    environment = {**os.environ, 'CONTAINER_ENGINE': str(engine)}
+    if sys.platform == 'darwin':
+        utilities = tmp_path / 'linux-test-utilities'
+        utilities.mkdir()
+        realpath = utilities / 'realpath'
+        realpath.write_text('#!' + sys.executable + '\nimport os,sys\n'
+                            + 'print(os.path.realpath([arg for arg in sys.argv[1:] if arg not in {"-m", "--"}][-1]))\n')
+        realpath.chmod(0o755)
+        environment['PATH'] = str(utilities) + os.pathsep + os.environ['PATH']
     subprocess.run([str(tmp_path / 'package/run.sh'), str(selected), 'context', 'benchmark',
-                    str(tmp_path / 'run-output')], check=True, env={**os.environ, 'CONTAINER_ENGINE': str(engine)})
+                    str(tmp_path / 'run-output')], check=True, env=environment)
     arguments = json.loads(capture.read_text())
     mounts = [arguments[i + 1] for i, arg in enumerate(arguments) if arg == '-v']
     assert str(selected) + ':/credentials/kubeconfig:ro' in mounts
