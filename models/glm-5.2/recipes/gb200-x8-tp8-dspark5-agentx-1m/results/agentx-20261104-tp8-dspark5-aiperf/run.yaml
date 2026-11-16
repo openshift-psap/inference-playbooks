@@ -1,0 +1,68 @@
+---
+schema_version: 2
+evidence_source: local-aiperf
+run_id: agentx-20261104-glm52-tp8-dspark5-aiperf
+recipe_id: glm-5.2-gb200-x8-tp8-dspark5-agentx-1m
+deployment_scope: multi-node
+hardware_profile: hardware-profiles/oci-gb200-4x-rack1-r1.yaml
+hardware_profile_revision: 1
+platform:
+  stack: vllm
+  version: 0.33.0rc1.dev573+g40941f2c4
+harness: aiperf
+result: result.json
+command: AgentX orchestrator-run; AIPerf 1.0.9; 3600-second AgentX replay sweep at
+  concurrencies 1, 2, 4, 8.
+environment:
+  model: RedHatAI/GLM-5.2-NVFP4
+  image_reference: vllm/vllm-openai:nightly-40941f2c4ba96fba0a7e282a5355e89cd74d9ac5
+  vllm_version: 0.33.0rc1.dev573+g40941f2c4
+  image_digest_recorded: false
+  speculative_config:
+    method: dspark
+    model: RedHatAI/GLM-2-speculator.dspark
+    num_speculative_tokens: 5
+    enable_adaptive_verification: true
+    draft_sample_method: probabilistic
+workload:
+  profile: aiperf-agentx-unlimited-context
+  scenario: agentx
+  dataset: semianalysis_cc_traces_weka_062126
+  dataset_entries: 393
+  random_seed: 42
+  max_context_length: 1048576
+  requested_duration_seconds_per_concurrency: 3600
+  concurrencies:
+  - 1
+  - 2
+  - 4
+  - 8
+  aiperf_version: 1.0.9
+  start_time: '2026-11-04T20:19:50.598469'
+  end_time: '2026-11-05T00:30:47.459051'
+  source_run_label: glm-5.2-tp8-rack1-20261104
+artifacts:
+- type: raw-output
+  path: raw/aiperf-c1.json
+  checksum: sha256:ade0ef24b5199b2f52cde547df4c6129fac4323e9c41d332a2ceb47398b3e8f5
+  size_bytes: 41601
+  description: Sanitized AIPerf metrics export; aggregate metrics retained, internal
+    endpoint and temporary output path removed.
+- type: raw-output
+  path: raw/aiperf-c2.json
+  checksum: sha256:6c309eb506f80ada496b495494cf5b1e7f1d4cdaaa3420bf24eced5bd9a5af11
+  size_bytes: 41676
+  description: Sanitized AIPerf metrics export; aggregate metrics retained, internal
+    endpoint and temporary output path removed.
+- type: raw-output
+  path: raw/aiperf-c4.json
+  checksum: sha256:c1b0a1cb8a792ad72714b5a450c8e5e93c2d2254bb919e4cd6ed864dcd6f66e6
+  size_bytes: 41731
+  description: Sanitized AIPerf metrics export; aggregate metrics retained, internal
+    endpoint and temporary output path removed.
+- type: raw-output
+  path: raw/aiperf-c8.json
+  checksum: sha256:47eb16ac6d1b8cbd6b4ea399c22f9be64ded291cd97f80aba0201dea6fe11498
+  size_bytes: 43944
+  description: Sanitized AIPerf metrics export; aggregate metrics retained, internal
+    endpoint and temporary output path removed.

@@ -1,0 +1,119 @@
+schema_version: 4
+recipe_id: glm-5.3-gb200-x16-p1d1-dep8-dspark5-agentx-1m
+model_id: glm-5.3
+platforms:
+  - stack: vllm
+    version: v0.33.0
+    overrides: platforms/vllm-v0.33.0.yaml
+    pinned_manifest: manifests/vllm-v0.33.0/deployment.yaml
+    pinned_reason: >-
+      The source P1D1 configuration uses separate prefill and decode LeaderWorkerSets plus llm-d InferencePool routing, which the current vLLM recipe renderer does not generate. The pinned manifest omits its author-supplied Service object per repository policy; the cluster must provide the endpoint-picker Service.
+hardware_profile: hardware-profiles/oci-gb200-4x-rack1-r1.yaml
+workload_profile: aiperf-agentx-unlimited-context
+deployment_mode: p1d1-dep8-dspark5-agentx-1m
+optimization_intent: throughput
+maturity: contributed
+quantization: NVFP4
+
+features:
+  tool_calling: true
+  speculative_decoding: draft-model
+  reasoning_parser: glm45
+  kv_cache_dtype: fp8
+
+serving:
+  image: docker.io/vllm/vllm-openai:v0.33.0
+  image_usage:
+    kind: default
+    variant: cuda
+  engine:
+    name: vllm
+    version: 0.33.0
+    image: docker.io/vllm/vllm-openai:v0.33.0
+    source: https://github.com/vllm-project/vllm/releases/tag/v0.33.0
+  model: RedHatAI/GLM-5.3-NVFP4
+  served_model_name: RedHatAI/GLM-5.3-NVFP4
+  parallelism:
+    mode: dp
+    tp: 1
+    dp: 8
+  resources:
+    requests:
+      cpu: "32"
+      memory: 800Gi
+    limits:
+      memory: 800Gi
+  env:
+    - name: VLLM_USE_V2_MODEL_RUNNER
+      value: '1'
+    - name: VLLM_USE_RUST_FRONTEND
+      value: '1'
+    - name: VLLM_ENGINE_READY_TIMEOUT_S
+      value: '3600'
+    - name: VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS
+      value: '1800'
+    - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+      value: '120'
+    - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+      value: '1'
+    - name: UCX_TLS
+      value: cuda_copy,cuda_ipc,rc
+    - name: UCX_CUDA_IPC_ENABLE_MNNVL
+      value: y
+  port: 8000
+  args:
+    - flag: --trust-remote-code
+      required: true
+      why: Loads the model implementation from the checkpoint.
+    - flag: --kv-cache-dtype
+      value: 'fp8'
+      required: true
+      why: Uses the configured FP8 KV cache.
+    - flag: --max-model-len
+      value: '1048576'
+      required: true
+      why: Keeps the 1,048,576-token model context.
+    - flag: --disable-access-log-for-endpoints
+      value: '/health,/metrics'
+      required: true
+      why: Avoids access-log overhead on health and metrics endpoints.
+    - flag: --reasoning-parser
+      value: 'glm45'
+      required: true
+      why: Parses GLM reasoning tokens.
+    - flag: --tool-call-parser
+      value: 'glm47'
+      required: true
+      why: Parses GLM tool calls.
+    - flag: --enable-auto-tool-choice
+      required: true
+      why: Enables model-selected tool calls.
+    - flag: --enable-expert-parallel
+      required: true
+      why: Enables expert parallelism across the eight DP ranks.
+    - flag: --moe-backend
+      value: 'flashinfer_moe_ep_cutedsl'
+      required: true
+      why: Uses the FlashInfer CuteDSL MoE backend for DEP8.
+    - flag: --speculative-config
+      value: '{"method":"dspark","model":"RedHatAI/GLM-5.3-speculator.dspark","num_speculative_tokens":5,"enable_adaptive_verification":true,"draft_sample_method":"probabilistic"}'
+      required: true
+      why: Uses DSpark with five speculative tokens and adaptive verification.
+
+
+deployment:
+  scope: multi-node
+  storage:
+    type: pvc
+    pvc:
+      name: lustre-pvc-vllm
+  status:
+    state: needs-verification
+    note: >-
+      This recipe is a sanitized pinned copy of the llm-manifesto GB200 source
+      manifest. Validate the playbook pin, storage, and platform-managed routing
+      in the target namespace before promoting maturity.
+notes: guides/notes.yaml
+
+benchmark_runs:
+  - results/agentx-20261105-p1d1-dep8-dspark5-aiperf/run.yaml

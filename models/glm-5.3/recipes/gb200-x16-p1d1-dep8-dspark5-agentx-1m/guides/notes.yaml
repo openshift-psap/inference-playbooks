@@ -1,0 +1,34 @@
+schema_version: 1
+profile:
+  label: GLM-5.3 P1D1 DEP8 NVFP4 + DSpark5 on GB200
+  headline: GB200 multi-node P1D1 DEP8 serving recipe for GLM-5.3 NVFP4 with DSpark5.
+  specs:
+    - {label: Checkpoint, source: "recipe.yaml#/serving/model"}
+    - {label: Parallelism, source: "recipe.yaml#/serving/parallelism"}
+    - {label: Node scope, source: "recipe.yaml#/deployment/scope"}
+    - {label: Workload, source: "recipe.yaml#/workload_profile"}
+decisions:
+  - subjects: [deployment topology, pinned manifest]
+    why: Each prefill/decode role uses eight DEP8 ranks. MoE uses FlashInfer CuteDSL; the source manifest is pinned because the playbook renderer does not generate P/D resources.
+  - subjects: [benchmark evidence, tested vLLM image]
+    why: "The linked 3600-second AgentX AIPerf sweep used vllm/vllm-openai:nightly-40941f2c4ba96fba0a7e282a5355e89cd74d9ac5 (vLLM 0.33.0rc1.dev573+g40941f2c4), a commit-tagged pre-release build. The source capture did not record the image digest; retain this as historical local-AIPerf evidence, not release-image validation."
+    evidence:
+      - results/agentx-20261105-p1d1-dep8-dspark5-aiperf/run.yaml
+  - subjects: [image]
+    why: The official vLLM v0.33.0 CUDA 13 release image is bound to its image-specific engine declaration.
+quickstart:
+  - step: Prepare the namespace and model storage
+    detail: Create the hf-token Secret and ensure lustre-pvc-vllm is available in namespace vllm with the model cache/weights accessible to every worker.
+  - step: Provide cluster networking
+    detail: Install the LeaderWorkerSet, Gateway API/Inference Gateway components, and the llm-d DRA claim llm-d-dev-claim required by the source manifest.
+  - step: Provide the endpoint-picker Service
+    detail: The pinned manifest omits its Service object per repository policy. Configure the platform to provide the Endpoint Picker Service referenced by the InferencePool before applying the HTTPRoute.
+  - step: Apply the pinned manifest
+    detail: Apply manifests/vllm-v0.33.0/deployment.yaml in namespace vllm, then verify all role pods and the Gateway route before sending traffic.
+known_issues:
+  - issue: The Endpoint Picker Service is not included in the committed manifest.
+    impact: InferencePool routing will not become ready until the platform provides the referenced Service.
+    mitigation: Use the cluster-managed Endpoint Picker Service with the name referenced by the InferencePool; do not add a Service object to this recipe.
+  - issue: The pinned deployment has not been independently validated through this repository's renderer and playbook workflow.
+    impact: The source manifests have been used with llm-manifesto, but this sanitized playbook pin and its external prerequisites need verification before any maturity promotion.
+    mitigation: Verify deployment health and API behavior on the target GB200 cluster and import compliant benchmark evidence before changing maturity.
