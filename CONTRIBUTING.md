@@ -61,8 +61,11 @@ CI validates raw-manifest submissions for:
 - No author-supplied `Service` objects (YAML, YML, or JSON)
 - Directory is under `models/<model-id>/recipes/<recipe-id>/raw-manifest/`
 
-CI does **not** require `recipe.yaml` or schema validation for raw-only
-PRs. Those checks run after a maintainer adds the converted recipe.
+Local `python3 tools/validate.py --current` permits raw-only intake after these
+syntax and layout checks. CI uses `--require-converted-raw`, so a raw-only PR
+cannot pass the merge checks until a maintainer adds a sibling `recipe.yaml`
+and full recipe validation passes. Contributors may open the raw-only PR first;
+conversion happens in the same PR before merge.
 
 ### Example PR description
 

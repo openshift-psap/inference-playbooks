@@ -24,6 +24,8 @@ from recipe_evidence import load_unique_yaml
 TRACKER_MARKER = "<!-- inference-playbooks:model-coverage-tracker -->"
 JIRA_NOTE = "Refer to internal Jira for more details on this task."
 LABEL = "model-coverage"
+DEFAULT_TRIAGE_OWNER = "@thameem-abbas"
+DEFAULT_TRIAGE_OWNER_LOGIN = "thameem-abbas"
 JIRA_KEY = re.compile(r"^[A-Z][A-Z0-9_]+-[0-9]+$")
 MODEL_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 OWNER = re.compile(r"^@?[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:/[A-Za-z0-9_.-]{1,100})?$")
@@ -38,6 +40,10 @@ PLACEHOLDERS = {
     "owner": "@your-github-handle",
     "recipe_id": "replace-with-recipe-id",
 }
+OWNER_PLACEHOLDERS = frozenset({
+    "tbd", "todo", "unknown", "none", "n/a", "na",
+    "replace-with-owner", "your-github-handle",
+})
 
 TOP_LEVEL_KEYS = frozenset({
     "schema_version", "model_id", "owner", "completion", "targets", "jira", "blockers",
@@ -87,7 +93,32 @@ def _unknown_keys(
     unknown = sorted(set(value) - allowed)
     missing = sorted(allowed - set(value) - optional)
     if unknown:
-        raise DefinitionError(f"{location}: unknown key(s): {', '.join(unknown)}")
+        message = f"{location}: unknown key(s): {', '.join(unknown)}"
+        if "optional" in unknown:
+            message += (
+                ". Optional or stretch scope is not a target key: keep only the required "
+                "coverage in `targets` and put stretch goals in the issue's prose section "
+                "outside the fenced YAML block"
+            )
+        elif ".platforms" in location:
+            message += (
+                ". Platform entries accept only `stack`, `version`, and optional "
+                "`completion`; put hardware, public links, required features, and stretch "
+                "goals in the issue's prose fields outside the fenced YAML block"
+            )
+        elif location.startswith("definition.targets"):
+            message += (
+                ". Targets accept only `recipe_id` and `platforms`; put public checkpoint "
+                "links, hardware, required features, and stretch goals in the issue's prose "
+                "fields outside the fenced YAML block"
+            )
+        else:
+            message += (
+                ". The machine-readable block accepts only model identity, owner, completion, "
+                "targets, Jira, and blockers; public checkpoint links, hardware, scope, "
+                "required features, and stretch goals belong in the issue's prose fields"
+            )
+        raise DefinitionError(message)
     if missing:
         raise DefinitionError(f"{location}: missing required key(s): {', '.join(missing)}")
 
@@ -96,6 +127,16 @@ def _text(value: object, location: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise DefinitionError(f"{location}: expected a non-empty string")
     return value.strip()
+
+
+def _version(value: object, location: str) -> str:
+    if not isinstance(value, str):
+        raise DefinitionError(
+            f"{location}: expected a quoted version string such as \"3.6\"; "
+            f"unquoted YAML parsed {value!r} as {type(value).__name__}. "
+            "Wrap the version in quotes."
+        )
+    return _text(value, location)
 
 
 def parse_definition(body: str) -> dict:
@@ -112,23 +153,50 @@ def parse_definition(body: str) -> dict:
         raise DefinitionError(f"target definition is not valid YAML: {error}") from error
     if not isinstance(value, dict):
         raise DefinitionError("target definition must be a YAML mapping")
-    _unknown_keys(value, TOP_LEVEL_KEYS, "definition", frozenset({"jira", "blockers"}))
+    _unknown_keys(
+        value, TOP_LEVEL_KEYS, "definition",
+        frozenset({"jira", "blockers", "owner"}),
+    )
 
     schema_version = value["schema_version"]
     if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version != 1:
         raise DefinitionError("definition.schema_version: expected integer 1")
     model_id = _text(value["model_id"], "definition.model_id")
+    if model_id == PLACEHOLDERS["model_id"]:
+        raise DefinitionError(
+            "definition.model_id: replace the issue form model placeholder with the "
+            "catalog model ID"
+        )
     if not MODEL_ID.fullmatch(model_id):
         raise DefinitionError("definition.model_id: use lowercase letters, digits, '.', '_' or '-'")
-    owner = _text(value["owner"], "definition.owner")
-    if not OWNER.fullmatch(owner):
+    raw_owner = value.get("owner")
+    owner_declared = False
+    if raw_owner is None:
+        owner = DEFAULT_TRIAGE_OWNER
+    elif not isinstance(raw_owner, str):
         raise DefinitionError(
-            "definition.owner: expected a GitHub user or team handle such as @octocat or @org/team"
+            "definition.owner: expected a quoted GitHub user or team handle, or omit "
+            "owner to use the default triage owner"
         )
-    if model_id == PLACEHOLDERS["model_id"] or owner == PLACEHOLDERS["owner"]:
-        raise DefinitionError(
-            "definition: replace the issue form placeholders with the model ID and owner"
-        )
+    else:
+        owner = raw_owner.strip()
+        if owner:
+            owner_declared = True
+            normalized_owner = owner.lstrip("@").lower()
+            if normalized_owner in OWNER_PLACEHOLDERS or owner == PLACEHOLDERS["owner"]:
+                raise DefinitionError(
+                    f"definition.owner: {owner!r} is a placeholder, not an accountable "
+                    f"GitHub identity. Omit owner (or leave it empty) to use the default "
+                    f"triage owner {DEFAULT_TRIAGE_OWNER}, or set a GitHub user or team "
+                    "handle such as @octocat or @org/team"
+                )
+            if not OWNER.fullmatch(owner):
+                raise DefinitionError(
+                    "definition.owner: expected a GitHub user or team handle such as "
+                    "@octocat or @org/team, or omit owner to use the default triage owner"
+                )
+        else:
+            owner = DEFAULT_TRIAGE_OWNER
     completion = _text(value["completion"], "definition.completion")
     if completion not in COMPLETION_LEVELS:
         raise DefinitionError(
@@ -188,7 +256,7 @@ def parse_definition(body: str) -> dict:
                 raise DefinitionError(f"{platform_location}: expected a mapping")
             _unknown_keys(platform, PLATFORM_KEYS, platform_location, frozenset({"completion"}))
             stack = _text(platform["stack"], f"{platform_location}.stack")
-            version = _text(platform["version"], f"{platform_location}.version")
+            version = _version(platform["version"], f"{platform_location}.version")
             if not STACK.fullmatch(stack):
                 raise DefinitionError(f"{platform_location}.stack: expected a stack identifier")
             if not VERSION.fullmatch(version):
@@ -215,11 +283,60 @@ def parse_definition(body: str) -> dict:
         "schema_version": 1,
         "model_id": model_id,
         "owner": owner,
+        "owner_declared": owner_declared,
         "completion": completion,
         "targets": parsed_targets,
         "jira": jira,
         "blockers": blockers,
     }
+
+
+def owner_is_omitted(body: str) -> bool:
+    """Return whether the single definition block omits or blanks ``owner``.
+
+    This is a read-only intake helper: malformed YAML, a missing block, or a
+    non-mapping value returns ``False`` so the caller never treats an
+    unparseable owner as an intentional default.
+    """
+    blocks = FENCED_YAML.findall(body or "")
+    if len(blocks) != 1:
+        return False
+    try:
+        value = load_unique_yaml(blocks[0])
+    except yaml.YAMLError:
+        return False
+    if not isinstance(value, dict):
+        return False
+    owner = value.get("owner")
+    return owner is None or (isinstance(owner, str) and not owner.strip())
+
+
+def issue_assignees(issue: dict) -> list[str]:
+    """Return unique GitHub assignee logins in GitHub's assignment order."""
+    assignees = issue.get("assignees")
+    if not isinstance(assignees, list):
+        return []
+    logins = []
+    for assignee in assignees:
+        login = assignee.get("login") if isinstance(assignee, dict) else None
+        if isinstance(login, str) and login.strip() and login.strip() not in logins:
+            logins.append(login.strip())
+    return logins
+
+
+def _effective_owner(definition: dict, issue: dict) -> tuple[str, str]:
+    """Return the tracker owner and its source for one parsed definition.
+
+    An explicit YAML owner is authoritative. An ownerless definition follows
+    current issue assignment so manual delegation updates the tracker without
+    rewriting YAML; when nobody is assigned, the default triage owner applies.
+    """
+    if definition.get("owner_declared"):
+        return definition["owner"], "explicit"
+    assignees = issue_assignees(issue)
+    if assignees:
+        return ", ".join(f"@{login}" for login in assignees), "assignees"
+    return DEFAULT_TRIAGE_OWNER, "default"
 
 
 def _issue_reference(issue: dict) -> dict:
@@ -371,17 +488,27 @@ def _target_status(platforms: list[dict]) -> str:
     return "in-progress"
 
 
-def _error_entry(reference: dict, message: str, definition: dict | None = None) -> dict:
+def _error_entry(
+    reference: dict, message: str, definition: dict | None = None, *,
+    issue: dict | None = None, owner: str | None = None,
+    owner_source: str | None = None, assignees: list[str] | None = None,
+) -> dict:
     entry = {**reference, "error": message}
+    if assignees is None:
+        assignees = issue_assignees(issue or {})
     if definition:
+        effective_owner, effective_source = _effective_owner(definition, issue or {})
         entry.update({
             "model_id": definition["model_id"],
-            "owner": definition["owner"],
+            "owner": owner if owner is not None else effective_owner,
+            "owner_source": owner_source if owner_source is not None else effective_source,
+            "assignees": assignees,
             "blockers": definition["blockers"],
             "jira": definition["jira"],
         })
     else:
         entry["model_id"] = None
+        entry["assignees"] = assignees
     return entry
 
 
@@ -395,8 +522,14 @@ def evaluate(catalog: dict, issues: list[dict]) -> dict:
         ): entry
         for entry in entries
     }
+    catalog_models = {model["id"] for model in catalog.get("models") or []}
+    catalog_recipes = {(entry["model_id"], entry["recipe_id"]) for entry in entries}
+    recipe_models: dict[str, set[str]] = {}
+    for entry in entries:
+        recipe_models.setdefault(entry["recipe_id"], set()).add(entry["model_id"])
 
     errors = []
+    warnings = []
     models = {}
     definitions = {}
     duplicates = set()
@@ -407,7 +540,7 @@ def evaluate(catalog: dict, issues: list[dict]) -> dict:
         try:
             definition = parse_definition(issue.get("body") or "")
         except DefinitionError as error:
-            errors.append(_error_entry(reference, str(error)))
+            errors.append(_error_entry(reference, str(error), issue=issue))
             continue
         model_id = definition["model_id"]
         if model_id in models or model_id in duplicates:
@@ -420,12 +553,16 @@ def evaluate(catalog: dict, issues: list[dict]) -> dict:
                     f"(also issue #{issue.get('number')}); both declarations are invalid "
                     "until only one remains",
                     definitions.get(model_id),
+                    owner=previous["owner"],
+                    owner_source=previous["owner_source"],
+                    assignees=previous["assignees"],
                 ))
             errors.append(_error_entry(
                 reference,
                 f"model_id {model_id!r} is declared by more than one tracking issue; "
                 "keep exactly one tracking issue per model",
                 definition,
+                issue=issue,
             ))
             continue
 
@@ -437,10 +574,33 @@ def evaluate(catalog: dict, issues: list[dict]) -> dict:
         completed_platforms = 0
         total_platforms = 0
         for target in definition["targets"]:
+            recipe_id = target["recipe_id"]
+            if (model_id, recipe_id) not in catalog_recipes:
+                other_models = sorted(recipe_models.get(recipe_id, set()) - {model_id})
+                if other_models:
+                    message = (
+                        f"recipe_id {recipe_id!r} is not declared by model {model_id!r}; "
+                        f"it exists under model(s) {', '.join(other_models)}. Recipe IDs are "
+                        f"scoped to their model, so this target remains planned for "
+                        f"{model_id!r}."
+                    )
+                else:
+                    message = (
+                        f"recipe_id {recipe_id!r} is not in the catalog for model "
+                        f"{model_id!r}; treated as planned. If this is a planned recipe, "
+                        "no action is needed. Otherwise check the recipe's `recipe_id` "
+                        "field (not its directory name)."
+                    )
+                warnings.append({
+                    "number": issue.get("number"),
+                    "model_id": model_id,
+                    "recipe_id": recipe_id,
+                    "warning": message,
+                })
             platforms = []
             for platform in target["platforms"]:
                 entry = entry_index.get(
-                    (model_id, target["recipe_id"], platform["stack"], platform["version"])
+                    (model_id, recipe_id, platform["stack"], platform["version"])
                 )
                 state = _platform_status(entry, platform)
                 required = platform.get("completion") or definition["completion"]
@@ -475,15 +635,16 @@ def evaluate(catalog: dict, issues: list[dict]) -> dict:
         else:
             status = "in-progress"
 
+        owner, owner_source = _effective_owner(definition, issue)
         models[model_id] = {
             "model_id": model_id,
-            "owner": definition["owner"],
+            "owner": owner,
+            "owner_source": owner_source,
+            "assignees": issue_assignees(issue),
             "completion": definition["completion"],
             "status": status,
             "completed": completed_platforms == total_platforms,
-            "in_repository": model_id in {
-                model["id"] for model in catalog.get("models") or []
-            },
+            "in_repository": model_id in catalog_models,
             "issue": reference,
             "jira": (
                 {"key": definition["jira"], "note": JIRA_NOTE}
@@ -506,9 +667,8 @@ def evaluate(catalog: dict, issues: list[dict]) -> dict:
         }
         definitions[model_id] = definition
 
-    catalog_models = sorted(model["id"] for model in catalog.get("models") or [])
     untracked = [
-        model for model in catalog_models
+        model for model in sorted(catalog_models)
         if model not in models
     ]
     planned_models = sorted(
@@ -516,6 +676,11 @@ def evaluate(catalog: dict, issues: list[dict]) -> dict:
         if not model["in_repository"]
     )
     errors.sort(key=lambda item: (item.get("number") or 0, item.get("error") or ""))
+    warnings.sort(key=lambda item: (
+        item.get("number") or 0,
+        item.get("model_id") or "",
+        item.get("recipe_id") or "",
+    ))
     return {
         "schema_version": 1,
         "catalog": {
@@ -527,6 +692,7 @@ def evaluate(catalog: dict, issues: list[dict]) -> dict:
         "models": sorted(models.values(), key=lambda model: model["model_id"]),
         "untracked_models": untracked,
         "planned_models": planned_models,
+        "warnings": warnings,
         "errors": errors,
     }
 
@@ -545,6 +711,8 @@ def coverage_text(model: dict) -> str:
 
 def to_markdown(report: dict) -> str:
     """Render a deterministic reader view from the evaluator JSON."""
+    errors = report.get("errors") or []
+    warnings = report.get("warnings") or []
     lines = [
         "# Model coverage tracker",
         "",
@@ -552,11 +720,31 @@ def to_markdown(report: dict) -> str:
         f"{' (dirty checkout)' if (report.get('catalog') or {}).get('dirty') else ''}. "
         "Status is derived from committed recipes and benchmark evidence; CI success alone is not validation.",
         "",
+        "## Validation",
+        "",
+        f"- Tracking issues: {report.get('tracking_issue_count', 0)}",
+        f"- Invalid definitions: {len(errors)}",
+        f"- Definition warnings: {len(warnings)}",
+    ]
+    if errors:
+        lines.extend(["", "### Definition errors", ""])
+        for error in errors:
+            number = error.get("number")
+            model = f" (`{error['model_id']}`)" if error.get("model_id") else ""
+            lines.append(f"- Issue #{number}{model}: {error['error']}")
+    if warnings:
+        lines.extend(["", "### Definition warnings", ""])
+        for warning in warnings:
+            number = warning.get("number")
+            model = f" (`{warning['model_id']}`)" if warning.get("model_id") else ""
+            lines.append(f"- Issue #{number}{model}: {warning['warning']}")
+    lines.extend([
+        "",
         "## Summary",
         "",
         "| Model | Owner | Status | Completed | Criterion | Coverage | Tracker issue |",
         "|-------|-------|--------|-----------|-----------|----------|---------------|",
-    ]
+    ])
     for model in report["models"]:
         issue = model["issue"]
         lines.append(
@@ -570,11 +758,16 @@ def to_markdown(report: dict) -> str:
 
     for model in report["models"]:
         issue = model["issue"]
+        owner_source = {
+            "explicit": "from the YAML definition",
+            "assignees": "from current issue assignees",
+            "default": "default triage owner",
+        }.get(model.get("owner_source"), "unknown source")
         lines.extend([
             "",
             f"## `{model['model_id']}`",
             "",
-            f"- Owner: {model['owner']}",
+            f"- Owner: {model['owner']} ({owner_source})",
             f"- Tracker issue: [#{issue['number']}]({issue['url']}) ({issue['state']})",
             f"- Delivery status: **{model['status']}**"
             f"{' (all targets complete)' if model['completed'] else ' (partial coverage)'}",
@@ -635,12 +828,6 @@ def to_markdown(report: dict) -> str:
             "",
         ])
         lines.extend(f"- `{model}`" for model in report["planned_models"])
-    if report["errors"]:
-        lines.extend(["", "## Definition errors", ""])
-        for error in report["errors"]:
-            number = error.get("number")
-            model = f" (`{error['model_id']}`)" if error.get("model_id") else ""
-            lines.append(f"- Issue #{number}{model}: {error['error']}")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -688,6 +875,12 @@ def main() -> int:
         args.out.write_text(output)
     else:
         print(output, end="")
+    if report.get("warnings"):
+        for warning in report["warnings"]:
+            print(
+                f"Issue #{warning.get('number')}: warning: {warning['warning']}",
+                file=sys.stderr,
+            )
     if report["errors"]:
         for error in report["errors"]:
             print(f"Issue #{error.get('number')}: {error['error']}", file=sys.stderr)
