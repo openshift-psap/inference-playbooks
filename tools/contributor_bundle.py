@@ -64,10 +64,17 @@ def relative(name: str) -> str:
     return name
 
 
-def shareable(value, _depth=0):
+def shareable(value, _seen=None):
     """Conservative source-side guard; not a substitute for human privacy review."""
-    if _depth > 64:
-        raise ValueError('evidence structure exceeds complexity limit')
+    if _seen is None:
+        _seen = {}
+    if isinstance(value, (dict, list)):
+        identity = id(value)
+        if _seen.get(identity) == 'active':
+            raise ValueError('cyclic evidence structure')
+        if identity in _seen:
+            return
+        _seen[identity] = 'active'
     if isinstance(value, dict):
         if value.get('kind') == 'Secret':
             raise ValueError('Secret contents must not enter evidence')
@@ -77,16 +84,18 @@ def shareable(value, _depth=0):
         for key, item in value.items():
             if re.search(r'(?i)(password|authorization|api[_-]?key|access[_-]?token|hostname|ip_address|^prompts?$)', key):
                 raise ValueError('sensitive evidence field; keep private diagnostics local')
-            shareable(item, _depth + 1)
+            shareable(item, _seen)
     elif isinstance(value, list):
         for item in value:
-            shareable(item, _depth + 1)
+            shareable(item, _seen)
     elif isinstance(value, str):
         # Wildcard/loopback bind configuration identifies no contributor host.
         checked = re.sub(r'(?<![0-9.])(?:0\.0\.0\.0|127\.0\.0\.1)(?![0-9.])', '${BIND_ADDRESS}', value)
         safe_artifact(checked)
         if re.search(r'(?:\.svc\.cluster\.local\b|-----BEGIN .*PRIVATE KEY|\b[A-Za-z0-9-]+\.(?:internal|local)\b)', value):
             raise ValueError('private endpoint or key in evidence')
+    if isinstance(value, (dict, list)):
+        _seen[identity] = 'done'
 
 
 def read_archive(path: Path, expected_checksum: str) -> tuple[dict, dict[str, bytes]]:

@@ -24,6 +24,7 @@ from import_contributor import import_bundle, upload_archive
 from prepare_contributor import prepare
 import prepare_contributor as preparation
 import bootstrap_macos as macos_bootstrap
+from recipe_evidence import load_unique_yaml
 from run_contributor import execute, snapshot_transport, standalone_overrides
 from validate import validate_benchmark_run
 
@@ -670,7 +671,10 @@ def test_large_native_artifact_is_not_rejected_by_byte_size(evidence, tmp_path):
 def test_large_native_structure_is_importable_and_privacy_scanned(evidence, tmp_path):
     repo, _, request, files, _, _ = evidence
     requests = [{'metrics': [1] * 115} for _ in range(2000)]
-    native = {'benchmarks': [{'requests': {'successful': requests}}]}
+    deep = {'metric': 1}
+    for _ in range(128):
+        deep = {'nested': deep}
+    native = {'benchmarks': [{'requests': {'successful': requests}}], 'deep': deep}
     files['raw/harness-0.json'] = json_bytes(native)
     runtime = json_load(files['runtime.json'])
     runtime['native_exports'][0]['original_checksum'] = checksum(files['raw/harness-0.json'])
@@ -684,14 +688,28 @@ def test_large_native_structure_is_importable_and_privacy_scanned(evidence, tmp_
         shareable([None] * 1_000_001 + [native])
 
 
-def test_cyclic_yaml_privacy_walk_is_bounded():
-    value = {}
-    value['self'] = value
-    with pytest.raises(ValueError, match='complexity limit'):
+def test_deep_evidence_is_privacy_scanned():
+    leaf = {'metric': 1}
+    value = leaf
+    for _ in range(128):
+        value = [value]
+    shareable(value)
+    leaf['password'] = 'synthetic-secret'
+    with pytest.raises(ValueError, match='sensitive evidence field'):
+        shareable(value)
+
+
+def test_cyclic_yaml_privacy_walk_is_bounded(monkeypatch):
+    value = load_unique_yaml('&cycle [*cycle]')
+    with pytest.raises(ValueError, match='cyclic evidence structure'):
         shareable(value)
     shareable('vllm serve example/model --host 0.0.0.0 --port 8000')
     with pytest.raises(ValueError, match='IP'):
         shareable('vllm serve example/model --host 10.20.30.40')
+    scans = []
+    monkeypatch.setattr('contributor_bundle.safe_artifact', scans.append)
+    shareable(load_unique_yaml('items: [&shared [safe], *shared]'))
+    assert scans == ['safe']
 
 
 def test_partial_import_can_be_resumed_without_rewriting_evidence(evidence):
