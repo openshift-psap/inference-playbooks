@@ -67,7 +67,7 @@ def relative(name: str) -> str:
 def shareable(value, _budget=None, _depth=0):
     """Conservative source-side guard; not a substitute for human privacy review."""
     if _budget is None:
-        _budget = [100000]
+        _budget = [1_000_000]
     _budget[0] -= 1
     if _budget[0] < 0 or _depth > 64:
         raise ValueError('evidence structure exceeds complexity limit')

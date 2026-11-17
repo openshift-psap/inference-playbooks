@@ -667,6 +667,23 @@ def test_large_native_artifact_is_not_rejected_by_byte_size(evidence, tmp_path):
     assert import_bundle(repo, path, digest)['completeness'] == 'full-sweep'
 
 
+def test_large_native_structure_is_importable_and_privacy_scanned(evidence, tmp_path):
+    repo, _, request, files, _, _ = evidence
+    requests = [{'metrics': [1] * 115} for _ in range(2000)]
+    native = {'benchmarks': [{'requests': {'successful': requests}}]}
+    files['raw/harness-0.json'] = json_bytes(native)
+    runtime = json_load(files['runtime.json'])
+    runtime['native_exports'][0]['original_checksum'] = checksum(files['raw/harness-0.json'])
+    runtime['native_exports'][0]['export_checksum'] = checksum(files['raw/harness-0.json'])
+    files['runtime.json'] = json_bytes(runtime)
+    bundle = tmp_path / 'large-structure.tar.gz'
+    digest = write_archive(bundle, request, 'succeeded', files)
+    assert import_bundle(repo, bundle, digest)['completeness'] == 'full-sweep'
+    requests[-1]['password'] = 'synthetic-secret'
+    with pytest.raises(ValueError, match='sensitive evidence field'):
+        shareable(native)
+
+
 def test_cyclic_yaml_privacy_walk_is_bounded():
     value = {}
     value['self'] = value
