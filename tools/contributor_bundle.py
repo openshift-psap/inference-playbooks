@@ -64,12 +64,9 @@ def relative(name: str) -> str:
     return name
 
 
-def shareable(value, _budget=None, _depth=0):
+def shareable(value, _depth=0):
     """Conservative source-side guard; not a substitute for human privacy review."""
-    if _budget is None:
-        _budget = [1_000_000]
-    _budget[0] -= 1
-    if _budget[0] < 0 or _depth > 64:
+    if _depth > 64:
         raise ValueError('evidence structure exceeds complexity limit')
     if isinstance(value, dict):
         if value.get('kind') == 'Secret':
@@ -80,10 +77,10 @@ def shareable(value, _budget=None, _depth=0):
         for key, item in value.items():
             if re.search(r'(?i)(password|authorization|api[_-]?key|access[_-]?token|hostname|ip_address|^prompts?$)', key):
                 raise ValueError('sensitive evidence field; keep private diagnostics local')
-            shareable(item, _budget, _depth + 1)
+            shareable(item, _depth + 1)
     elif isinstance(value, list):
         for item in value:
-            shareable(item, _budget, _depth + 1)
+            shareable(item, _depth + 1)
     elif isinstance(value, str):
         # Wildcard/loopback bind configuration identifies no contributor host.
         checked = re.sub(r'(?<![0-9.])(?:0\.0\.0\.0|127\.0\.0\.1)(?![0-9.])', '${BIND_ADDRESS}', value)

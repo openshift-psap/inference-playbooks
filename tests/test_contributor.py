@@ -681,7 +681,7 @@ def test_large_native_structure_is_importable_and_privacy_scanned(evidence, tmp_
     assert import_bundle(repo, bundle, digest)['completeness'] == 'full-sweep'
     requests[-1]['password'] = 'synthetic-secret'
     with pytest.raises(ValueError, match='sensitive evidence field'):
-        shareable(native)
+        shareable([None] * 1_000_001 + [native])
 
 
 def test_cyclic_yaml_privacy_walk_is_bounded():
