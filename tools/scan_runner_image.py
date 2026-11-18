@@ -60,6 +60,15 @@ def scan(image, engine):
         if not report.is_file():
             raise ScanFailure('scanner did not produce a report')
         document = json.loads(report.read_text())
+        # Log only report identity fields; Results can contain secret matches.
+        metadata = document.get('Metadata') if isinstance(document, dict) else None
+        actual = {
+            'SchemaVersion': document.get('SchemaVersion'),
+            'ArtifactType': document.get('ArtifactType'),
+            'ImageID': metadata.get('ImageID') if isinstance(metadata, dict) else None,
+        } if isinstance(document, dict) else {}
+        print('Expected image ID:', image_id)
+        print('Scanner report identity:', json.dumps(actual, sort_keys=True))
         if (not isinstance(document, dict) or document.get('SchemaVersion') != 2
                 or document.get('ArtifactType') != 'container_image'
                 or document.get('Metadata', {}).get('ImageID') != image_id):
