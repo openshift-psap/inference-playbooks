@@ -781,3 +781,8 @@ for replay, repeat imports, and optional S3 retention.
 
 For other supported resource kinds, AIPerf, cleanup guarantees, and current
 limitations, use the [portable contributor benchmark reference](#reference).
+## Private serving images
+
+For RC benchmarks whose image identity cannot be published, use the
+[private image workflow](private-images.md). It requires the updated runner;
+do not place private image values in package inputs or share private diagnostics.

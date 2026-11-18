@@ -4,7 +4,13 @@
   "title": "Platform Override",
   "description": "Per-platform overrides applied on top of the base serving block.",
   "type": "object",
+  "allOf": [{
+    "if": {"anyOf": [{"required": ["image"]}, {"required": ["image_env"]}, {"required": ["image_visibility"]}]},
+    "then": {"$ref": "recipe.schema.json#/$defs/image_binding"}
+  }],
   "properties": {
+    "image_visibility": {"enum": ["public", "private"]},
+    "image_env": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
     "image": {"type": "string", "minLength": 1},
     "engine": {"$ref": "engine-version.schema.json"},
     "image_usage": {"$ref": "recipe.schema.json#/$defs/image_usage"},

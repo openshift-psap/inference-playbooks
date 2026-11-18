@@ -9,6 +9,11 @@
     "optimization_intent", "maturity", "serving", "deployment"
   ],
   "$defs": {
+    "image_binding": {
+      "if": {"properties": {"image_visibility": {"const": "private"}}, "required": ["image_visibility"]},
+      "then": {"required": ["image_env"], "properties": {"image": false}},
+      "else": {"required": ["image"], "properties": {"image_env": false}}
+    },
     "status": {
       "type": "object",
       "required": ["state"],
@@ -131,8 +136,11 @@
     },
     "serving": {
       "type": "object",
-      "required": ["image", "model", "parallelism", "args"],
+      "required": ["model", "parallelism", "args"],
+      "allOf": [{"$ref": "#/$defs/image_binding"}],
       "properties": {
+        "image_visibility": {"enum": ["public", "private"]},
+        "image_env": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
         "image": {
           "type": "string",
           "description": "Fully qualified container image reference. Must match image.recommended.ref when the image lifecycle block is present."

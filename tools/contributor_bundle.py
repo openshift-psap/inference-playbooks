@@ -325,10 +325,11 @@ def validate_harness_invocation(request, invocation):
         raise ValueError('executed harness workload parameters differ from request')
 
 
-def runtime_identity(runtime: dict, request: dict) -> tuple[str, str]:
+def runtime_identity(runtime: dict, request: dict, *, private=False) -> tuple[str, str | None]:
     """Require ready matching serving roles both before and after the workload."""
     from fetch_forge_evidence import distributed_serving_values, serving_arguments
     from contributor_security import check_runtime_uids, runtime_mounts
+    from private_images import observed_digest
     launch = runtime['launch']
     recipe = runtime.get('_recipe')
     identities = []
@@ -341,7 +342,7 @@ def runtime_identity(runtime: dict, request: dict) -> tuple[str, str]:
                     else launch['spec'].get('parallelism', {}).get('pipeline', 1))
             if len(pods['items']) < replicas * size:
                 raise ValueError('incomplete serving replica/role capture')
-            identities.append(distributed_serving_values(launch, pods, recipe['serving']['model']))
+            identities.append(distributed_serving_values(launch, pods, recipe['serving']['model'], private=private))
             continue
         servers = [c for c in launch['spec']['template']['spec']['containers'] if c['name'] == 'vllm']
         if len(servers) != 1 or len(pods['items']) != replicas or replicas < 1:
@@ -363,10 +364,7 @@ def runtime_identity(runtime: dict, request: dict) -> tuple[str, str]:
             statuses = [s for s in pod['status']['containerStatuses'] if s['name'] == server['name'] and s.get('ready') is True]
             if len(statuses) != 1:
                 raise ValueError('ready serving container evidence missing')
-            digest = re.fullmatch(r'(?:\S+@)?(sha256:[a-f0-9]{64})', statuses[0].get('imageID', ''))
-            if not digest:
-                raise ValueError('runtime image digest missing')
-            digests.add(digest[1])
+            digests.add(observed_digest(statuses[0], private))
         if len(digests) != 1:
             raise ValueError('heterogeneous serving image digests unsupported')
         identities.append((expected_revision or 'main', digests.pop()))

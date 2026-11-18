@@ -150,7 +150,7 @@ def compatibility_signature(repo: Path, directory: Path, recipe: dict, serving: 
             "hardware_sha256": digest(canonical(profile)), "scope": recipe["deployment"]["scope"],
             "parallelism": serving["parallelism"], "workload_profile": recipe["workload_profile"],
             "workload_sha256": digest(canonical(workload)) if workload else None,
-            "serving": {key: value for key, value in serving.items() if key not in {"image", "engine", "image_usage", "args", "decode", "prefill"}},
+            "serving": {key: value for key, value in serving.items() if key not in {"image", "image_env", "image_visibility", "engine", "image_usage", "args", "decode", "prefill"}},
             "roles": roles, "storage": recipe["deployment"].get("storage"), "final_runtime": final_runtime,
             "volume_bindings": [binding for artifact in artifacts for binding in artifact["volume_bindings"]],
             "model_storage": [binding for artifact in artifacts for binding in artifact["model_storage"]]}
@@ -169,7 +169,8 @@ def validation_badge(entry: dict, evidence: list[dict]) -> dict:
         image = environment.get("image", "")
         if environment.get("catalog_compatibility") != signature or not tested_platform.get("stack") or not tested_platform.get("version"):
             continue
-        if not isinstance(image, str) or not re.search(r"@sha256:[a-f0-9]{64}$", image):
+        private = environment.get('image_visibility') == 'private'
+        if not private and (not isinstance(image, str) or not re.search(r"@sha256:[a-f0-9]{64}$", image)):
             continue
         tested_version = environment.get("vllm_version")
         if not isinstance(tested_version, str):
@@ -178,10 +179,12 @@ def validation_badge(entry: dict, evidence: list[dict]) -> dict:
         if comparison is None or comparison < 0:
             continue
         label = "Validated" if comparison == 0 else f"Validated on earlier vLLM — v{tested_version.removeprefix('v')}"
+        if private:
+            label += ' — pre-release image'
         return {"state": "same-engine" if comparison == 0 else "earlier-engine", "label": label,
                 "run_id": item["run"]["run_id"], "tested_platform": tested_platform,
-                "tested_engine": tested_version, "tested_image": image,
-                "qualification": "Evidence belongs to the original run; the selected platform was not necessarily directly benchmarked."}
+                "tested_engine": tested_version, "tested_image": None if private else image,
+                "qualification": ("Results collected using a private pre-release image. " if private else "") + "Evidence belongs to the original run; the selected platform was not necessarily directly benchmarked."}
     return empty
 
 

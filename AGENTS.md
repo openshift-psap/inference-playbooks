@@ -18,6 +18,42 @@ published history; see the [signature workflow and remediation guide](docs/forge
 
 ## Container images
 
+### Private pre-release images
+
+Declare `image_visibility: private` and `image_env: RHOAI_36_RC_IMAGE` directly
+under `serving` or in the selected platform override. Commit only the variable
+name; there is no shared registry. Private bindings prohibit literal `image`;
+public bindings require `image` and prohibit `image_env`. Omitted visibility is
+public. An override replaces the whole binding and discards inherited engine
+and usage metadata when that binding changes. Private engine declarations bind
+through `engine.image_env` and must cite a public-safe source, never a private
+image URL. They do not inherit a GA engine mapping.
+
+Public rendering, validation, previews and package preparation must never resolve
+the environment variable. They use a non-deployable `private.invalid` placeholder.
+Resolve only at execution, after checking the committed submission and before
+deployment. Hosted Forge PR #322 resolves the name from its hub-mounted image
+vault; never put the value in hosted job environment variables. Keep the actual reference, tag, registry,
+repository and observed digest in restricted diagnostics. Never publish them in
+Git, PRs, logs, CI artifacts, import receipts or generated pages. Sanitize captured
+serving image fields before export, then check every exported file for known
+private identifiers; fail export if any remain. Never invent a replacement digest.
+
+Each benchmark snapshots `environment.image_visibility: private`. Public replay
+checks the sanitized configuration and measurements, not the withheld image
+identity; contributor evidence remains contributor-controlled. Display the
+pre-release qualification beside results. RC measurements may appear under the
+intended GA platform without exact-image reconciliation or a mandatory GA rerun.
+Switching to a public GA deployment image must not relabel old measurements or
+reveal their private identifiers. Other evidence applicability checks still apply.
+
+Use the updated contributor runner or the matching Forge PR #322 implementation.
+Hosted private imports require contract v3, a binding matching the tested recipe,
+placeholder submissions and sanitized runtime image IDs. Legacy hosted contracts
+cannot admit private evidence. See [private image workflow](docs/private-images.md).
+
+### Public image metadata
+
 Use fully qualified container image references; never use a short image name.
 Prefer a maintained upstream image appropriate for the workload; identify and
 explain custom runtime choices.

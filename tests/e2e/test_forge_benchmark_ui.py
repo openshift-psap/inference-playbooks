@@ -53,6 +53,17 @@ def test_smoke_stats_without_charts(benchmark_page):
     expect(benchmark_page.locator('canvas')).to_have_count(0)
 
 
+def test_private_image_qualification_is_visible_beside_results(benchmark_page):
+    item = {'run': {'run_id': 'private-rc', 'harness': 'guidellm',
+                    'environment': {'image_visibility': 'private'}},
+            'result': {'metrics': {'output_tok_s': 1200}}}
+    benchmark_page.evaluate('(item) => { document.getElementById("app").replaceChildren(renderBenchmark({validation: {}, evidence: [item]})); }', item)
+    expect(benchmark_page.locator('.evidence-qualification')).to_be_visible()
+    expect(benchmark_page.locator('.evidence-qualification')).to_contain_text('private pre-release image')
+    assert not benchmark_page.locator('.evidence-detail').get_attribute('open')
+    assert 'sha256:' not in benchmark_page.locator('#app').inner_text()
+
+
 @pytest.mark.parametrize('missing_p90', [False, True])
 def test_full_sweep_percentile_series(benchmark_page, missing_p90):
     points = json.loads((REPO / 'tests/fixtures/sample-sweep-guidellm.json').read_text())['sweep']
