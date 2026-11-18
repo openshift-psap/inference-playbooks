@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 
 # Aqua Trivy 0.76.1; update deliberately and rerun the clean/canary image proofs.
@@ -22,6 +24,32 @@ class ScanFailure(Exception):
 def run(argv, *, timeout=600):
     # Scanner output can contain credential excerpts. Never echo it, even on error.
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+
+
+def archive_config_id(path):
+    """Hash the single exported image's config, the identity Trivy reports."""
+    try:
+        with tarfile.open(path) as archive:
+            def member(name):
+                matches = [item for item in archive.getmembers() if item.name == name]
+                if len(matches) != 1 or not matches[0].isfile():
+                    raise ScanFailure('image archive has missing or ambiguous identity data')
+                return archive.extractfile(matches[0])
+
+            with member('manifest.json') as stream:
+                manifest = json.load(stream)
+            if (not isinstance(manifest, list) or len(manifest) != 1
+                    or not isinstance(manifest[0], dict)
+                    or not isinstance(manifest[0].get('Config'), str)):
+                raise ScanFailure('image archive must identify exactly one image config')
+            with member(manifest[0]['Config']) as stream:
+                digest = hashlib.sha256()
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+            return 'sha256:' + digest.hexdigest()
+    except (OSError, ValueError, tarfile.TarError):
+        # Archive content, including image configuration, may contain secrets.
+        raise ScanFailure('cannot read exported image identity') from None
 
 
 def scan(image, engine):
@@ -40,6 +68,9 @@ def scan(image, engine):
         saved = run([engine, 'save', '--output', str(inputs / 'image.tar'), image_id])
         if saved.returncode:
             raise ScanFailure('cannot export the inspected image')
+        # Docker's containerd store can return an index digest for .Id, while
+        # Trivy ImageID is the config digest. Derive it from the frozen archive.
+        config_id = archive_config_id(inputs / 'image.tar')
         command = [engine, 'run', '--rm', '--network', 'none', '--read-only',
                    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                    '--user', f'{os.getuid()}:{os.getgid()}']
@@ -60,9 +91,19 @@ def scan(image, engine):
         if not report.is_file():
             raise ScanFailure('scanner did not produce a report')
         document = json.loads(report.read_text())
+        # Log only report identity fields; Results can contain secret matches.
+        metadata = document.get('Metadata') if isinstance(document, dict) else None
+        actual = {
+            'SchemaVersion': document.get('SchemaVersion'),
+            'ArtifactType': document.get('ArtifactType'),
+            'ImageID': metadata.get('ImageID') if isinstance(metadata, dict) else None,
+        } if isinstance(document, dict) else {}
+        print('Expected image ID:', image_id)
+        print('Expected config ID:', config_id)
+        print('Scanner report identity:', json.dumps(actual, sort_keys=True))
         if (not isinstance(document, dict) or document.get('SchemaVersion') != 2
                 or document.get('ArtifactType') != 'container_image'
-                or document.get('Metadata', {}).get('ImageID') != image_id):
+                or document.get('Metadata', {}).get('ImageID') != config_id):
             raise ScanFailure('scanner report does not identify the inspected image')
         findings = sum(len(item.get('Secrets') or []) for item in document.get('Results') or [])
         if findings:
