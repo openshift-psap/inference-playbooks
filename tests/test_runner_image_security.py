@@ -147,6 +147,28 @@ def test_build_does_not_copy_host_python_caches():
     assert '.git' in ignored
 
 
+def test_build_keeps_tool_directories_searchable_for_the_runtime_user():
+    """A readable-but-unsearchable directory breaks the image entry point.
+
+    BuildKit >= v0.21 applies ``COPY --chmod=0644`` to the directories the copy
+    creates (moby/buildkit#5943), so ``/opt/playbooks/tools`` can end up without
+    a search bit. Root traverses it during the build, but uid 65532 cannot, and
+    the entry point fails with ``ModuleNotFoundError`` before any harness runs.
+    """
+    text = (REPO / 'benchmarks/runner/Containerfile').read_text()
+    copy = text.index('COPY --chmod=0644 tools/*.py /opt/playbooks/tools/')
+    # The restore and the probe span continued RUN lines, so match the text
+    # rather than requiring both markers on one physical line.
+    chmod = text.find('chmod 0755 /opt/playbooks /opt/playbooks/tools', copy)
+    probe = text.find('setpriv --reuid=65532', copy)
+    assert chmod != -1, 'directory search bits must be re-asserted after the copy'
+    assert probe != -1, 'the entry point must be probed as the runtime user'
+    assert text.find('run_contributor.py --help', probe) != -1, \
+        'the unprivileged probe must import the packaged entry point'
+    # The mode restore only helps if it lands before the unprivileged probe.
+    assert copy < chmod < probe, 'restore directory search bits before probing as uid 65532'
+
+
 def test_ci_secret_gate_runs_after_build_and_before_smoke_without_publication():
     workflow = yaml.safe_load((REPO / '.github/workflows/recipe-evidence.yml').read_text())
     assert workflow['permissions'] == {'contents': 'read'}

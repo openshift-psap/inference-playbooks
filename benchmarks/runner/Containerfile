@@ -56,8 +56,16 @@ PY
 # Copy source modules only, never host bytecode caches or local dotfiles.
 # Explicit modes keep a restrictive host umask from breaking the non-root user.
 COPY --chmod=0644 tools/*.py /opt/playbooks/tools/
-RUN python /opt/forge/projects/inference_playbooks/orchestration/cli.py --help && \
-    python /opt/playbooks/tools/run_contributor.py --help && oc version --client
+# BuildKit >= v0.21 applies COPY --chmod to the directories it creates, not only
+# to the copied files (moby/buildkit#5943). That leaves these directories
+# readable but not searchable, so the files inside cannot be opened by uid 65532;
+# root still traverses them during the build, which hides the defect until
+# runtime. Re-assert only the directory search bit and probe as the runtime user.
+RUN chmod 0755 /opt/playbooks /opt/playbooks/tools && \
+    python /opt/forge/projects/inference_playbooks/orchestration/cli.py --help && \
+    setpriv --reuid=65532 --regid=65532 --clear-groups \
+        python /opt/playbooks/tools/run_contributor.py --help && \
+    oc version --client
 
 WORKDIR /tmp
 USER 65532:65532
