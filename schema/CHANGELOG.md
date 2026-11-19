@@ -213,3 +213,11 @@
   a recipe image digest is not required for engine resolution.
 - New recipes require image identification and resolved metadata during Git-diff validation;
   existing recipes remain compatible with unknown engine versions.
+## Private runtime image bindings
+
+- Recipes/platform overrides accept `image_visibility: private` with a direct
+  `image_env` name; public literal images remain the default. Bindings are exclusive.
+- Engine declarations can bind to `image_env` instead of a literal `image`.
+- Benchmark environments can explicitly withhold image identity using
+  `image_visibility: private` plus a qualification; `image` and `image_digest`
+  are prohibited in that case. Existing public evidence still requires its digest.

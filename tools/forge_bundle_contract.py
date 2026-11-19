@@ -32,7 +32,7 @@ def canonical(value):
 def apply_ci_placement(metadata, config, deployment):
     """Replay only the placement allowed by Forge's versioned launch contract."""
     version = metadata.get('contract_version')
-    if type(version) is not int or version not in (1, 2):
+    if type(version) is not int or version not in (1, 2, 3):
         raise ValueError('unsupported Forge bundle contract version')
     deploy = config.get('deploy', {})
     selector = deploy.get('node_selector') if isinstance(deploy, dict) else None
@@ -41,7 +41,10 @@ def apply_ci_placement(metadata, config, deployment):
             raise ValueError('Forge bundle v1 cannot declare CI placement overrides')
         return
     recorded = metadata.get('ci_node_selector')
-    if (metadata.get('submission_mode') != 'ci-node-selector-override' or
+    mode = 'private-image-override' if version == 3 else 'ci-node-selector-override'
+    if version == 3 and metadata.get('submission_mode') == mode and not recorded and not selector:
+        return
+    if (metadata.get('submission_mode') != mode or
             not isinstance(recorded, dict) or not recorded or any(
                 not isinstance(key, str) or not key or not isinstance(value, str)
                 for key, value in recorded.items())):
@@ -74,7 +77,7 @@ def read_bundle(repo, config, revision, artifact):
             r'manifests/[A-Za-z0-9._-]+/[^/]+\.ya?ml', selection):
         raise ValueError('invalid Forge bundle manifest selection')
     metadata = yaml_data(artifact(SOURCE + '/bundle-metadata.yaml'))
-    if not isinstance(metadata, dict) or type(metadata.get('contract_version')) is not int or metadata['contract_version'] not in (1, 2):
+    if not isinstance(metadata, dict) or type(metadata.get('contract_version')) is not int or metadata['contract_version'] not in (1, 2, 3):
         raise ValueError('unsupported Forge bundle contract version')
     if metadata.get('recipe_path') != relative or metadata.get('recipe_revision') != revision:
         raise ValueError('Forge bundle recipe path/revision attribution mismatch')
@@ -88,6 +91,21 @@ def read_bundle(repo, config, revision, artifact):
                  if selection.split('/')[1] == f'{p["stack"]}-{p["version"]}']
     if len(platforms) != 1 or platforms[0].get('blocked'):
         raise ValueError('Forge bundle platform is missing, ambiguous or blocked')
+    from private_images import binding, public_image, replace_serving_images
+    override_ref = platforms[0].get('overrides')
+    overrides = yaml_data(subprocess.run(
+        ['git', '-C', str(repo), 'show', f'{revision}:{PurePosixPath(relative).parent / override_ref}'],
+        check=True, capture_output=True, text=True).stdout) if override_ref else {}
+    serving = recipe.get('serving', {})
+    private = (binding(serving, overrides or {}) if any(
+        key in value for value in (serving, overrides or {})
+        for key in ('image_visibility', 'image_env')) else {}).get('image_visibility') == 'private'
+    if private:
+        selected_binding = binding(serving, overrides or {})
+        if metadata['contract_version'] != 3 or metadata.get('private_image') != selected_binding:
+            raise ValueError('private Forge bundle requires matching contract v3 image binding')
+    elif metadata['contract_version'] == 3 or 'private_image' in metadata:
+        raise ValueError('private Forge metadata disagrees with tested recipe')
     folder = str(PurePosixPath(relative).parent / PurePosixPath(selection).parent)
     listing = subprocess.run(['git', '-C', str(repo), 'ls-tree', '-z', f'{revision}:{folder}'],
                              check=True, capture_output=True).stdout.decode()
@@ -116,6 +134,8 @@ def read_bundle(repo, config, revision, artifact):
     if len(documents) != 1 or documents[0].get('kind') not in SUPPORTED:
         raise ValueError('unsupported Forge bundle resource set')
     source = documents[0]
+    if private:
+        replace_serving_images(source, public_image(selected_binding), public_image(selected_binding))
     if source.get('apiVersion') != SUPPORTED[source['kind']]:
         raise ValueError('unsupported Forge bundle API version')
     if (source['kind'] == 'LLMInferenceService') != (platforms[0]['stack'] == 'rhoai'):

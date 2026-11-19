@@ -1,5 +1,9 @@
 # Engine versions and image identification
 
+Private execution images use recipe-local `image_visibility: private` and
+`image_env` bindings, with `engine.image_env` instead of `engine.image`.
+They never resolve from the GA release index. See [private images](private-images.md).
+
 Contributors identify an image as **default** or **custom** in
 `serving.image_usage`, or in a platform override's `image_usage`. Custom images
 require a non-empty note explaining the custom image and an explicit engine

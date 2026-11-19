@@ -10,6 +10,7 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 from recipe_evidence import git_file, load_unique_yaml
+from private_images import binding, public_image, merge_image_metadata
 
 
 def load_engine_index(repo: Path) -> dict:
@@ -31,11 +32,8 @@ def release_vllm_version(index: dict, release: str) -> str | None:
 
 
 def effective_image_metadata(serving: dict, overrides: dict) -> tuple[str, dict, dict | None]:
-    image = overrides.get("image", serving["image"])
-    inherit = image == serving["image"]
-    usage = overrides.get("image_usage", serving.get("image_usage", {}) if inherit else {})
-    declaration = overrides.get("engine", serving.get("engine") if inherit else None)
-    return image, usage, declaration
+    merged = merge_image_metadata(serving, overrides)
+    return public_image(merged), merged.get("image_usage", {}), merged.get("engine")
 
 
 def resolve_engine(serving: dict, overrides: dict, platform: dict, index: dict) -> dict:
@@ -45,10 +43,12 @@ def resolve_engine(serving: dict, overrides: dict, platform: dict, index: dict) 
     the base declaration; an override declaration must bind to the new image.
     """
     image, usage, declaration = effective_image_metadata(serving, overrides)
+    selected = binding(serving, overrides)
+    private = selected.get('image_visibility') == 'private'
     mapped = None
-    if usage.get("kind") == "default" and platform.get("stack") == "rhoai" and usage.get("variant") in index["variants"]:
+    if not private and usage.get("kind") == "default" and platform.get("stack") == "rhoai" and usage.get("variant") in index["variants"]:
         mapped = release_vllm_version(index, platform.get("version", ""))
-    if declaration and declaration["image"] != image:
+    if declaration and (declaration.get('image_env') != selected['image_env'] if private else declaration.get('image') != image):
         return dict(state="error", image=image, version=None, source=None, reason="engine declaration image differs from effective image")
     if declaration and mapped and normalize_version(declaration["version"]) != mapped:
         return dict(state="error", image=image, version=None, source=None, reason="default runtime declaration conflicts with release index; identify a custom image if using a different engine")
@@ -66,7 +66,9 @@ def resolve_engine(serving: dict, overrides: dict, platform: dict, index: dict) 
 
 def engine_errors(serving: dict, overrides: dict, platform: dict, index: dict, require_metadata: bool = False) -> list[str]:
     """Validate declaration bindings even when a platform replaces the image."""
-    if serving.get("engine") and serving["engine"]["image"] != serving["image"]:
+    base = binding(serving)
+    field = 'image_env' if base.get('image_visibility') == 'private' else 'image'
+    if serving.get("engine") and serving["engine"].get(field) != base[field]:
         return ["base engine declaration image differs from serving.image"]
     _, usage, declaration = effective_image_metadata(serving, overrides)
     if usage.get("kind") == "custom" and not str(usage.get("note", "")).strip():
@@ -94,7 +96,7 @@ def baseline_images(repo: Path, recipe_path: Path, revision: str) -> dict[tuple[
             continue
         override_ref = relative.parent / platform["overrides"]
         overrides = load_unique_yaml(git_file(repo, revision, override_ref.as_posix()))
-        images[(platform["stack"], platform["version"])] = overrides.get("image", previous["serving"]["image"])
+        images[(platform["stack"], platform["version"])] = public_image(binding(previous['serving'], overrides))
     return images
 
 

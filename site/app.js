@@ -502,6 +502,9 @@ function harnessHeader(key, raw) {
 function renderEvidenceDetail(item, entry) {
   const detail = document.createDocumentFragment();
   const environment = item.run.environment || {};
+  if (environment.image_visibility === 'private') {
+    detail.append(node('p', 'Results collected using a private pre-release image. Image identity is withheld.', 'evidence-qualification'));
+  }
   const details = node('details', null, 'evidence-detail');
   details.append(node('summary', `Run: ${item.run.run_id}`));
   details.append(sourceLink(item.source, 'Run source'), node('span', ' '), sourceLink(item.result_source, 'Result source'));

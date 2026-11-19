@@ -263,16 +263,12 @@ def run_kustomize(base_manifest: str, recipe_dir: Path) -> str:
 
 def merge_overrides(serving: dict, overrides: dict) -> dict:
     """Merge platform overrides into a copy of the serving block."""
-    merged = dict(serving)
-    if "image" in overrides:
-        merged["image"] = overrides["image"]
-        if overrides["image"] != serving.get("image"):
-            merged.pop("engine", None)
-            merged.pop("image_usage", None)
-    if "engine" in overrides:
-        merged["engine"] = overrides["engine"]
-    if "image_usage" in overrides:
-        merged["image_usage"] = overrides["image_usage"]
+    from private_images import merge_image_metadata, public_image
+    if any(key in value for value in (serving, overrides) for key in ('image', 'image_env', 'image_visibility')):
+        merged = merge_image_metadata(serving, overrides)
+        merged['image'] = public_image(merged)
+    else:
+        merged = dict(serving)
     if "served_model_name" in overrides:
         merged["served_model_name"] = overrides["served_model_name"]
     if "resources" in overrides:
@@ -365,6 +361,12 @@ def render_recipe(
 
         pinned_ref = platform_entry.get("pinned_manifest")
         if pinned_ref:
+            from private_images import binding
+            override = ((load_yaml_file(recipe_path.parent / platform_entry['overrides']) or {})
+                        if platform_entry.get('overrides') else {})
+            if binding(serving, override).get('image_visibility') == 'private':
+                errors.append(f'{recipe_path}: private images require template rendering, not pinned manifests')
+                continue
             pinned_path = recipe_path.parent / pinned_ref
             if not pinned_path.is_file():
                 errors.append(f"{recipe_path}: pinned_manifest does not exist: {pinned_ref}")
@@ -387,7 +389,7 @@ def render_recipe(
 
         mode = serving.get("parallelism", {}).get("mode", "")
 
-        effective_serving = serving
+        effective_serving = merge_overrides(serving, {})
         overrides_ref = platform_entry.get("overrides")
         if overrides_ref:
             overrides_path = recipe_path.parent / overrides_ref
@@ -443,6 +445,14 @@ def render_recipe(
         kind = context["kind"]
         output_path = manifest_dir / f"{kind.lower()}.yaml"
         policy_errors = validate_manifest_text(output_path, rendered)
+        if effective_serving.get('image_visibility') == 'private':
+            from private_images import replace_serving_images
+            try:
+                for document in yaml.safe_load_all(rendered):
+                    if document:
+                        replace_serving_images(document, effective_serving['image'], effective_serving['image'])
+            except ValueError:
+                policy_errors.append('private image serving containers must retain their public placeholder')
         if policy_errors:
             errors.extend(policy_errors)
             continue

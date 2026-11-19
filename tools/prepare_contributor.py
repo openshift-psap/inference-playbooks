@@ -22,6 +22,7 @@ MACOS_RUNNER_MODULES = (
     'contributor_bundle.py', 'contributor_security.py', 'fetch_forge_evidence.py',
     'forge_model_identity.py', 'forge_serving_contract.py', 'monitor_contributor.py',
     'normalize_kpis.py', 'recipe_evidence.py', 'run_contributor.py',
+    'private_images.py',
 )
 
 
@@ -91,6 +92,12 @@ def prepare(repo: Path, recipe_path: str, stack: str, version: str, workload: st
     request['runner_image' if runner_mode == 'container' else 'runner_mode'] = (
         runner_image if runner_mode == 'container' else runner_mode)
     validate_request(request, files)
+    from private_images import request_binding
+    selected = request_binding(request, files)
+    if runner_mode == 'container' and selected.get('image_visibility') == 'private' and RELEASE_FILE.is_file():
+        release = json_load(RELEASE_FILE.read_bytes())
+        if runner_image == release.get('image') and 'private-images' not in release.get('features', []):
+            raise ValueError('released runner lacks private-images support; supply an updated digest-pinned runner image')
     native_runner = {}
     if runner_mode == 'macos-arm64':
         runner_sources = ('tools/prepare_contributor.py', 'tools/bootstrap_macos.py',
@@ -159,6 +166,8 @@ exec "$engine" run --rm --init --network host --user "$(id -u):$(id -g)" \\
   -v "$package:/inputs:ro,Z" -v "$kubeconfig:/credentials/kubeconfig:ro" -v "$output:/outputs:Z" \\
   IMAGE --context "$2" --namespace "$3"
 '''.replace('  IMAGE ', '  ' + shlex.quote(runner_image) + ' ')
+    if runner_mode == 'container' and selected.get('image_visibility') == 'private':
+        launcher = launcher.replace('  -e KUBECONFIG=', '  -e ' + selected['image_env'] + ' \\\n  -e KUBECONFIG=')
     (output / 'run.sh').write_text(launcher)
     (output / 'run.sh').chmod(0o755)
     monitor_source = (native_runner['tools/monitor_contributor.py'] if runner_mode == 'macos-arm64'

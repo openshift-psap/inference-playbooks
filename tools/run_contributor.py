@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-from contextlib import chdir
+from contextlib import chdir, contextmanager, nullcontext
 import importlib.util
 import json
 import os
@@ -24,6 +24,30 @@ from contributor_bundle import (FORGE_REVISION, WORKLOADS, checksum, json_bytes,
 from recipe_evidence import load_unique_yaml, load_unique_yaml_all
 from contributor_security import UIDAdmissionRejected, admit_manifest, check_runtime_uids
 from monitor_contributor import Progress
+from private_images import (request_binding, public_image, resolve_private, replace_serving_images,
+                            sanitize_runtime, assert_no_private_tokens)
+
+
+@contextmanager
+def restricted_output(path):
+    """Capture Python, logging handlers and inherited child-process descriptors."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved = [os.dup(fd) for fd in (1, 2)]
+    try:
+        with path.open('w') as log:
+            os.dup2(log.fileno(), 1)
+            os.dup2(log.fileno(), 2)
+            try:
+                yield
+            finally:
+                sys.stdout.flush()
+                sys.stderr.flush()
+                log.flush()
+    finally:
+        for fd, original in zip((1, 2), saved):
+            os.dup2(original, fd)
+            os.close(original)
 
 
 def oc(*args):
@@ -179,6 +203,16 @@ def instrument(phase, request, private: Path, runtime: dict, inputs: Path, files
     from projects.inference_playbooks.orchestration import manifest_bundle
     snapshot_transport(manifest_bundle, request, inputs, files, forge)
     runtime['input_transport'] = 'checksummed-snapshot'
+    selected = request_binding(request, files)
+    if selected.get('image_visibility') == 'private':
+        actual_image = resolve_private(selected, os.environ)
+        original_submission = phase.checked_submission
+        def checked_private_submission(*args, **kwargs):
+            # Verify the committed source/submission first; substitute only the
+            # declared serving image in the objects consumed by Forge's raw POST.
+            documents = original_submission(*args, **kwargs)
+            return [replace_serving_images(doc, public_image(selected), actual_image) for doc in documents]
+        phase.checked_submission = checked_private_submission
     created_resources = []
     original_create = phase._create_checked_bundle
     def create(src, namespace, metadata, created):
@@ -235,6 +269,8 @@ def instrument(phase, request, private: Path, runtime: dict, inputs: Path, files
     def write(name, manifest):
         if manifest['kind'] in {'Deployment', 'LeaderWorkerSet', 'LLMInferenceService'}:
             progress.update('deploying')
+            if selected.get('image_visibility') == 'private':
+                manifest = replace_serving_images(manifest, public_image(selected), actual_image)
             runtime['uid_admission'] = admit_manifest(manifest, manifest['metadata']['namespace'], admission_probe,
                                                       allow_uid_omission=False)
             runtime['launch'] = copy.deepcopy(manifest)
@@ -319,6 +355,8 @@ def export_native(value, endpoints, paths=None, prefix=''):
 def execute(request, inputs: Path, output: Path, namespace: str, context: str, forge: Path, timeout: int):
     files = {'inputs/' + relative(name): (inputs / relative(name)).read_bytes() for name in request['inputs']}
     validate_request(request, files)
+    selected = request_binding(request, files)
+    private_image = resolve_private(selected, os.environ) if selected.get('image_visibility') == 'private' else None
     if (forge / 'REVISION').read_text().strip() != request['forge_revision'] or request['forge_revision'] != FORGE_REVISION:
         raise ValueError('runner contains a different Forge revision')
     # Fresh output required: retries are distinct attempts, never overwritten evidence.
@@ -341,7 +379,7 @@ def execute(request, inputs: Path, output: Path, namespace: str, context: str, f
                               PYTHONPATH=str(forge), CLUSTERLESS_MODE='false')
             # Forge registers DSL tasks relative to cwd but looks them up relative
             # to FORGE_HOME. Match its launcher before importing any toolbox.
-            with chdir(forge):
+            with chdir(forge), (restricted_output(artifacts / 'forge-output.txt') if private_image else nullcontext()):
                 sys.path.insert(0, str(forge))
                 sys.path.insert(0, str(forge / 'projects/inference_playbooks/orchestration'))
                 spec = importlib.util.spec_from_file_location('portable_forge_cli', forge / 'projects/inference_playbooks/orchestration/cli.py')
@@ -385,6 +423,13 @@ def execute(request, inputs: Path, output: Path, namespace: str, context: str, f
                 if not raw:
                     raise ValueError('native benchmark exports missing')
                 endpoints = runtime.pop('_private_endpoints', [])
+                tokens = set()
+                if private_image:
+                    from contributor_bundle import runtime_identity
+                    recipe = load_unique_yaml(files['inputs/' + request['recipe_path']].decode())
+                    runtime_identity({**runtime, '_recipe': recipe}, request)
+                    (artifacts / 'runtime-private.json').write_bytes(json_bytes(runtime))
+                    runtime, tokens = sanitize_runtime(runtime, selected, private_image)
                 runtime['native_exports'] = []
                 for index, path in enumerate(raw):
                     original = path.read_bytes()
@@ -398,6 +443,7 @@ def execute(request, inputs: Path, output: Path, namespace: str, context: str, f
                                                       'redacted_fields': sorted(set(redactions))})
                 shareable(runtime)
                 files['runtime.json'] = json_bytes(runtime)
+                assert_no_private_tokens(files, tokens)
             except Exception:
                 outcome = 'collection-failed'
                 (artifacts / 'collection-error.txt').write_text(traceback.format_exc())

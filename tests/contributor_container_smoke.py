@@ -25,6 +25,8 @@ assert not list(TOOLS_ROOT.rglob('*.pyc')), 'runner source acquired Python bytec
 
 with tempfile.TemporaryDirectory() as tmp:
     tool = os.environ.get('SMOKE_HARNESS', 'guidellm')
+    private = os.environ.get('SMOKE_PRIVATE') == '1'
+    secret = 'restricted.example.org/internal/runtime:secret-rc2'
     assert tool in {'guidellm', 'aiperf'}
     root = Path(tmp)
     inputs = root / 'inputs'
@@ -42,7 +44,15 @@ with tempfile.TemporaryDirectory() as tmp:
                         {'name': 'vllm', 'image': 'docker.io/example/model@sha256:' + 'c' * 64,
                          'command': ['vllm', 'serve'], 'args': ['example/model'],
                          'ports': [{'containerPort': 8000}]}]}}}}
+    recipe['serving']['image'] = manifest['spec']['template']['spec']['containers'][0]['image']
+    if private:
+        from private_images import public_image
+        recipe['serving'].pop('image')
+        recipe['serving'].update(image_visibility='private', image_env='RHOAI_36_RC_IMAGE')
+        manifest['spec']['template']['spec']['containers'][0]['image'] = public_image(recipe['serving'])
+        os.environ['RHOAI_36_RC_IMAGE'] = secret
     data = {recipe_path: recipe, manifest_path: manifest,
+            'models/test/recipes/test-recipe/platforms/vllm.yaml': {},
             'models/test/model.yaml': {'model_id': 'test', 'huggingface_id': 'example/model'},
             'hardware-profiles/test.yaml': {'profile_revision': 1, 'accelerator_key': 'nvidia-h200-x1'}}
     for path, document in data.items():
@@ -61,7 +71,10 @@ with tempfile.TemporaryDirectory() as tmp:
         actions.append(args)
         if args[0] == 'create':
             doc = json.loads(kwargs['input_text'])
-            assert doc == {**manifest, 'metadata': {**manifest['metadata'], 'namespace': 'benchmark'}}
+            expected = copy.deepcopy(manifest)
+            if private:
+                expected['spec']['template']['spec']['containers'][0]['image'] = secret
+            assert doc == {**expected, 'metadata': {**manifest['metadata'], 'namespace': 'benchmark'}}
             assert '--raw=/apis/apps/v1/namespaces/benchmark/deployments' in args
             doc['metadata']['uid'] = 'fixture-deployment-uid'
             state['deployment'] = doc
@@ -152,6 +165,13 @@ with tempfile.TemporaryDirectory() as tmp:
     envelope, files = read_archive(archive, checksum(archive.read_bytes()))
     assert 'progress.json' not in files, 'local progress must not enter evidence payloads'
     assert envelope['outcome'] == 'succeeded'
+    if private:
+        from private_images import assert_no_private_tokens, private_tokens
+        assert_no_private_tokens(files, private_tokens(secret, ['sha256:' + 'c' * 64]))
+        runtime = json.loads(files['runtime.json'])
+        assert runtime['image_visibility'] == 'private'
+        assert runtime['pods_before']['items'][0]['status']['containerStatuses'][0]['imageID'] == 'private'
+        assert secret in (output / 'private-diagnostics/runtime-private.json').read_text()
     assert json.loads(files['result.json'])['completeness'] == 'smoke'
     assert len(json.loads(files['runtime.json'])['pods_before']['items']) == 1
     assert any(action[0] == 'delete' for action in actions), 'Forge finalizers did not run'

@@ -2,7 +2,9 @@
 import copy
 import hashlib
 import json
+import os
 import subprocess
+import sys
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -122,6 +124,121 @@ def test_bundle_import_replay_and_receipt(bundle_intake):
     commit_evidence(repo)
     client.request = client.run = client.kpis = lambda *a, **kw: pytest.fail('receipt contacted MLflow')
     assert admitted_execution(repo, load_admissions(repo), client, 'd' * 32, revision, 34, {})
+
+
+@pytest.fixture
+def private_bundle_intake(bundle_intake):
+    repo, path, _, client, parent, artifacts, raw, selected = bundle_intake
+    binding = {'image_visibility': 'private', 'image_env': 'RHOAI_36_RC_IMAGE'}
+    placeholder = 'private.invalid/runtime:RHOAI_36_RC_IMAGE'
+    recipe = yaml.safe_load(path.read_text())
+    recipe.setdefault('serving', {}).pop('image', None)
+    recipe['serving'].update(binding)
+    for platform in recipe['platforms']:
+        if platform.get('overrides'):
+            override = path.parent / platform['overrides']
+            value = yaml.safe_load(override.read_text()) or {}
+            value.pop('image', None)
+            override.write_text(yaml.safe_dump(value))
+    path.write_text(yaml.safe_dump(recipe))
+    source = yaml.safe_load(selected.read_text())
+    def sanitize(value):
+        if isinstance(value, dict):
+            for container in value.get('containers', []):
+                if container.get('name') in {'vllm', 'main', 'vllm-worker', 'vllm-leader'}:
+                    container['image'] = placeholder
+            for status in value.get('containerStatuses', []):
+                status['imageID'] = 'private'
+                if 'image' in status:
+                    status['image'] = placeholder
+            for child in value.values():
+                sanitize(child)
+        elif isinstance(value, list):
+            for child in value:
+                sanitize(child)
+    sanitize(source)
+    selected.write_text(yaml.safe_dump(source))
+    commit_evidence(repo)
+    revision = git(repo, 'rev-parse', 'HEAD')
+    for key in list(artifacts):
+        if key.endswith('.pods.yaml'):
+            pods = yaml.safe_load(artifacts[key])
+            sanitize(pods)
+            artifacts[key] = yaml.safe_dump(pods)
+    if source['kind'] == 'Deployment':
+        artifacts[SOURCE.rsplit('/', 1)[0] + '/artifacts/deployment.pods.yaml'] = yaml.safe_dump({
+            'kind': 'List', 'items': [{'kind': 'Pod', 'spec': source['spec']['template']['spec'],
+                'status': {'containerStatuses': [{'name': 'vllm', 'ready': True, 'imageID': 'private'}]}}]})
+    key = '01__test/000__ci_metadata/fournos_fjob.yaml'
+    fjob = yaml.safe_load(artifacts[key])
+    fjob['spec']['env']['FORGE_FOREIGN_TESTING_PULL_PULL_SHA'] = revision
+    artifacts[key] = yaml.safe_dump(fjob)
+    key = SOURCE + '/bundle-metadata.yaml'
+    metadata = yaml.safe_load(artifacts[key])
+    metadata.update(contract_version=3, private_image=binding, submission_mode='private-image-override', recipe_revision=revision)
+    metadata['source_files'][0]['sha256'] = hashlib.sha256(selected.read_bytes()).hexdigest()
+    submitted = copy.deepcopy(source)
+    submitted['metadata']['namespace'] = metadata['target_namespace']
+    for name, value in [('source', source), ('submitted', submitted)]:
+        text = yaml.safe_dump(value)
+        artifacts[f'{SOURCE}/{name}-bundle.yaml'] = text
+        metadata[f'{name}_bundle_sha256'] = hashlib.sha256(text.encode()).hexdigest()
+    artifacts[key] = yaml.safe_dump(metadata)
+    return repo, path, revision, client, artifacts
+
+
+def test_private_hosted_import_and_replay(private_bundle_intake):
+    repo, path, revision, client, artifacts = private_bundle_intake
+    import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
+    for reference in yaml.safe_load(path.read_text())['benchmark_runs']:
+        run_path = path.parent / reference
+        run = yaml.safe_load(run_path.read_text())
+        assert run['environment']['image_visibility'] == 'private'
+        assert 'image_digest' not in run['environment']
+        assert validate_benchmark_run(repo, run_path, run)[0] == []
+
+
+def test_private_hosted_real_producer_compatibility(private_bundle_intake, tmp_path):
+    forge = os.environ.get('FORGE_PRIVATE_COMPAT_REPO')
+    if not forge:
+        pytest.skip('set FORGE_PRIVATE_COMPAT_REPO to the Forge PR322 worktree')
+    repo, path, revision, client, artifacts = private_bundle_intake
+    destination = tmp_path / 'producer'
+    config = yaml.safe_load(artifacts[SOURCE.rsplit('/', 1)[0] + '/config.yaml'])['inference_playbooks']
+    script = '''
+import sys
+from pathlib import Path
+import yaml
+from projects.inference_playbooks.orchestration.manifest_bundle import load_source_bundle, normalized_documents, write_bundle_artifacts
+root, recipe_path, selection, destination, forge = map(Path, sys.argv[1:])
+recipe = yaml.safe_load(recipe_path.read_text())
+recipe.update(recipe_path=recipe_path, repository_path=root)
+bundle = load_source_bundle(root, recipe, selection)
+write_bundle_artifacts(bundle, normalized_documents(bundle['documents'], 'test-namespace'), 'test-namespace', destination, forge)
+'''
+    subprocess.run([sys.executable, '-c', script, str(repo), str(path), str(path.parent / config['manifest_path']),
+                    str(destination), forge], cwd=forge, check=True, capture_output=True)
+    for name in ('source-bundle.yaml', 'submitted-bundle.yaml', 'bundle-metadata.yaml'):
+        artifacts[SOURCE + '/' + name] = (destination / name).read_text()
+    import_parent(client, repo, 'd' * 32, revision, 34, 123, require_parent=True)
+
+
+@pytest.mark.parametrize('change', ['legacy', 'binding', 'digest'])
+def test_private_hosted_contract_rejects_mismatches(private_bundle_intake, change):
+    repo, path, revision, client, artifacts = private_bundle_intake
+    key = SOURCE + '/bundle-metadata.yaml'
+    metadata = yaml.safe_load(artifacts[key])
+    if change == 'legacy':
+        metadata['contract_version'] = 1
+    elif change == 'binding':
+        metadata['private_image']['image_env'] = 'OTHER_RC'
+    else:
+        for name in artifacts:
+            if name.endswith('.pods.yaml'):
+                artifacts[name] = artifacts[name].replace('imageID: private', 'imageID: sha256:' + 'c' * 64)
+    artifacts[key] = yaml.safe_dump(metadata)
+    with pytest.raises(ValueError, match='private'):
+        import_parent(client, repo, 'd' * 32, revision, 34, require_parent=True)
 
 
 @pytest.mark.parametrize('mutation', [None, 'image', 'selector', 'config'])

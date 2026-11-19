@@ -43,6 +43,10 @@ def validate_evidence(repo: Path, request: dict, files: dict, *, historical=Fals
     if {name: data for name, data in files.items() if name.startswith('inputs/')} != expected:
         raise ValueError('bundled input closure differs from tested Git snapshot')
     runtime = json_load(files['runtime.json'])
+    from private_images import request_binding
+    private = request_binding(request, files).get('image_visibility') == 'private'
+    if (runtime.get('image_visibility') == 'private') != private:
+        raise ValueError('runtime image visibility differs from tested recipe')
     shareable(runtime)
     validate_harness_invocation(request, runtime['harness_invocation'])
     if (runtime['launch']['kind'] == 'LLMInferenceService') != (request['platform']['stack'] == 'rhoai'):
@@ -57,7 +61,7 @@ def validate_evidence(repo: Path, request: dict, files: dict, *, historical=Fals
             raise ValueError('captured launch differs from namespace-only Forge contract')
     validate_launch(repo, request['manifest_path'], request['tested_revision'], runtime['launch'],
                     require_current=not historical, uid_admission=runtime['uid_admission'])
-    revision, image_digest = runtime_identity({**runtime, '_recipe': recipe}, request)
+    revision, image_digest = runtime_identity({**runtime, '_recipe': recipe}, request, private=private)
     result = replay(request, files)
     if json_load(files['result.json']) != result:
         raise ValueError('submitted normalized result differs from raw KPI replay')
@@ -75,7 +79,8 @@ def replay_run(repo: Path, path: Path, run: dict):
     _, recipe, result, revision, digest = validate_evidence(repo, request, files, historical=True)
     if (run['run_id'] != result['run_id'] or run['recipe_id'] != recipe['recipe_id']
             or run['platform'] != request['platform'] or run['hardware_profile'] != recipe['hardware_profile']
-            or run['environment']['model_revision'] != revision or run['environment']['image_digest'] != digest
+            or run['environment']['model_revision'] != revision or run['environment'].get('image_digest') != digest
+            or (run['environment'].get('image_visibility') == 'private') != (digest is None)
             or run['deployment_scope'] != recipe['deployment']['scope']
             or run['hardware_profile_revision'] != yaml.safe_load(files['inputs/' + recipe['hardware_profile']])['profile_revision']
             or run['harness'] != WORKLOADS[request['workload']]['harness']
@@ -230,6 +235,10 @@ def plan_import(repo: Path, bundle: Path, digest: str, *, s3_prefix=None) -> Imp
            'contributor': {'bundle_checksum': digest, **{
                name.replace('.json', '_checksum'): checksum(output[name])
                for name in ('request.json', 'runtime.json', 'kpis.json')}}, 'artifacts': artifacts}
+    if image_digest is None:
+        from private_images import QUALIFICATION
+        run['environment'].pop('image_digest')
+        run['environment'].update(image_visibility='private', qualification=QUALIFICATION + ' Contributor-controlled execution; not independent validation.')
     def finalize():
         jsonschema.validate(run, json_load((repo / 'schema/benchmark-run.schema.json').read_bytes()))
         jsonschema.validate(result, json_load((repo / 'schema/benchmark-result.schema.json').read_bytes()))

@@ -135,7 +135,7 @@ def safe_artifact(value):
 
 def attribution(repo, values, expected_revision, pr_number):
     required = ('recipe_path', 'tested_revision', 'hardware_profile', 'hardware_profile_revision',
-                'model_revision', 'image_digest', 'platform_stack', 'platform_version', 'pr_number', 'command')
+                 'model_revision', 'platform_stack', 'platform_version', 'pr_number', 'command')
     missing = [key for key in required if not values.get(f'playbooks.{key}')]
     if missing:
         raise ValueError('missing Forge attribution tags: ' + ', '.join(missing))
@@ -154,7 +154,17 @@ def attribution(repo, values, expected_revision, pr_number):
     platform = {'stack': get('platform_stack'), 'version': get('platform_version')}
     if not any(all(p[k] == v for k, v in platform.items()) for p in recipe['platforms']):
         raise ValueError('platform attribution mismatch')
-    if not re.fullmatch(r'sha256:[a-f0-9]{64}', get('image_digest')):
+    from private_images import binding
+    selected = next(p for p in recipe['platforms'] if all(p[k] == v for k, v in platform.items()))
+    overrides = (load_unique_yaml(checked_path(repo, str(path.parent.relative_to(repo) / selected['overrides'])).read_text()) or {}
+                 if selected.get('overrides') else {})
+    serving = recipe.get('serving', {})
+    has_private_binding = any(key in value for value in (serving, overrides) for key in ('image_visibility', 'image_env'))
+    private = has_private_binding and binding(serving, overrides).get('image_visibility') == 'private'
+    if private:
+        if values.get('playbooks.image_visibility') != 'private' or 'playbooks.image_digest' in values:
+            raise ValueError('private images require sanitized contract v3 execution evidence')
+    elif values.get('playbooks.image_visibility') == 'private' or not re.fullmatch(r'sha256:[a-f0-9]{64}', values.get('playbooks.image_digest', '')):
         raise ValueError('image digest required')
     if not re.fullmatch(r'[^\s\x00-\x1f\x7f]+', get('model_revision')):
         raise ValueError('nonempty model revision identifier without whitespace or control characters required')
@@ -213,10 +223,13 @@ def serving_arguments(container):
     return model, revisions[0] if revisions else None
 
 
-def distributed_serving_values(manifest, pods, checkpoint):
+def distributed_serving_values(manifest, pods, checkpoint, *, private=False):
     """Use the producer's scoped pod capture, not sidecar/init images or aliases."""
     kind, spec = manifest['kind'], manifest['spec']
-    if kind == 'LeaderWorkerSet':
+    if kind == 'Deployment':
+        roles = [spec['template']['spec']['containers']]
+        names = {'vllm'}
+    elif kind == 'LeaderWorkerSet':
         templates = spec['leaderWorkerTemplate']
         roles = [templates[key]['spec']['containers'] for key in ('leaderTemplate', 'workerTemplate')]
         names = {'vllm', 'vllm-leader', 'vllm-worker'}
@@ -271,10 +284,8 @@ def distributed_serving_values(manifest, pods, checkpoint):
             status = [s for s in statuses if s.get('name') == container['name'] and s.get('ready') is True]
             if len(status) != 1:
                 raise ValueError('ready serving container runtime evidence is missing or ambiguous')
-            digest = re.fullmatch(r'(?:\S+@)?(sha256:[a-f0-9]{64})', status[0].get('imageID', ''))
-            if not digest:
-                raise ValueError('ready serving container image digest is missing')
-            digests.add(digest[1])
+            from private_images import observed_digest
+            digests.add(observed_digest(status[0], private))
             # A model-less LWS worker participates in the leader's model load.
             if model is not None or revision is not None:
                 revisions.add(revision or 'main')
@@ -337,9 +348,11 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number, cont
         raise ValueError('PR attribution mismatch')
     config = document('01__test/001__inference_playbooks_test_dir/config.yaml')['inference_playbooks']
     workload_context = {}
+    private = False
     if '/' in config.get('recipe', ''):
         from forge_bundle_contract import read_bundle
         path, recipe, platform, deployment, bundle = read_bundle(repo, config, expected_revision, artifact)
+        private = bundle.get('contract_version') == 3
         relative = str(path.relative_to(repo))
         profile = load_unique_yaml(checked_path(repo, recipe['hardware_profile']).read_text())
         workload_context = {'playbooks.forge_revision': bundle['forge_revision'],
@@ -348,7 +361,7 @@ def execution_values(client, parent_id, repo, expected_revision, pr_number, cont
         path, recipe, platform, deployment, relative, profile = legacy_execution_launch(
             client, parent_id, repo, expected_revision, config, document)
     return {**execution_runtime_values(client, parent_id, recipe, platform, deployment, relative,
-                                      profile, revision, pr_number, artifact, document), **workload_context}
+                                      profile, revision, pr_number, artifact, document, private=private), **workload_context}
 
 
 def legacy_execution_launch(client, parent_id, repo, expected_revision, config, document):
@@ -393,10 +406,17 @@ def legacy_execution_launch(client, parent_id, repo, expected_revision, config, 
 
 
 def execution_runtime_values(client, parent_id, recipe, platform, deployment, relative,
-                             profile, revision, pr_number, artifact, document):
+                             profile, revision, pr_number, artifact, document, *, private=False):
     kind = deployment['kind']
     log = artifact('01__test/run.log')
-    if kind != 'Deployment':
+    if private and kind == 'Deployment':
+        pods = document('01__test/001__inference_playbooks_test_dir/artifacts/deployment.pods.yaml')
+        model_revision, _ = distributed_serving_values(deployment, pods, recipe['serving']['model'], private=True)
+        values = {'recipe_path': relative, 'tested_revision': revision, 'pr_number': str(pr_number),
+                  'hardware_profile': recipe['hardware_profile'], 'hardware_profile_revision': str(profile['profile_revision']),
+                  'platform_stack': platform['stack'], 'platform_version': platform['version'],
+                  'model_revision': model_revision}
+    elif kind != 'Deployment':
         capture_name = 'lws' if kind == 'LeaderWorkerSet' else 'llmisvc'
         test_dir = '01__test/001__inference_playbooks_test_dir'
         listing = client.request('/api/2.0/mlflow/artifacts/list?' + urlencode({'run_id': parent_id, 'path': test_dir}))
@@ -406,7 +426,7 @@ def execution_runtime_values(client, parent_id, recipe, platform, deployment, re
             raise ValueError('execution serving state capture is missing or ambiguous')
         basename = 'leaderworkerset' if kind == 'LeaderWorkerSet' else 'llminferenceservice'
         pods = document(captures[0] + '/artifacts/' + basename + '.pods.yaml')
-        model_revision, image_digest = distributed_serving_values(deployment, pods, recipe['serving']['model'])
+        model_revision, image_digest = distributed_serving_values(deployment, pods, recipe['serving']['model'], private=private)
         values = {'recipe_path': relative, 'tested_revision': revision, 'pr_number': str(pr_number),
                   'hardware_profile': recipe['hardware_profile'], 'hardware_profile_revision': str(profile['profile_revision']),
                   'platform_stack': platform['stack'], 'platform_version': platform['version'],
@@ -416,6 +436,9 @@ def execution_runtime_values(client, parent_id, recipe, platform, deployment, re
         values.update({'recipe_path': relative, 'tested_revision': revision, 'pr_number': str(pr_number),
                        'hardware_profile': recipe['hardware_profile'], 'hardware_profile_revision': str(profile['profile_revision']),
                        'platform_stack': platform['stack'], 'platform_version': platform['version']})
+    if private:
+        values.pop('image_digest', None)
+        values['image_visibility'] = 'private'
     commands = set(re.findall(r'(?m)^\s*Command: (\S[^\r\n]*)$', log))
     if len(commands) != 1:
         raise ValueError('recorded common Forge invocation is missing or ambiguous')
@@ -644,7 +667,9 @@ def import_parent(client, repo, parent_id, expected_revision, pr_number, comment
                    'platform': platform, 'harness': harness, 'result': 'result.json', 'forge': forge,
                    'command': values['playbooks.command'],
                    'environment': {'model_revision': values['playbooks.model_revision'],
-                                   'image_digest': values['playbooks.image_digest'], 'platform': platform},
+                                    **({'image_visibility': 'private', 'qualification': 'Results collected using a private pre-release image; image identity is withheld.'}
+                                       if values.get('playbooks.image_visibility') == 'private' else {'image_digest': values['playbooks.image_digest']}),
+                                    'platform': platform},
                    'workload': {'tests': [t.get('labels', {}) for t in document['tests']
                                          if t.get('labels', {}).get('benchmark_tool') == harness]},
                     'artifacts': [{'type': 'raw-output', 'path': 'kpis.json', 'checksum': checksum}]}
