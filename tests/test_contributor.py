@@ -2,7 +2,6 @@
 import copy
 import hashlib
 import io
-import shutil
 import stat
 import subprocess
 import sys
@@ -19,6 +18,7 @@ sys.path.insert(0, str(REPO / 'tools'))
 from contributor_bundle import (FORGE_REVISION, LEGACY_FORGE_REVISION, NAMESPACE_ONLY_FORGE_REVISIONS, checksum, json_bytes,
                                 json_load, read_archive, relative, replay, shareable, validate_request, write_archive,
                                 validate_harness_invocation)
+from contributor_fixtures import build_source_repo, commit
 from contributor_security import UIDAdmissionRejected, admit_manifest, check_runtime_uids, effective_uids
 from import_contributor import import_bundle, upload_archive
 from prepare_contributor import prepare
@@ -29,46 +29,9 @@ from run_contributor import execute, snapshot_transport, standalone_overrides
 from validate import validate_benchmark_run
 
 
-def commit(repo):
-    subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True, capture_output=True)
-    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.org',
-                    'commit', '-m', 'synthetic fixture'], check=True, capture_output=True)
-
-
 @pytest.fixture
 def source(tmp_path):
-    repo = tmp_path / 'repo'
-    repo.mkdir()
-    shutil.copytree(REPO / 'schema', repo / 'schema')
-    root = repo / 'models/test/recipes/test-recipe'
-    root.mkdir(parents=True)
-    recipe = {'schema_version': 4, 'recipe_id': 'test-recipe', 'model_id': 'test',
-              'platforms': [{'stack': 'vllm', 'version': 'v0.24.0', 'overrides': 'platforms/vllm.yaml'}],
-              'hardware_profile': 'hardware-profiles/test.yaml', 'workload_profile': 'guidellm-8k1k',
-              'deployment_mode': 'tp1', 'optimization_intent': 'latency', 'maturity': 'contributed',
-              'deployment': {'scope': 'single-node'},
-              'serving': {'model': 'example/model', 'image': 'docker.io/vllm/vllm-openai:v0.24.0',
-                          'parallelism': {'mode': 'tp', 'tp': 1}, 'args': []}}
-    (root / 'recipe.yaml').write_text('# retain authored comment\n' + yaml.safe_dump(recipe, sort_keys=False))
-    (repo / 'models/test/model.yaml').write_text('model_id: test\nhuggingface_id: example/model\n')
-    (root / 'platforms').mkdir()
-    (root / 'platforms/vllm.yaml').write_text('{}\n')
-    profile = repo / 'hardware-profiles/test.yaml'
-    profile.parent.mkdir()
-    profile.write_text('profile_revision: 1\naccelerator_key: nvidia-h200-x1\n')
-    server = {'name': 'vllm', 'image': recipe['serving']['image'],
-              'command': ['vllm', 'serve'], 'args': ['example/model'],
-              'resources': {'limits': {'nvidia.com/gpu': '1'}}}
-    deployment = {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': {'name': 'test'},
-                  'spec': {'replicas': 1, 'selector': {'matchLabels': {'app': 'test'}},
-                           'template': {'metadata': {'labels': {'app': 'test'}}, 'spec': {
-                               'securityContext': {'runAsUser': 65534, 'runAsNonRoot': True}, 'containers': [server]}}}}
-    manifest = root / 'manifests/vllm-v0.24.0/deployment.yaml'
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(yaml.safe_dump(deployment))
-    subprocess.run(['git', '-C', str(repo), 'init'], check=True, capture_output=True)
-    commit(repo)
-    return repo, root, deployment
+    return build_source_repo(tmp_path)
 
 
 @pytest.fixture
@@ -1032,19 +995,14 @@ def test_launcher_mounts_only_selected_kubeconfig(evidence, tmp_path):
     selected.write_text('synthetic credentials')
     (credentials / 'unrelated.yaml').write_text('must not be mounted')
     capture = tmp_path / 'engine-args.json'
-    engine = tmp_path / 'fake-engine'
+    tools = tmp_path / 'fake-tools'
+    tools.mkdir()
+    engine = tools / 'podman'
     engine.write_text('#!' + sys.executable + '\nimport json,sys\nfrom pathlib import Path\n'
+                      + 'if sys.argv[1:2] == ["info"]:\n    raise SystemExit(0)\n'
                       + 'Path(' + repr(str(capture)) + ').write_text(json.dumps(sys.argv[1:]))\n')
     engine.chmod(0o755)
     environment = {**os.environ, 'CONTAINER_ENGINE': str(engine)}
-    if sys.platform == 'darwin':
-        utilities = tmp_path / 'linux-test-utilities'
-        utilities.mkdir()
-        realpath = utilities / 'realpath'
-        realpath.write_text('#!' + sys.executable + '\nimport os,sys\n'
-                            + 'print(os.path.realpath([arg for arg in sys.argv[1:] if arg not in {"-m", "--"}][-1]))\n')
-        realpath.chmod(0o755)
-        environment['PATH'] = str(utilities) + os.pathsep + os.environ['PATH']
     subprocess.run([str(tmp_path / 'package/run.sh'), str(selected), 'context', 'benchmark',
                     str(tmp_path / 'run-output')], check=True, env=environment)
     arguments = json.loads(capture.read_text())

@@ -138,7 +138,9 @@ def test_invalid_archive_fails_without_printing_contents(monkeypatch, tmp_path, 
 
 def test_build_does_not_copy_host_python_caches():
     containerfile = (REPO / 'benchmarks/runner/Containerfile').read_text()
-    assert 'COPY tools/*.py /opt/playbooks/tools/' in containerfile
+    # Explicit process umask, so a restrictive host umask cannot produce an
+    # image whose source tree is unreadable to the non-root runner user.
+    assert 'COPY --chmod=0644 tools/*.py /opt/playbooks/tools/' in containerfile
     assert 'COPY tools/ /opt/playbooks/tools/' not in containerfile
     ignored = (REPO / '.dockerignore').read_text().splitlines()
     assert '**/__pycache__' in ignored and '**/*.py[cod]' in ignored
@@ -152,14 +154,17 @@ def test_ci_secret_gate_runs_after_build_and_before_smoke_without_publication():
     assert steps[0]['with']['persist-credentials'] is False
     build = next(index for index, step in enumerate(steps) if 'docker build' in step.get('run', ''))
     gate = next(index for index, step in enumerate(steps) if 'tools/scan_runner_image.py' in step.get('run', ''))
-    smoke = next(index for index, step in enumerate(steps) if 'docker run' in step.get('run', ''))
+    smoke = next(index for index, step in enumerate(steps)
+                 if 'tests/contributor_import_smoke.py' in step.get('run', ''))
     assert build < gate < smoke
+    # No image runs before the gate, including the per-architecture CLI probe.
+    assert all(index > gate for index, step in enumerate(steps) if 'docker run' in step.get('run', ''))
     assert steps[gate]['env'] == {'CONTAINER_ENGINE': 'docker'}
     assert not steps[gate].get('continue-on-error')
     assert not any('push' in step.get('run', '') or 'secrets.' in str(step) for step in steps)
     assert 'tests/test_runner_image_security.py' in steps[1]['run']
     assert 'tests/test_contributor_monitor.py' in steps[1]['run']
-    assert 'tests/contributor_guidellm_cleanup_smoke.py' in steps[smoke]['run']
+    assert any('tests/contributor_guidellm_cleanup_smoke.py' in step.get('run', '') for step in steps[smoke:])
     precommit = yaml.safe_load((REPO / '.pre-commit-config.yaml').read_text())
     hook = next(hook for repo in precommit['repos'] for hook in repo.get('hooks', [])
                 if hook['id'] == 'contributor-bundles')
