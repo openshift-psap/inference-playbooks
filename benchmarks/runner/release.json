@@ -1,8 +1,16 @@
 {
-  "schema_version": 1,
-  "version": "v0.1.2",
-  "tag": "quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2",
-  "image": "quay.io/rh-ee-thibrahi/inference-playbooks-runner@sha256:4b8dc7e0d2f05a40949992a322a103e6650ad9136616edd60ab26e55b811ce88",
   "forge_revision": "df3c14a5eab5e8f502402f51c48765b35067fca8",
-  "source_revision": "92c37ef84658daf997df2000c403a4abca8a033f"
+  "image": "ghcr.io/openshift-psap/inference-playbooks-runner@sha256:c6d2444a753fc5e8f6a58803ec3f8046f58d26528a122851ae5ee25d9033e0eb",
+  "platforms": {
+    "amd64": {
+      "image": "ghcr.io/openshift-psap/inference-playbooks-runner@sha256:b61691a1e8f90e6ef284412fc689de2dcb3e011b233a5a113bdf5e9cbd6c406f"
+    },
+    "arm64": {
+      "image": "ghcr.io/openshift-psap/inference-playbooks-runner@sha256:51ddd78f5b6d0dfd52c05284079a5ea75619d745ece754d0fa435d834fb03160"
+    }
+  },
+  "schema_version": 2,
+  "source_revision": "3df0e84890e6e220f66d97c7968aeb8d74805edb",
+  "tag": "ghcr.io/openshift-psap/inference-playbooks-runner:v0.2.1",
+  "version": "v0.2.1"
 }
