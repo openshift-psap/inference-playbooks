@@ -37,6 +37,11 @@ jobs:
         run: |
           docker build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:ci .
           test "$(docker image inspect --format '{{.Architecture}}' localhost/contributor-runner:ci)" = "${{ matrix.arch }}"
+      - name: Freeze the exact built image used for import smokes
+        run: |
+          image_id=$(docker image inspect --format '{{.Id}}' localhost/contributor-runner:ci)
+          test "$(docker image inspect --format '{{.Architecture}}' "$image_id")" = "${{ matrix.arch }}"
+          printf 'IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
       - name: Gate built runner on secret scanning (never upload matches)
         env:
           CONTAINER_ENGINE: docker
@@ -51,7 +56,7 @@ jobs:
         run: |
           for workload in guidellm-smoke aiperf-smoke; do
             python3 tests/contributor_import_smoke.py \
-              --engine docker --image localhost/contributor-runner:ci \
+              --engine docker --image "$IMAGE_ID" \
               --arch ${{ matrix.arch }} --workload "$workload"
           done
       - name: Exercise Forge failure finalizers in the built image

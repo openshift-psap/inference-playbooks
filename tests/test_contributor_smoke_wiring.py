@@ -104,3 +104,50 @@ def test_request_reference_never_presents_a_config_id_as_a_manifest_digest(monke
     assert reference == driver.SYNTHETIC_RUNNER_IMAGE
     assert source == 'synthetic-fixture'
     assert config_id.split(':')[1] not in reference
+
+
+def test_frozen_docker_id_uses_a_recorded_repo_digest(monkeypatch):
+    image_id = 'sha256:' + '1' * 64
+    digest = 'sha256:' + '2' * 64
+    recorded = 'localhost/contributor-runner@' + digest
+
+    def inspect(engine, image, template):
+        assert image == image_id, 'attribution must inspect the frozen ID that executed'
+        return '["' + recorded + '"]' if template == '{{json .RepoDigests}}' else ''
+
+    monkeypatch.setattr(driver, 'inspect', inspect)
+    assert driver.request_runner_image('docker', image_id) == (recorded, 'local-manifest-digest')
+
+
+def test_frozen_docker_id_without_a_recorded_repository_is_synthetic(monkeypatch):
+    image_id = 'sha256:' + '3' * 64
+    monkeypatch.setattr(driver, 'inspect', lambda engine, image, template: '[]')
+    reference, source = driver.request_runner_image('docker', image_id)
+    assert (reference, source) == (driver.SYNTHETIC_RUNNER_IMAGE, 'synthetic-fixture')
+    assert image_id.split(':')[1] not in reference
+
+
+def test_bare_podman_frozen_id_uses_a_recorded_repo_digest(monkeypatch):
+    # Podman omits the sha256: prefix from {{.Id}}.
+    image_id = '4' * 64
+    digest = 'sha256:' + '5' * 64
+    recorded = 'localhost/contributor-runner@' + digest
+
+    def inspect(engine, image, template):
+        return '["' + recorded + '"]' if template == '{{json .RepoDigests}}' else digest
+
+    monkeypatch.setattr(driver, 'inspect', inspect)
+    assert driver.request_runner_image('podman', image_id) == (recorded, 'local-manifest-digest')
+
+
+def test_frozen_podman_id_without_a_recorded_repository_never_invents_one(monkeypatch):
+    image_id = '6' * 64
+    digest = 'sha256:' + '7' * 64
+
+    def inspect(engine, image, template):
+        return digest if template == '{{.Digest}}' else '[]'
+
+    monkeypatch.setattr(driver, 'inspect', inspect)
+    reference, source = driver.request_runner_image('podman', image_id)
+    assert (reference, source) == (driver.SYNTHETIC_RUNNER_IMAGE, 'synthetic-fixture')
+    assert digest.split(':')[1] not in reference
