@@ -1,4 +1,6 @@
 # Build from repository root. Publish separately, then prepare packages using its digest.
+# The base image is a multi-platform index; build per architecture with
+# `--arch amd64|arm64` (or the default builder architecture).
 FROM docker.io/library/python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
 
 LABEL org.opencontainers.image.source="https://github.com/openshift-psap/inference-playbooks" \
@@ -9,44 +11,61 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp USER=contributor \
     PYTHONPATH=/opt/forge:/opt/playbooks/tools PATH=/opt/forge/bin:$PATH
 
 COPY benchmarks/runner/requirements.lock /opt/requirements.lock
+# Hash-locked wheels/sdists; the same lock installs on linux/amd64 and linux/arm64.
 RUN python -m pip install --no-cache-dir --require-hashes -r /opt/requirements.lock
 
-# Both downloaded archives are fixed and verified before extraction. No moving refs.
+# The OpenShift CLI is architecture-specific. The source table pins one fixed
+# URL and SHA-256 per platform; the build verifies the archive checksum, the
+# ELF machine, and that the installed binary runs and reports the pinned version.
+# The helper is used once and removed from the final filesystem; the layer that
+# added it remains in image history, as it does for every deleted COPY.
+COPY --chmod=0644 benchmarks/runner/platforms.json benchmarks/runner/verify_arch.py /opt/runner-arch/
+ARG TARGETARCH
+RUN set -eux; \
+    image_arch="$(dpkg --print-architecture)"; \
+    arch="${TARGETARCH:-$image_arch}"; \
+    python /opt/runner-arch/verify_arch.py install \
+        --manifest /opt/runner-arch/platforms.json \
+        --arch "$arch" --image-arch "$image_arch" \
+        --destination /usr/local/bin/oc; \
+    rm -f /opt/runner-arch/platforms.json /opt/runner-arch/verify_arch.py; \
+    rmdir /opt/runner-arch
+
+# The Forge archive is fixed and verified before extraction. No moving refs.
 RUN python - <<'PY'
 import hashlib, io, pathlib, tarfile, urllib.request
 revision = 'df3c14a5eab5e8f502402f51c48765b35067fca8'
-sources = [
-    ('https://codeload.github.com/thameem-abbas/forge/tar.gz/' + revision,
-     'af97c678b08cd802d2aeafed6e238a228f1de525977c7c5c80bdfcd5eec3f47e', '/opt/forge'),
-    ('https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.19.0/openshift-client-linux-4.19.0.tar.gz',
-     'c90254d7ededb6da4f6d3911fbe6d7d2e35654a480d684f5d2e502e8be7cd6fd', None),
-]
-for url, expected, destination in sources:
-    with urllib.request.urlopen(url, timeout=120) as response:
-        data = response.read()
-    assert hashlib.sha256(data).hexdigest() == expected, 'archive checksum mismatch'
-    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
-        if destination:
-            for member in archive:
-                parts = pathlib.PurePosixPath(member.name).parts[1:]
-                if not member.isfile() or not parts:
-                    continue
-                assert '..' not in parts
-                path = pathlib.Path(destination).joinpath(*parts)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(archive.extractfile(member).read())
-        else:
-            path = pathlib.Path('/usr/local/bin/oc')
-            path.write_bytes(archive.extractfile('oc').read())
-            path.chmod(0o755)
+url = 'https://codeload.github.com/thameem-abbas/forge/tar.gz/' + revision
+expected = 'af97c678b08cd802d2aeafed6e238a228f1de525977c7c5c80bdfcd5eec3f47e'
+with urllib.request.urlopen(url, timeout=120) as response:
+    data = response.read()
+assert hashlib.sha256(data).hexdigest() == expected, 'archive checksum mismatch'
+with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+    for member in archive:
+        parts = pathlib.PurePosixPath(member.name).parts[1:]
+        if not member.isfile() or not parts:
+            continue
+        assert '..' not in parts
+        path = pathlib.Path('/opt/forge').joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(archive.extractfile(member).read())
 pathlib.Path('/opt/forge/REVISION').write_text(revision + '\n')
 pathlib.Path('/opt/forge/bin/caliper').chmod(0o755)
 PY
 
 # Copy source modules only, never host bytecode caches or local dotfiles.
-COPY tools/*.py /opt/playbooks/tools/
-RUN python /opt/forge/projects/inference_playbooks/orchestration/cli.py --help && \
-    python /opt/playbooks/tools/run_contributor.py --help && oc version --client
+# Explicit modes keep a restrictive host umask from breaking the non-root user.
+COPY --chmod=0644 tools/*.py /opt/playbooks/tools/
+# BuildKit >= v0.21 applies COPY --chmod to the directories it creates, not only
+# to the copied files (moby/buildkit#5943). That leaves these directories
+# readable but not searchable, so the files inside cannot be opened by uid 65532;
+# root still traverses them during the build, which hides the defect until
+# runtime. Re-assert only the directory search bit and probe as the runtime user.
+RUN chmod 0755 /opt/playbooks /opt/playbooks/tools && \
+    python /opt/forge/projects/inference_playbooks/orchestration/cli.py --help && \
+    setpriv --reuid=65532 --regid=65532 --clear-groups \
+        python /opt/playbooks/tools/run_contributor.py --help && \
+    oc version --client
 
 WORKDIR /tmp
 USER 65532:65532

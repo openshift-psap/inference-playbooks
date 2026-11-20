@@ -87,6 +87,15 @@ def test_gate_scans_frozen_image_offline_without_credentials(monkeypatch, capsys
     assert not Path(report_mount.removesuffix(':/reports:Z')).exists()
 
 
+@pytest.mark.parametrize('inspected_id', [IMAGE_ID, CONFIG_ID])
+def test_gate_records_the_exported_config_digest(tmp_path, monkeypatch, inspected_id):
+    fake_engine(monkeypatch, inspected_id=inspected_id)
+    monkeypatch.setenv('CONTAINER_ENGINE', 'docker')
+    identity = tmp_path / 'config-digest'
+    assert scanner.main(['localhost/example:reviewed', '--identity-output', str(identity)]) == 0
+    assert identity.read_text() == CONFIG_ID + '\n'
+
+
 @pytest.mark.parametrize('scenario', ['inspect-error', 'save-error', 'missing-report', 'timeout',
                                     'secret', 'secret-zero-exit', 'scanner-error', 'wrong-image',
                                     'wrong-report', 'invalid-json'])
@@ -138,11 +147,35 @@ def test_invalid_archive_fails_without_printing_contents(monkeypatch, tmp_path, 
 
 def test_build_does_not_copy_host_python_caches():
     containerfile = (REPO / 'benchmarks/runner/Containerfile').read_text()
-    assert 'COPY tools/*.py /opt/playbooks/tools/' in containerfile
+    # Explicit process umask, so a restrictive host umask cannot produce an
+    # image whose source tree is unreadable to the non-root runner user.
+    assert 'COPY --chmod=0644 tools/*.py /opt/playbooks/tools/' in containerfile
     assert 'COPY tools/ /opt/playbooks/tools/' not in containerfile
     ignored = (REPO / '.dockerignore').read_text().splitlines()
     assert '**/__pycache__' in ignored and '**/*.py[cod]' in ignored
     assert '.git' in ignored
+
+
+def test_build_keeps_tool_directories_searchable_for_the_runtime_user():
+    """A readable-but-unsearchable directory breaks the image entry point.
+
+    BuildKit >= v0.21 applies ``COPY --chmod=0644`` to the directories the copy
+    creates (moby/buildkit#5943), so ``/opt/playbooks/tools`` can end up without
+    a search bit. Root traverses it during the build, but uid 65532 cannot, and
+    the entry point fails with ``ModuleNotFoundError`` before any harness runs.
+    """
+    text = (REPO / 'benchmarks/runner/Containerfile').read_text()
+    copy = text.index('COPY --chmod=0644 tools/*.py /opt/playbooks/tools/')
+    # The restore and the probe span continued RUN lines, so match the text
+    # rather than requiring both markers on one physical line.
+    chmod = text.find('chmod 0755 /opt/playbooks /opt/playbooks/tools', copy)
+    probe = text.find('setpriv --reuid=65532', copy)
+    assert chmod != -1, 'directory search bits must be re-asserted after the copy'
+    assert probe != -1, 'the entry point must be probed as the runtime user'
+    assert text.find('run_contributor.py --help', probe) != -1, \
+        'the unprivileged probe must import the packaged entry point'
+    # The mode restore only helps if it lands before the unprivileged probe.
+    assert copy < chmod < probe, 'restore directory search bits before probing as uid 65532'
 
 
 def test_ci_secret_gate_runs_after_build_and_before_smoke_without_publication():
@@ -152,14 +185,17 @@ def test_ci_secret_gate_runs_after_build_and_before_smoke_without_publication():
     assert steps[0]['with']['persist-credentials'] is False
     build = next(index for index, step in enumerate(steps) if 'docker build' in step.get('run', ''))
     gate = next(index for index, step in enumerate(steps) if 'tools/scan_runner_image.py' in step.get('run', ''))
-    smoke = next(index for index, step in enumerate(steps) if 'docker run' in step.get('run', ''))
+    smoke = next(index for index, step in enumerate(steps)
+                 if 'tests/contributor_import_smoke.py' in step.get('run', ''))
     assert build < gate < smoke
+    # No image runs before the gate, including the per-architecture CLI probe.
+    assert all(index > gate for index, step in enumerate(steps) if 'docker run' in step.get('run', ''))
     assert steps[gate]['env'] == {'CONTAINER_ENGINE': 'docker'}
     assert not steps[gate].get('continue-on-error')
     assert not any('push' in step.get('run', '') or 'secrets.' in str(step) for step in steps)
     assert 'tests/test_runner_image_security.py' in steps[1]['run']
     assert 'tests/test_contributor_monitor.py' in steps[1]['run']
-    assert 'tests/contributor_guidellm_cleanup_smoke.py' in steps[smoke]['run']
+    assert any('tests/contributor_guidellm_cleanup_smoke.py' in step.get('run', '') for step in steps[smoke:])
     precommit = yaml.safe_load((REPO / '.pre-commit-config.yaml').read_text())
     hook = next(hook for repo in precommit['repos'] for hook in repo.get('hooks', [])
                 if hook['id'] == 'contributor-bundles')

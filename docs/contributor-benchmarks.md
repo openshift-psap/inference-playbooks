@@ -325,9 +325,21 @@ under durable retention, not an expiring intake policy.
   `df3c14a5eab5e8f502402f51c48765b35067fca8`, based on PR #322 and published
   on `thameem-abbas/forge` branch `fix/guidellm-failure-cleanup`. Archives/base image are pinned and
   checksummed; Python dependencies are hash-locked.
+- Runner image architectures: one Containerfile builds `linux/amd64` and
+  `linux/arm64` from the same digest-pinned base and the same hash-locked
+  dependency set. The architecture-specific OpenShift CLI is selected from
+  [`benchmarks/runner/platforms.json`](../benchmarks/runner/platforms.json) and
+  verified at build time (archive SHA-256, ELF machine, and a live
+  `oc version --client` probe). CI builds, scans, and runs the synthetic
+  harness/cleanup/import proofs natively on both architectures. The published
+  default digest is still the AMD64 image; the multi-architecture release
+  workflow exists but no ARM64/multi-architecture release is published yet, so
+  do not substitute an unverified image or digest.
 - Optional native runner: Apple Silicon macOS with Python 3.12, the matching
   macOS ARM64 OpenShift CLI 4.19.0, and the same pinned Forge revision. It uses
-  the same hash-locked dependencies as the Linux image.
+  the same hash-locked dependencies as the Linux image. The Linux runner image
+  can also run through a macOS podman machine; see [runner release](#runner-release)
+  for its unvalidated status and acceptance gate.
 - One platform and one self-contained manifest containing one Deployment,
   LeaderWorkerSet, or PVC-backed LLMInferenceService. Authored Services, companion
   objects, P/D, InferenceService, custom DRA, LLMInferenceService hostPath volumes,
@@ -444,23 +456,64 @@ location; removing size caps does not change repository publication policy.
 Run from the repository root. These tests use synthetic data, not model evidence:
 
 ```sh
-python3 -m pytest tests/test_contributor.py tests/test_contributor_monitor.py tests/test_runner_image_security.py -q
+python3 -m pytest tests/test_contributor.py tests/test_contributor_monitor.py \
+  tests/test_runner_image_security.py tests/test_runner_image_platform.py -q
 podman build -f benchmarks/runner/Containerfile -t localhost/contributor-runner:test .
 python3 tools/scan_runner_image.py localhost/contributor-runner:test
 podman run --rm --network none --entrypoint python \
   -v "$PWD/tests/contributor_guidellm_cleanup_smoke.py:/cleanup-smoke.py:ro,Z" \
   localhost/contributor-runner:test /cleanup-smoke.py
-podman run --rm --network none --entrypoint python \
-  -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,z" \
-  localhost/contributor-runner:test /smoke.py
-podman run --rm --network none --entrypoint python -e SMOKE_HARNESS=aiperf \
-  -v "$PWD/tests/contributor_container_smoke.py:/smoke.py:ro,z" \
-  localhost/contributor-runner:test /smoke.py
+python3 tests/contributor_import_smoke.py --engine podman \
+  --image localhost/contributor-runner:test --arch amd64 --workload guidellm-smoke
 ```
 
-Both smoke tests invoke the real Forge CLI and Caliper; only Kubernetes and
+`tests/contributor_import_smoke.py` closes the container/host boundary. It
+commits the shared synthetic recipe, prepares the same package a contributor
+receives, runs the built image to produce `evidence.tar.gz` with synthetic jobs,
+then runs the real maintainer importer's dry-run plan against that exact archive
+and committed revision. The archive the container wrote is what import
+validates; nothing is imported inside the image. Repeat with
+`--workload aiperf-smoke` for the second harness.
+
+Runtime execution is frozen to the image ID resolved once from `--image`, so a
+tag retarget cannot change what ran. The request's `runner_image` records the
+local manifest digest when the engine exposes one (podman does for a local
+build). A locally built docker image has no registry manifest digest, so that
+field is then an explicitly synthetic fixture reference rather than a config ID
+misrepresented as a digest.
+
+The container smokes invoke the real Forge CLI and Caliper; only Kubernetes and
 benchmark Jobs are simulated. Rerun these proofs after pin/CLI/dependency changes.
 Regenerate `requirements.lock` from `requirements.in` deliberately, not at runtime.
+
+The driver's `--arch` sets `SMOKE_EXPECTED_ARCH` inside the container, which
+asserts the image userland, the ELF machine of the installed `oc`, and that the
+CLI runs. Build the matching image first:
+
+```sh
+podman build --arch amd64 -f benchmarks/runner/Containerfile -t localhost/contributor-runner:amd64 .
+podman build --arch arm64 -f benchmarks/runner/Containerfile -t localhost/contributor-runner:arm64 .
+python3 tests/contributor_import_smoke.py --engine podman \
+  --image localhost/contributor-runner:arm64 --arch arm64 --workload guidellm-smoke
+```
+
+Cross-building for ARM64 needs an ARM64 builder or a registered QEMU/binfmt
+emulator; every `RUN` step, including the `oc` runtime probe, executes inside the
+target userland. Do not publish an image that was only cross-built and never
+scanned or smoke-tested. A native ARM64 host is the stronger proof.
+
+Bundle import stays a host-side maintainer step: the importer needs Git to bind
+the archived input closure to the tested commit, and the runner image
+deliberately does not ship Git. The developer driver crosses that boundary
+explicitly, so container-produced evidence is validated by the same importer
+used for contributor intake:
+
+```sh
+for workload in guidellm-smoke aiperf-smoke; do
+  python3 tests/contributor_import_smoke.py --engine podman \
+    --image localhost/contributor-runner:test --arch amd64 --workload "$workload"
+done
+```
 
 On Apple Silicon with Python 3.12, run the same request/import tests and native
 Forge/Caliper smokes without a container engine:
@@ -471,8 +524,11 @@ python3.12 -m pytest tests/test_contributor.py -q
 python3.12 tests/contributor_macos_smoke.py
 ```
 
-The native smoke downloads the pinned Forge archive and OpenShift CLI, then
-exercises GuideLLM, AIPerf, and cleanup with synthetic Kubernetes calls.
+The native smoke downloads the pinned Forge archive and OpenShift CLI, commits
+the native runner inputs, prepares a package for each smoke workload, and then
+drives the same shared smoke entry point as the container proof. It exercises
+GuideLLM, AIPerf, and cleanup with synthetic Kubernetes calls. Native macOS mode
+is still supported and is not replaced by the container path yet.
 
 ### Development runner override
 
@@ -518,16 +574,89 @@ printed or uploaded.
 CI runs the same command after the runner build and fails on secret findings,
 scanner errors, missing reports, or an image-identity mismatch. PR CI never
 publishes images. Do not rebuild or move a tag between successful scanning and
-publication; future publication automation must depend on this gate succeeding.
+publication; the runner release workflow depends on this gate succeeding before
+it pushes. Multi-architecture publication is described under
+[runner release](#runner-release).
 
 Host `__pycache__`/bytecode is excluded from the build context, and the runner
-copies only `tools/*.py`. Both container smoke tests check that no host Python
-caches entered `/opt/playbooks/tools`.
+copies only `tools/*.py`. The container smoke checks that no host Python caches
+entered `/opt/playbooks/tools`.
 
 This gate uses Trivy's built-in secret rules and allowlists/base-layer exclusions.
 It is not an exhaustive all-layer forensic audit, vulnerability scan, or guarantee
 of credential absence. Review changes to scanner pins and build inputs before
 publication; do not add broad exclusions merely to silence a finding.
+
+### Architecture support
+
+One Containerfile builds `linux/amd64` and `linux/arm64`. The base image is a
+multi-platform OCI index pinned by digest, so both builds share the same userland
+release. [`benchmarks/runner/requirements.lock`](../benchmarks/runner/requirements.lock)
+is installed with `--require-hashes` on both architectures; a missing ARM64 wheel
+fails the build instead of silently compiling or dropping a pin.
+
+The OpenShift CLI is the only architecture-specific download, selected from
+[`benchmarks/runner/platforms.json`](../benchmarks/runner/platforms.json):
+
+| Architecture | Client archive | SHA-256 |
+| --- | --- | --- |
+| `amd64` | https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.19.0/openshift-client-linux-4.19.0.tar.gz (unchanged pin) | `c90254d7ededb6da4f6d3911fbe6d7d2e35654a480d684f5d2e502e8be7cd6fd` |
+| `arm64` | https://mirror.openshift.com/pub/openshift-v4/aarch64/clients/ocp/4.19.0/openshift-client-linux-arm64-rhel9-4.19.0.tar.gz | `45425ad184d0f12f34d7038ed7061880ec5bb083356f4d1c735047e961c0042b` |
+
+[`benchmarks/runner/verify_arch.py`](../benchmarks/runner/verify_arch.py) fails
+the build unless the archive checksum matches, the extracted `oc` declares the
+target ELF machine, the declared build target agrees with the image architecture,
+and the installed binary runs and reports `Client Version: 4.19.0`. The ARM64
+client is the RHEL9 build, which requires glibc >= 2.34; the pinned Debian
+bookworm base image provides a newer glibc.
+
+CI runs one native job per architecture (`ubuntu-latest` for AMD64 and
+`ubuntu-24.04-arm` for ARM64): dependency and runner-contract tests, the image
+build, an image-architecture assertion, the OpenShift CLI probe, the Trivy
+secret-scan gate, container-produced evidence for both smoke harnesses imported
+by the real host importer, and the cleanup smoke. If ARM64 hosted runners are
+unavailable in a fork, run that matrix leg on a real ARM64 machine with a
+container engine rather than relying on an untested cross-build.
+
+Multi-architecture publication is implemented by the manually dispatched
+Runner release workflow, but no multi-architecture release is published yet.
+`benchmarks/runner/release.json` therefore still selects the v0.1.2 AMD64 image.
+
+#### Runner release
+
+[`runner-release.yml`](../.github/workflows/runner-release.yml) is manual,
+main-branch only, and requires the exact confirm value `publish`. It builds
+`linux/amd64` and `linux/arm64` natively, disables provenance and SBOM
+attestations so each pushed platform reference is one image manifest, freezes
+the local image ID, runs the secret-scan gate, both import smokes, and the
+Forge failure-cleanup smoke against that frozen ID, refuses to overwrite an
+existing version or per-architecture tag, and then pushes the platform tags. A
+second job assembles and verifies the multi-architecture index from the
+verified child manifests and uploads a candidate `release.json`; it does not
+modify the committed default.
+
+Because Docker's containerd image store can report an index digest as the local
+image ID, the workflow records the publication identity separately: the config
+digest derived from the exported scanned image. The pushed manifest must
+reference that config digest. `runner_release.py guard-tag` fails closed when
+the registry does not positively report that a tag is absent, so an
+authorization or network failure is never treated as a free tag.
+
+To publish, merge the release tooling to `main`, then dispatch the workflow
+with the target version and `confirm=publish`. Download the candidate artifact,
+review it, and update `benchmarks/runner/release.json` through a normal pull
+request. Until that reviewed change lands, contributors continue to use the
+recorded v0.1.2 AMD64 digest.
+
+macOS with Podman is implemented by the generated launcher and smoke driver:
+Podman is required, Docker Desktop and other VM-based Docker engines are
+rejected, and SELinux relabel options are omitted across the podman machine's
+virtiofs boundary. Hosted macOS CI cannot start a podman machine, so this path
+has not been validated end to end on real Apple Silicon hardware. Run
+`tests/contributor_macos_podman_smoke.py --image <digest>` on Apple Silicon with
+a running podman machine and record the observed macOS, Podman, and image
+versions before treating that combination as verified. Native `macos-arm64`
+mode remains the verified optional path and does not use Podman.
 
 ## Contributor benchmark execution example
 

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "ocp_version": "4.19.0",
+  "platforms": {
+    "amd64": {
+      "machine": "x86_64",
+      "elf_machine": 62,
+      "url": "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.19.0/openshift-client-linux-4.19.0.tar.gz",
+      "sha256": "c90254d7ededb6da4f6d3911fbe6d7d2e35654a480d684f5d2e502e8be7cd6fd",
+      "archive_member": "oc",
+      "notes": "Unchanged AMD64 client previously baked into the published runner."
+    },
+    "arm64": {
+      "machine": "aarch64",
+      "elf_machine": 183,
+      "url": "https://mirror.openshift.com/pub/openshift-v4/aarch64/clients/ocp/4.19.0/openshift-client-linux-arm64-rhel9-4.19.0.tar.gz",
+      "sha256": "45425ad184d0f12f34d7038ed7061880ec5bb083356f4d1c735047e961c0042b",
+      "archive_member": "oc",
+      "notes": "RHEL9 client; requires glibc >= 2.34, satisfied by the Debian bookworm userland."
+    }
+  }
+}

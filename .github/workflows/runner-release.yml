@@ -1,0 +1,217 @@
+name: Runner release
+
+# Trusted, manual publication only. There is deliberately no pull_request or
+# push trigger: PR CI builds and scans candidate images but never publishes.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, for example v0.2.0'
+        required: true
+        type: string
+      confirm:
+        description: 'Type publish to confirm GHCR writes'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-release
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  RUNNER_REPOSITORY: ghcr.io/openshift-psap/inference-playbooks-runner
+
+jobs:
+  guard:
+    name: Require trusted main-branch confirmation
+    if: github.repository == 'openshift-psap/inference-playbooks' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation and release version
+        env:
+          VERSION: ${{ inputs.version }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != publish ]; then
+            echo 'Refusing publication: confirm must be exactly "publish".' >&2
+            exit 1
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            echo 'Refusing publication: version must look like v0.2.0.' >&2
+            exit 1
+          fi
+
+  publish-platform:
+    name: Build, scan, and publish linux/${{ matrix.arch }}
+    needs: guard
+    if: github.repository == 'openshift-psap/inference-playbooks' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-latest
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Verify runner contracts before publishing
+        run: |
+          python3 -m pip install -r tools/requirements.txt pytest==8.3.4
+          python3 -m pytest tests/test_contributor.py tests/test_contributor_monitor.py \
+            tests/test_runner_image_security.py tests/test_runner_image_platform.py \
+            tests/test_contributor_smoke_wiring.py tests/test_runner_release.py \
+            tests/test_maintain_contributor.py -q
+      - name: Build the native linux/${{ matrix.arch }} runner
+        run: |
+          # No provenance or SBOM attestations: the pushed platform manifest
+          # must be exactly one image manifest whose config we can verify.
+          docker build --provenance=false --sbom=false \
+            -f benchmarks/runner/Containerfile \
+            -t "localhost/contributor-runner:release-${{ matrix.arch }}" .
+          test "$(docker image inspect --format '{{.Architecture}}' \
+            localhost/contributor-runner:release-${{ matrix.arch }})" = "${{ matrix.arch }}"
+      - name: Freeze the exact image that will be scanned and published
+        run: |
+          image_id=$(docker image inspect --format '{{.Id}}' \
+            "localhost/contributor-runner:release-${{ matrix.arch }}")
+          test "$(docker image inspect --format '{{.Architecture}}' "$image_id")" \
+            = "${{ matrix.arch }}"
+          forge_revision=$(docker image inspect --format \
+            '{{index .Config.Labels "dev.inference-playbooks.forge-revision"}}' "$image_id")
+          printf 'IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
+          printf 'FORGE_REVISION=%s\n' "$forge_revision" >> "$GITHUB_ENV"
+      - name: Gate the frozen image on secret scanning
+        env:
+          CONTAINER_ENGINE: docker
+        run: |
+          python3 tools/scan_runner_image.py "$IMAGE_ID" \
+            --identity-output "$RUNNER_TEMP/scanned-config-digest"
+      - name: Record the exported config digest of the scanned image
+        run: |
+          config_digest=$(cat "$RUNNER_TEMP/scanned-config-digest")
+          printf '%s' "$config_digest" | grep -Eq '^sha256:[a-f0-9]{64}$'
+          printf 'CONFIG_DIGEST=%s\n' "$config_digest" >> "$GITHUB_ENV"
+      - name: Prove the frozen image runs and imports evidence natively
+        env:
+          CONTAINER_ENGINE: docker
+        run: |
+          for workload in guidellm-smoke aiperf-smoke; do
+            python3 tests/contributor_import_smoke.py --engine docker \
+              --image "$IMAGE_ID" \
+              --arch "${{ matrix.arch }}" --workload "$workload"
+          done
+      - name: Exercise Forge failure finalizers in the frozen image
+        run: |
+          docker run --rm --network none --entrypoint python \
+            -v "$PWD/tests/contributor_guidellm_cleanup_smoke.py:/cleanup-smoke.py:ro" \
+            "$IMAGE_ID" /cleanup-smoke.py
+      - name: Re-check the frozen identity immediately before publication
+        run: |
+          test "$(docker image inspect --format '{{.Id}}' "$IMAGE_ID")" = "$IMAGE_ID"
+      - name: Log in to the container registry with the workflow token
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login "$REGISTRY" \
+            --username "${{ github.actor }}" --password-stdin
+      - name: Refuse to overwrite an existing immutable platform tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 tools/runner_release.py guard-tag \
+            --reference "$RUNNER_REPOSITORY:$VERSION-${{ matrix.arch }}" --engine docker
+      - name: Publish exactly the scanned image as a platform tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          reference="$RUNNER_REPOSITORY:$VERSION-${{ matrix.arch }}"
+          docker tag "$IMAGE_ID" "$reference"
+          docker push "$reference"
+          docker buildx imagetools inspect "$reference" --raw \
+            > "$RUNNER_TEMP/published-${{ matrix.arch }}.json"
+      - name: Verify the published manifest references the scanned image config
+        run: |
+          mkdir -p "platform-${{ matrix.arch }}"
+          python3 tools/runner_release.py verify-published \
+            --manifest "$RUNNER_TEMP/published-${{ matrix.arch }}.json" \
+            --config-digest "$CONFIG_DIGEST" \
+            --executed-image-id "$IMAGE_ID" --arch "${{ matrix.arch }}" \
+            --forge-revision "$FORGE_REVISION" \
+            --output "platform-${{ matrix.arch }}/digests.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-${{ matrix.arch }}
+          path: platform-${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble-index:
+    name: Assemble and verify the published index
+    needs: publish-platform
+    if: github.repository == 'openshift-psap/inference-playbooks' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install release tooling dependencies
+        run: python3 -m pip install -r tools/requirements.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: platform-*
+          path: platforms
+          merge-multiple: false
+      - name: Log in to the container registry with the workflow token
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login "$REGISTRY" \
+            --username "${{ github.actor }}" --password-stdin
+      - name: Publish the index from the verified child manifests and record the candidate
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          python3 tools/runner_release.py assemble \
+            --repository "$RUNNER_REPOSITORY" \
+            --version "$VERSION" \
+            --platforms platforms \
+            --source-revision "$SOURCE_REVISION" \
+            --engine docker \
+            --output dist
+      - name: Record that the default release was not changed
+        run: |
+          git diff --exit-code -- benchmarks/runner/release.json
+          {
+            echo '### Runner release candidate'
+            echo
+            echo 'This workflow records a candidate only. `benchmarks/runner/release.json`'
+            echo 'was not modified and no default changed. Commit it through a reviewed PR'
+            echo 'after downloading and checking this artifact.'
+            echo
+            echo '```json'
+            cat dist/release.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runner-release-candidate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30

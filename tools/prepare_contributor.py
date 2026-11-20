@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shlex
 import shutil
 import subprocess
@@ -12,9 +11,10 @@ import sys
 import uuid
 from pathlib import Path
 
-from contributor_bundle import FORGE_REVISION, IMAGE, WORKLOADS, checksum, json_bytes, json_load, shareable, validate_request
+from contributor_bundle import FORGE_REVISION, WORKLOADS, checksum, json_bytes, json_load, shareable, validate_request
 from fetch_forge_evidence import tested_inputs
 from recipe_evidence import load_unique_yaml, load_unique_yaml_all
+from runner_release import validate_release
 
 # Host-side release metadata is recorded after publication, not baked into itself.
 RELEASE_FILE = Path(__file__).resolve().parents[1] / 'benchmarks/runner/release.json'
@@ -26,19 +26,14 @@ MACOS_RUNNER_MODULES = (
 
 
 def released_runner_image():
-    """Use the recorded immutable release; no tag resolution or network access."""
+    """Use the recorded immutable release; no tag resolution or network access.
+
+    Schema version 1 is the original single AMD64 release. Schema version 2 adds
+    one child manifest digest per architecture; the returned reference is always
+    the multi-platform index, never a platform tag.
+    """
     release = json_load(RELEASE_FILE.read_bytes())
-    if (not isinstance(release, dict) or type(release.get('schema_version')) is not int or release['schema_version'] != 1
-            or release.get('forge_revision') != FORGE_REVISION):
-        raise ValueError('runner release metadata is unsupported or uses a different Forge revision')
-    image, version = release.get('image', ''), release.get('version', '')
-    source_revision = release.get('source_revision', '')
-    if (not isinstance(image, str) or not re.fullmatch(IMAGE, image)
-            or not isinstance(version, str) or not re.fullmatch(r'v[0-9]+\.[0-9]+(?:\.[0-9]+)?', version)
-            or release.get('tag') != image.split('@', 1)[0] + ':' + version
-            or not isinstance(source_revision, str) or not re.fullmatch(r'[a-f0-9]{40}', source_revision)):
-        raise ValueError('runner release must record a consistent tag, digest, and source revision')
-    return image
+    return validate_release(release)['image']
 
 
 def git(repo, *args):
@@ -139,24 +134,65 @@ if [ "$#" -ne 4 ]; then
   echo "Usage: $0 KUBECONFIG CONTEXT NAMESPACE NEW_OUTPUT_DIRECTORY" >&2
   exit 2
 fi
-package=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-kubeconfig=$(realpath -- "$1")
+# Resolve paths with portable shell builtins. macOS ships no GNU realpath.
+package=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+kubeconfig=$1
+case "$kubeconfig" in
+  /*) ;;
+  *) kubeconfig=$PWD/$kubeconfig ;;
+esac
+kubeconfig_dir=$(CDPATH= cd -- "$(dirname -- "$kubeconfig")" && pwd -P) || {
+  echo "Kubeconfig directory does not exist" >&2; exit 2;
+}
+kubeconfig=$kubeconfig_dir/$(basename -- "$kubeconfig")
 [ -f "$kubeconfig" ] || { echo "Kubeconfig must be a regular file" >&2; exit 2; }
-output=$(realpath -m -- "$4")
-mkdir -- "$output"
-chmod 700 "$output"
+
+platform=$(uname -s)
 engine=${CONTAINER_ENGINE:-}
 if [ -z "$engine" ]; then
   if command -v podman >/dev/null 2>&1; then engine=podman; else engine=docker; fi
 fi
-userns=
-if [ "$(basename -- "$engine")" = podman ]; then userns=--userns=keep-id; fi
-exec "$engine" run --rm --init --network host --user "$(id -u):$(id -g)" \\
+engine_name=$(basename -- "$engine")
+case "$engine_name" in
+  podman|podman-remote) userns=--userns=keep-id ;;
+  docker) userns= ;;
+  *) echo "Unsupported container engine: $engine_name (use Podman or Docker)" >&2; exit 2 ;;
+esac
+network=--network=host
+input_mount_options=:ro,Z
+output_mount_options=:Z
+if [ "$platform" = Darwin ]; then
+  case "$engine_name" in
+    podman|podman-remote) ;;
+    *) echo "macOS requires the Podman CLI with a running podman machine. Docker Desktop, Colima, and other VM-based Docker engines are not supported." >&2; exit 2 ;;
+  esac
+  command -v "$engine" >/dev/null 2>&1 || { echo "Podman CLI not found: $engine" >&2; exit 2; }
+  "$engine" info >/dev/null 2>&1 || {
+    echo "Podman CLI cannot reach a podman machine; run 'podman machine start' and retry." >&2
+    exit 2
+  }
+  # The podman machine is a Linux VM: --network host would select the VM network
+  # namespace (not the Mac), and SELinux relabeling does not apply to virtiofs.
+  network=
+  input_mount_options=:ro
+  output_mount_options=
+else
+  command -v "$engine" >/dev/null 2>&1 || { echo "Container engine not found: $engine" >&2; exit 2; }
+fi
+output=$4
+case "$output" in
+  /*) ;;
+  *) output=$PWD/$output ;;
+esac
+mkdir -- "$output"
+chmod 700 "$output"
+output=$(CDPATH= cd -- "$output" && pwd -P)
+exec "$engine" run --rm --init ${network:+"$network"} --user "$(id -u):$(id -g)" \\
   ${userns:+"$userns"} \\
   --cap-drop ALL --security-opt no-new-privileges \\
   -e KUBECONFIG=/credentials/kubeconfig \\
   -e HTTP_PROXY -e HTTPS_PROXY -e NO_PROXY -e http_proxy -e https_proxy -e no_proxy \\
-  -v "$package:/inputs:ro,Z" -v "$kubeconfig:/credentials/kubeconfig:ro" -v "$output:/outputs:Z" \\
+  -v "$package:/inputs$input_mount_options" -v "$kubeconfig:/credentials/kubeconfig:ro" -v "$output:/outputs$output_mount_options" \\
   IMAGE --context "$2" --namespace "$3"
 '''.replace('  IMAGE ', '  ' + shlex.quote(runner_image) + ' ')
     (output / 'run.sh').write_text(launcher)
