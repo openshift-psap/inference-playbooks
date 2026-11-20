@@ -20,6 +20,7 @@ from pathlib import Path
 from contributor_bundle import FORGE_REVISION, IMAGE, json_bytes, json_load
 
 VERSION = re.compile(r'v[0-9]+\.[0-9]+(?:\.[0-9]+)?')
+NIGHTLY_VERSION = re.compile(r'nightly-[0-9]{8}-[a-f0-9]{40}-[0-9]+-[0-9]+')
 REVISION = re.compile(r'[a-f0-9]{40}')
 DIGEST = re.compile(r'sha256:[a-f0-9]{64}')
 REPOSITORY = re.compile(r'[^\s/@]+(?:/[^\s/@]+)+')
@@ -54,7 +55,7 @@ def repository_of(reference: str) -> str:
     return reference.split('@', 1)[0]
 
 
-def validate_release(document) -> dict:
+def validate_release(document, *, nightly: bool = False) -> dict:
     """Validate release metadata and return its normalized fields.
 
     Schema version 1 records the single published AMD64 image and remains valid.
@@ -71,12 +72,15 @@ def validate_release(document) -> dict:
     source_revision = document.get('source_revision')
     if not isinstance(image, str) or not re.fullmatch(IMAGE, image):
         raise ReleaseError('runner release must record a digest-pinned image')
-    if not isinstance(version, str) or not VERSION.fullmatch(version):
+    pattern = NIGHTLY_VERSION if nightly else VERSION
+    if not isinstance(version, str) or not pattern.fullmatch(version):
         raise ReleaseError('runner release must record a version')
     if document.get('tag') != image.split('@', 1)[0] + ':' + version:
         raise ReleaseError('runner release must record a consistent tag, digest, and version')
     if not isinstance(source_revision, str) or not REVISION.fullmatch(source_revision):
         raise ReleaseError('runner release must record a 40-character source revision')
+    if nightly and version.split('-')[2] != source_revision:
+        raise ReleaseError('nightly tag must identify the recorded source revision')
     result = {'schema_version': document['schema_version'], 'image': image, 'version': version,
               'tag': document['tag'], 'forge_revision': FORGE_REVISION,
               'source_revision': source_revision, 'platforms': {}}
@@ -212,7 +216,7 @@ def verify_child(child: bytes, record: dict) -> None:
 
 
 def release_document(repository: str, version: str, index_digest: str, platforms: dict,
-                     source_revision: str) -> dict:
+                     source_revision: str, *, nightly: bool = False) -> dict:
     """Build candidate schema-version-2 metadata from verified values only."""
     if not isinstance(repository, str) or not re.fullmatch(REPOSITORY, repository) or '@' in repository:
         raise ReleaseError('runner release repository must be a registry path without a tag or digest')
@@ -226,7 +230,7 @@ def release_document(repository: str, version: str, index_digest: str, platforms
         'platforms': {arch: {'image': repository + '@' + platforms[arch]['manifest_digest']}
                       for arch in ARCHITECTURES},
     }
-    validate_release(document)
+    validate_release(document, nightly=nightly)
     return document
 
 
@@ -281,18 +285,24 @@ def load_platforms(platforms_dir: Path) -> dict:
 
 
 def assemble(repository: str, version: str, platforms_dir: Path, source_revision: str,
-             output: Path, engine: str = 'docker', run=subprocess.run) -> dict:
+             output: Path, engine: str = 'docker', run=subprocess.run, *, nightly: bool = False) -> dict:
     """Publish the index from verified child manifests and record candidate metadata.
 
     The child images must already have been published by the caller. This step
     only assembles an index that references those exact manifest digests, then
-    verifies the published bytes. It never modifies the default release file.
+    verifies the published bytes. Nightly publication then copies the verified
+    index digest to the moving alias and checks it again. Neither channel modifies
+    the default release file.
     """
-    if not isinstance(version, str) or not VERSION.fullmatch(version):
-        raise ReleaseError('runner release version must look like v0.2.0')
+    pattern = NIGHTLY_VERSION if nightly else VERSION
+    if not isinstance(version, str) or not pattern.fullmatch(version):
+        raise ReleaseError('runner release version is invalid for the selected channel')
     if not isinstance(source_revision, str) or not REVISION.fullmatch(source_revision):
         raise ReleaseError('runner release source revision must be a 40-character Git SHA')
     platforms = load_platforms(platforms_dir)
+    # Validate all metadata before any registry write (including nightly SHA binding).
+    release_document(repository, version, 'sha256:' + '0' * 64, platforms,
+                     source_revision, nightly=nightly)
     tag = repository + ':' + version
     guard_tag(tag, engine, run)
     children = [repository + '@' + platforms[arch]['manifest_digest'] for arch in ARCHITECTURES]
@@ -306,13 +316,23 @@ def assemble(repository: str, version: str, platforms_dir: Path, source_revision
                       repository + '@' + platforms[arch]['manifest_digest'], '--raw'], run)
         verify_child(child, platforms[arch])
         child_documents[arch] = child
-    document = release_document(repository, version, index_digest, platforms, source_revision)
+    document = release_document(repository, version, index_digest, platforms, source_revision,
+                                nightly=nightly)
     output.mkdir(parents=True, exist_ok=True)
     (output / 'release.json').write_bytes(json_bytes(document))
     (output / 'index.json').write_bytes(index)
     for arch in ARCHITECTURES:
         (output / f'child-{arch}.json').write_bytes(child_documents[arch])
         (output / f'platform-{arch}.json').write_bytes(json_bytes(platforms[arch]))
+    if nightly:
+        # Copy the verified index by digest, never rebuild from mutable platform tags.
+        alias = repository + ':nightly'
+        _run([engine, 'buildx', 'imagetools', 'create', '-t', alias, document['image']], run)
+        promoted = _run([engine, 'buildx', 'imagetools', 'inspect', alias, '--raw'], run)
+        verify_index(promoted, index_digest, platforms)
+        (output / 'nightly-promotion.json').write_bytes(json_bytes({
+            'tag': alias, 'image': document['image'], 'source_revision': source_revision,
+        }))
     return {'release': document, 'index_digest': index_digest,
             'platform_digests': {arch: platforms[arch]['manifest_digest'] for arch in ARCHITECTURES}}
 
@@ -344,6 +364,8 @@ def main(argv=None):
     assembly.add_argument('--source-revision', required=True)
     assembly.add_argument('--engine', default='docker')
     assembly.add_argument('--output', type=Path, required=True)
+    assembly.add_argument('--nightly', action='store_true',
+                          help='publish a unique nightly tag and promote the verified index to nightly')
 
     args = parser.parse_args(argv)
     try:
@@ -359,7 +381,7 @@ def main(argv=None):
             print(f'Tag is available: {args.reference}')
         else:
             summary = assemble(args.repository, args.version, args.platforms,
-                               args.source_revision, args.output, engine=args.engine)
+                               args.source_revision, args.output, engine=args.engine, nightly=args.nightly)
             print(json.dumps(summary, indent=2, sort_keys=True))
     except (OSError, ReleaseError) as error:
         print(f'Runner release verification failed: {error}', file=sys.stderr)
