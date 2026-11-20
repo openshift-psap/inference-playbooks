@@ -21,8 +21,9 @@ import prepare_contributor as preparation
 from contributor_bundle import FORGE_REVISION, json_bytes
 from contributor_fixtures import HARNESS_IMAGES, build_source_repo
 from prepare_contributor import prepare
-from runner_release import (ARCHITECTURES, ReleaseError, assemble, release_document, validate_platform_record,
-                            validate_release, verify_child, verify_index, verify_published)
+from runner_release import (ARCHITECTURES, ReleaseError, assemble, guard_tag, release_document,
+                            validate_platform_record, validate_release, verify_child, verify_index,
+                            verify_published)
 
 WORKFLOW = REPO / '.github/workflows/runner-release.yml'
 PR_WORKFLOW = REPO / '.github/workflows/recipe-evidence.yml'
@@ -30,6 +31,9 @@ RELEASE = REPO / 'benchmarks/runner/release.json'
 MANIFEST_TYPE = 'application/vnd.oci.image.manifest.v1+json'
 INDEX_TYPE = 'application/vnd.oci.image.index.v1+json'
 CONFIG = {'amd64': 'sha256:' + '1' * 64, 'arm64': 'sha256:' + '2' * 64}
+# Docker's containerd store can report an index digest for the frozen local ID.
+# It is recorded separately and never treated as the image config digest.
+EXECUTED = 'sha256:' + 'a' * 64
 REPOSITORY = 'ghcr.io/example/runner'
 HARNESS = 'ghcr.io/vllm-project/guidellm@sha256:' + 'b' * 64
 
@@ -52,10 +56,12 @@ def index_document(children):
          'platform': {'os': 'linux', 'architecture': arch}} for arch in ARCHITECTURES]})
 
 
-def platform_record(arch, child):
-    return {'schema_version': 1, 'arch': arch, 'image_id': CONFIG[arch],
-            'manifest_digest': digest(child), 'config_digest': CONFIG[arch],
-            'layer_count': 1, 'forge_revision': FORGE_REVISION}
+def platform_record(arch, child, executed=None):
+    return {'schema_version': 1, 'arch': arch,
+            'executed_image_id': executed or EXECUTED,
+            'config_digest': CONFIG[arch],
+            'manifest_digest': digest(child), 'layer_count': 1,
+            'forge_revision': FORGE_REVISION}
 
 
 def release_v2(**overrides):
@@ -125,18 +131,42 @@ def test_release_contract_rejects_inconsistent_values(mutation):
 
 def test_verify_published_binds_registry_manifest_to_scanned_config():
     manifest = child_manifest(CONFIG['amd64'])
-    record = verify_published(manifest, CONFIG['amd64'], 'amd64', FORGE_REVISION)
+    record = verify_published(manifest, CONFIG['amd64'], EXECUTED, 'amd64', FORGE_REVISION)
     assert record['manifest_digest'] == digest(manifest)
     assert record['config_digest'] == CONFIG['amd64']
+    assert record['executed_image_id'] == EXECUTED
     assert validate_platform_record(record) == record
+
+
+def test_verify_published_allows_a_classic_store_where_ids_agree():
+    manifest = child_manifest(CONFIG['amd64'])
+    record = verify_published(manifest, CONFIG['amd64'], CONFIG['amd64'], 'amd64', FORGE_REVISION)
+    assert record['executed_image_id'] == record['config_digest']
+
+
+def test_verify_published_rejects_an_index_or_attestation_with_guidance():
+    children = {arch: child_manifest(CONFIG[arch]) for arch in ARCHITECTURES}
+    index = index_document({arch: digest(children[arch]) for arch in ARCHITECTURES})
+    with pytest.raises(ReleaseError, match='provenance'):
+        verify_published(index, CONFIG['amd64'], EXECUTED, 'amd64', FORGE_REVISION)
 
 
 def test_verify_published_rejects_another_config_or_forge_revision():
     manifest = child_manifest(CONFIG['arm64'])
     with pytest.raises(ReleaseError, match='scanned image config'):
-        verify_published(manifest, CONFIG['amd64'], 'arm64', FORGE_REVISION)
+        verify_published(manifest, CONFIG['amd64'], EXECUTED, 'arm64', FORGE_REVISION)
     with pytest.raises(ReleaseError, match='Forge revision'):
-        verify_published(manifest, CONFIG['arm64'], 'arm64', '0' * 40)
+        verify_published(manifest, CONFIG['arm64'], EXECUTED, 'arm64', '0' * 40)
+
+
+@pytest.mark.parametrize('config,executed', [
+    ('sha256:abc', EXECUTED),
+    (CONFIG['amd64'], 'sha256:abc'),
+])
+def test_verify_published_rejects_invalid_identities(config, executed):
+    with pytest.raises(ReleaseError, match='SHA-256 digest'):
+        verify_published(child_manifest(CONFIG['amd64']), config, executed,
+                         'amd64', FORGE_REVISION)
 
 
 def test_verify_index_and_children_bind_the_full_chain():
@@ -178,15 +208,18 @@ def test_verify_index_rejects_changed_bytes_with_the_same_document():
 # Index assembly and candidate recording ------------------------------------
 
 class FakeEngine:
-    def __init__(self, index, children, *, tag_exists=False):
+    def __init__(self, index, children, *, tag_exists=False, tag_error=b'not found'):
         self.index, self.children = index, children
         self.tag_exists = tag_exists
+        self.tag_error = tag_error
         self.calls = []
 
     def __call__(self, argv, **kwargs):
         self.calls.append(argv)
         if argv[:4] == ['docker', 'buildx', 'imagetools', 'inspect'] and argv[-1] != '--raw':
-            return SimpleNamespace(returncode=0 if self.tag_exists else 1, stdout=b'', stderr=b'')
+            if self.tag_exists:
+                return SimpleNamespace(returncode=0, stdout=b'{}', stderr=b'')
+            return SimpleNamespace(returncode=1, stdout=b'', stderr=self.tag_error)
         if argv[3] == 'create':
             return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
         if argv[-1] == '--raw' and '@sha256:' not in argv[-2]:
@@ -231,6 +264,48 @@ def test_assemble_refuses_to_overwrite_an_existing_release_tag(tmp_path):
     with pytest.raises(ReleaseError, match='refusing to overwrite'):
         assemble(REPOSITORY, 'v0.2.0', tmp_path / 'platforms', '5' * 40,
                  tmp_path / 'dist', run=engine)
+
+
+def test_assemble_fails_closed_when_tag_state_cannot_be_confirmed(tmp_path):
+    write_platforms(tmp_path / 'platforms')
+    engine = FakeEngine(b'', {}, tag_error=b'denied: requested access is denied')
+    with pytest.raises(ReleaseError, match='cannot confirm the tag is absent'):
+        assemble(REPOSITORY, 'v0.2.0', tmp_path / 'platforms', '5' * 40,
+                 tmp_path / 'dist', run=engine)
+    assert not any(call[3] == 'create' for call in engine.calls)
+
+
+@pytest.mark.parametrize('message', [
+    b'ERROR: ghcr.io/example/runner:v0.2.0: not found\n',
+    b'manifest unknown',
+    b'no such manifest: v0.2.0',
+])
+def test_guard_tag_allows_only_a_confirmed_absent_tag(message):
+    result = SimpleNamespace(returncode=1, stdout=b'', stderr=message)
+    guard_tag(REPOSITORY + ':v0.2.0', run=lambda *args, **kwargs: result)
+
+
+def test_guard_tag_refuses_an_existing_tag():
+    result = SimpleNamespace(returncode=0, stdout=b'...', stderr=b'')
+    with pytest.raises(ReleaseError, match='refusing to overwrite'):
+        guard_tag(REPOSITORY + ':v0.2.0', run=lambda *args, **kwargs: result)
+
+
+@pytest.mark.parametrize('message', [
+    b'denied: requested access to the resource is denied',
+    b'Get "https://ghcr.io/v2/": net/http: TLS handshake timeout',
+    b'',
+])
+def test_guard_tag_fails_closed_on_unconfirmed_absence(message):
+    result = SimpleNamespace(returncode=1, stdout=b'', stderr=message)
+    with pytest.raises(ReleaseError, match='cannot confirm the tag is absent'):
+        guard_tag(REPOSITORY + ':v0.2.0', run=lambda *args, **kwargs: result)
+
+
+@pytest.mark.parametrize('reference', [REPOSITORY, REPOSITORY + '@sha256:' + '4' * 64])
+def test_guard_tag_requires_a_tag_without_a_digest(reference):
+    with pytest.raises(ReleaseError, match='tagged reference'):
+        guard_tag(reference, run=lambda *args, **kwargs: SimpleNamespace(returncode=1))
 
 
 def test_assemble_rejects_missing_platform_records(tmp_path):
@@ -283,17 +358,35 @@ def test_release_workflow_permissions_and_pinned_actions_are_scoped():
                 assert step['with']['persist-credentials'] is False
 
 
-def test_release_workflow_scans_before_pushing_the_same_image():
+def test_release_workflow_scans_and_smokes_the_frozen_id_before_pushing():
     document = workflow()
     steps = steps_of(document, 'publish-platform')
     runs = [step.get('run', '') for step in steps]
+    build = next(index for index, run in enumerate(runs) if 'Containerfile' in run)
+    freeze = next(index for index, run in enumerate(runs) if 'Freeze the exact image' in steps[index].get('name', ''))
     scan = next(index for index, run in enumerate(runs) if 'tools/scan_runner_image.py' in run)
     smoke = next(index for index, run in enumerate(runs) if 'tests/contributor_import_smoke.py' in run)
+    cleanup = next(index for index, run in enumerate(runs)
+                   if 'contributor_guidellm_cleanup_smoke.py' in run)
     recheck = next(index for index, run in enumerate(runs) if 'Re-check' in steps[index].get('name', ''))
+    guard = next(index for index, run in enumerate(runs) if 'guard-tag' in run)
     push = next(index for index, run in enumerate(runs) if 'docker push' in run)
     verify = next(index for index, run in enumerate(runs) if 'verify-published' in run)
-    assert scan < smoke < recheck < push < verify
-    assert 'IMAGE_ID' in runs[recheck]
+    assert build < scan < smoke < cleanup < recheck < guard < push < verify
+    # The frozen ID itself is architecture-checked before any publication step.
+    assert '{{.Architecture}}' in runs[freeze] and '"$image_id"' in runs[freeze]
+    # The pushed manifest must be one image, not an attestation index.
+    assert '--provenance=false' in runs[build] and '--sbom=false' in runs[build]
+    # Execution and scanning select the frozen ID, never the mutable build tag.
+    assert '"$IMAGE_ID"' in runs[scan] and 'release-${{ matrix.arch }}' not in runs[scan]
+    assert '"$IMAGE_ID"' in runs[smoke] and 'release-${{ matrix.arch }}' not in runs[smoke]
+    assert '"$IMAGE_ID"' in runs[cleanup]
+    assert '"$IMAGE_ID"' in runs[recheck]
+    # Publication identity is the exported config digest, recorded separately.
+    assert '--identity-output' in runs[scan] and 'CONFIG_DIGEST' in runs[scan + 1]
+    assert '--config-digest "$CONFIG_DIGEST"' in runs[verify]
+    assert '--executed-image-id "$IMAGE_ID"' in runs[verify]
+    assert 'guard-tag' in runs[guard]
     for job in ('guard', 'assemble-index'):
         assert all('docker push' not in step.get('run', '') for step in steps_of(document, job))
 
@@ -399,6 +492,11 @@ def test_launcher_keeps_linux_docker_and_host_networking(tmp_path, package):
     assert '--userns=keep-id' not in arguments
     mounts = [arguments[index + 1] for index, arg in enumerate(arguments) if arg == '-v']
     assert any(mount.endswith(':/inputs:ro,Z') for mount in mounts)
+    # The writable output mount needs its relabel option after a second colon:
+    # '<target>,Z' would mount a path literally named '<target>,Z' and leave
+    # /outputs missing, so the container cannot write its evidence.
+    assert any(mount.endswith(':/outputs:Z') for mount in mounts), \
+        'output mount options must follow a colon, not the container path'
 
 
 def test_launcher_uses_portable_path_resolution(package):

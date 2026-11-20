@@ -33,9 +33,12 @@ INDEX_TYPES = frozenset({
     'application/vnd.docker.distribution.manifest.list.v2+json',
 })
 PLATFORM_RECORD = frozenset({
-    'schema_version', 'arch', 'image_id', 'manifest_digest', 'config_digest',
-    'layer_count', 'forge_revision',
+    'schema_version', 'arch', 'executed_image_id', 'config_digest',
+    'manifest_digest', 'layer_count', 'forge_revision',
 })
+# A registry that positively reports an absent tag lets publication proceed.
+# Anything else (authorization, network, unknown errors) must fail closed.
+ABSENT_TAG_MESSAGES = ('not found', 'manifest unknown', 'no such manifest', 'name unknown')
 
 
 class ReleaseError(ValueError):
@@ -99,24 +102,37 @@ def validate_release(document) -> dict:
     return result
 
 
-def verify_published(manifest: bytes, image_id: str, arch: str, forge_revision: str) -> dict:
-    """Check a registry manifest identifies the exact scanned local image config."""
+def verify_published(manifest: bytes, config_digest: str, executed_image_id: str,
+                     arch: str, forge_revision: str) -> dict:
+    """Check a registry manifest identifies the exact scanned image config.
+
+    ``executed_image_id`` is the frozen local identity used for scanning and
+    smoke execution. Docker's containerd store can report an index digest there,
+    so it is recorded separately and never compared to ``config_digest``. The
+    config digest is derived from the exported image and must equal the config
+    reference in the pushed single-platform manifest.
+    """
     if arch not in ARCHITECTURES:
         raise ReleaseError('published image architecture is unsupported')
-    if not isinstance(image_id, str) or not DIGEST.fullmatch(image_id):
-        raise ReleaseError('scanned image ID must be a SHA-256 digest')
+    for label, value in (('config digest', config_digest),
+                         ('executed image ID', executed_image_id)):
+        if not isinstance(value, str) or not DIGEST.fullmatch(value):
+            raise ReleaseError(f'scanned image {label} must be a SHA-256 digest')
     if forge_revision != FORGE_REVISION:
         raise ReleaseError('published image records a different Forge revision')
     try:
         document = json_load(manifest)
     except ValueError:
         raise ReleaseError('published image manifest is not valid JSON') from None
+    if isinstance(document, dict) and document.get('mediaType') in INDEX_TYPES:
+        raise ReleaseError('published image is a multi-platform index; build with '
+                           '--provenance=false --sbom=false so the pushed manifest is one image')
     if not isinstance(document, dict) or document.get('schemaVersion') != 2 \
             or document.get('mediaType') not in MANIFEST_TYPES:
         raise ReleaseError('published image is not a single-platform manifest')
     config = document.get('config')
     layers = document.get('layers')
-    if not isinstance(config, dict) or config.get('digest') != image_id:
+    if not isinstance(config, dict) or config.get('digest') != config_digest:
         raise ReleaseError('published image manifest does not reference the scanned image config')
     if not isinstance(layers, list) or not layers:
         raise ReleaseError('published image manifest records no layers')
@@ -124,9 +140,10 @@ def verify_published(manifest: bytes, image_id: str, arch: str, forge_revision: 
         if not isinstance(layer, dict) or not isinstance(layer.get('digest'), str) \
                 or not DIGEST.fullmatch(layer['digest']):
             raise ReleaseError('published image manifest has an invalid layer digest')
-    return {'schema_version': 1, 'arch': arch, 'image_id': image_id,
-            'manifest_digest': digest_of(manifest), 'config_digest': config['digest'],
-            'layer_count': len(layers), 'forge_revision': forge_revision}
+    return {'schema_version': 1, 'arch': arch, 'executed_image_id': executed_image_id,
+            'config_digest': config_digest,
+            'manifest_digest': digest_of(manifest), 'layer_count': len(layers),
+            'forge_revision': forge_revision}
 
 
 def validate_platform_record(document) -> dict:
@@ -134,10 +151,12 @@ def validate_platform_record(document) -> dict:
             or type(document.get('schema_version')) is not int or document['schema_version'] != 1
             or document.get('arch') not in ARCHITECTURES
             or document.get('forge_revision') != FORGE_REVISION
-            or not isinstance(document.get('image_id'), str) or not DIGEST.fullmatch(document['image_id'])
+            or not isinstance(document.get('executed_image_id'), str)
+            or not DIGEST.fullmatch(document['executed_image_id'])
+            or not isinstance(document.get('config_digest'), str)
+            or not DIGEST.fullmatch(document['config_digest'])
             or not isinstance(document.get('manifest_digest'), str)
             or not DIGEST.fullmatch(document['manifest_digest'])
-            or document.get('config_digest') != document.get('image_id')
             or type(document.get('layer_count')) is not int or document['layer_count'] < 1):
         raise ReleaseError('platform publication record is inconsistent')
     return document
@@ -188,7 +207,7 @@ def verify_child(child: bytes, record: dict) -> None:
             or document.get('mediaType') not in MANIFEST_TYPES:
         raise ReleaseError('published child is not a single-platform manifest')
     config = document.get('config')
-    if not isinstance(config, dict) or config.get('digest') != record['image_id']:
+    if not isinstance(config, dict) or config.get('digest') != record['config_digest']:
         raise ReleaseError('published child manifest does not reference the scanned image config')
 
 
@@ -216,6 +235,34 @@ def _run(argv, run):
     if result.returncode:
         raise ReleaseError(f'container tool failed: {" ".join(argv[:3])}')
     return result.stdout
+
+
+def _message(result) -> str:
+    parts = []
+    for value in (getattr(result, 'stderr', None), getattr(result, 'stdout', None)):
+        if isinstance(value, bytes):
+            parts.append(value.decode('utf-8', 'replace'))
+        elif isinstance(value, str):
+            parts.append(value)
+    return '\n'.join(parts).lower()
+
+
+def guard_tag(reference: str, engine: str = 'docker', run=subprocess.run) -> None:
+    """Fail unless the registry positively reports that the tag is absent.
+
+    Authorization, network, and unrecognized failures are not evidence that a
+    tag is free, so they abort publication instead of overwriting silently.
+    """
+    repository, _, tag = reference.rpartition(':')
+    if not repository or not tag or '/' in tag or '@' in reference:
+        raise ReleaseError('tag guard requires a tagged reference without a digest')
+    result = run([engine, 'buildx', 'imagetools', 'inspect', reference],
+                 capture_output=True)
+    if result.returncode == 0:
+        raise ReleaseError('refusing to overwrite an existing tag')
+    if not any(token in _message(result) for token in ABSENT_TAG_MESSAGES):
+        raise ReleaseError('cannot confirm the tag is absent: registry check failed; '
+                           'confirm the registry state before retrying')
 
 
 def load_platforms(platforms_dir: Path) -> dict:
@@ -247,9 +294,7 @@ def assemble(repository: str, version: str, platforms_dir: Path, source_revision
         raise ReleaseError('runner release source revision must be a 40-character Git SHA')
     platforms = load_platforms(platforms_dir)
     tag = repository + ':' + version
-    existing = run([engine, 'buildx', 'imagetools', 'inspect', tag], capture_output=True)
-    if existing.returncode == 0:
-        raise ReleaseError('refusing to overwrite an existing release tag')
+    guard_tag(tag, engine, run)
     children = [repository + '@' + platforms[arch]['manifest_digest'] for arch in ARCHITECTURES]
     _run([engine, 'buildx', 'imagetools', 'create', '-t', tag, *children], run)
     index = _run([engine, 'buildx', 'imagetools', 'inspect', tag, '--raw'], run)
@@ -278,11 +323,18 @@ def main(argv=None):
 
     published = commands.add_parser('verify-published', help='verify one pushed manifest against the scanned image')
     published.add_argument('--manifest', type=Path, required=True)
-    published.add_argument('--image-id', required=True, help='local config ID of the scanned image')
+    published.add_argument('--config-digest', required=True,
+                           help='config digest derived from the exported scanned image')
+    published.add_argument('--executed-image-id', required=True,
+                           help='frozen local image ID used for scanning and smoke execution')
     published.add_argument('--arch', required=True, choices=ARCHITECTURES)
     published.add_argument('--forge-revision', required=True,
                            help='Forge revision label read from the scanned image')
     published.add_argument('--output', type=Path, required=True)
+
+    guard = commands.add_parser('guard-tag', help='fail unless a tagged reference is confirmed absent')
+    guard.add_argument('--reference', required=True, help='tagged registry reference')
+    guard.add_argument('--engine', default='docker')
 
     assembly = commands.add_parser('assemble', help='assemble and verify the published multi-architecture index')
     assembly.add_argument('--repository', required=True, help='registry path without tag or digest')
@@ -296,11 +348,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == 'verify-published':
-            record = verify_published(args.manifest.read_bytes(), args.image_id,
-                                      args.arch, args.forge_revision)
+            record = verify_published(args.manifest.read_bytes(), args.config_digest,
+                                      args.executed_image_id, args.arch,
+                                      args.forge_revision)
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(json_bytes(record))
             print(json.dumps(record, sort_keys=True))
+        elif args.command == 'guard-tag':
+            guard_tag(args.reference, engine=args.engine)
+            print(f'Tag is available: {args.reference}')
         else:
             summary = assemble(args.repository, args.version, args.platforms,
                                args.source_revision, args.output, engine=args.engine)

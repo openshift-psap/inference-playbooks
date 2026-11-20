@@ -52,7 +52,7 @@ def archive_config_id(path):
         raise ScanFailure('cannot read exported image identity') from None
 
 
-def scan(image, engine):
+def scan(image, engine, identity_output=None):
     inspected = run([engine, 'image', 'inspect', '--format', '{{.Id}}', image])
     if inspected.returncode:
         raise ScanFailure('cannot inspect the local image')
@@ -110,7 +110,11 @@ def scan(image, engine):
             raise ScanFailure(f'secret scan blocked the image: {findings} finding(s); matches suppressed')
         if result.returncode:
             raise ScanFailure('scanner failed; image is not approved')
-    print(f'Secret scan passed for {image_id} using pinned Trivy 0.76.1.')
+    if identity_output is not None:
+        # The exported config digest is the publication identity; the local
+        # inspect ID can be an index digest under Docker's containerd store.
+        Path(identity_output).write_text(config_id + '\n')
+    print(f'Secret scan passed for {image_id} (config {config_id}) using pinned Trivy 0.76.1.')
     print('Built-in rules/allowlists apply; this is not a guarantee of credential absence.')
     return 0
 
@@ -118,12 +122,14 @@ def scan(image, engine):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('image', help='already-built local image reference')
+    parser.add_argument('--identity-output', type=Path,
+                        help='write the exported image config digest to this file')
     args = parser.parse_args(argv)
     engine = os.environ.get('CONTAINER_ENGINE') or shutil.which('podman') or shutil.which('docker')
     if not engine:
         parser.error('Podman or Docker is required')
     try:
-        return scan(args.image, engine)
+        return scan(args.image, engine, args.identity_output)
     except ScanFailure as error:
         print(f'Secret scan FAILED: {error}. No publication performed.')
         return 1

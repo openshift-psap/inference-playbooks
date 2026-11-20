@@ -98,6 +98,16 @@ def container_command(engine, image, package, output, script, arch, platform=Non
     if platform == 'darwin' and not podman:
         raise SystemExit('macOS requires the Podman CLI with a running podman machine; '
                          'Docker Desktop, Colima, and other VM-based Docker engines are not supported')
+
+    def volume(source, target, options):
+        # Options must follow a second colon: '/outputs,Z' would mount a path
+        # literally named 'outputs,Z' and leave the expected target unmounted.
+        parts = ','.join(part for part in options if part)
+        return f'{source}:{target}:{parts}' if parts else f'{source}:{target}'
+
+    # SELinux relabeling does not apply across the podman machine's virtiofs
+    # boundary; see the generated launcher for the same rule.
+    relabel = 'Z' if podman and platform != 'darwin' else ''
     command = [engine, 'run', '--rm', '--init', '--network', 'none',
                '--user', f'{os.getuid()}:{os.getgid()}',
                '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges']
@@ -106,13 +116,10 @@ def container_command(engine, image, package, output, script, arch, platform=Non
     command += ['--arch', arch] if podman else ['--platform', 'linux/' + arch]
     if podman:
         command.append('--userns=keep-id')
-    # SELinux relabeling does not apply across the podman machine's virtiofs
-    # boundary; see the generated launcher for the same rule.
-    label = ',Z' if podman and platform != 'darwin' else ''
     command += ['-e', 'SMOKE_EXPECTED_ARCH=' + arch,
-                '-v', f'{package}:/inputs:ro{label}',
-                '-v', f'{output}:/outputs{label}',
-                '-v', f'{script}:/smoke.py:ro{label}',
+                '-v', volume(package, '/inputs', ('ro', relabel)),
+                '-v', volume(output, '/outputs', (relabel,)),
+                '-v', volume(script, '/smoke.py', ('ro', relabel)),
                 '--entrypoint', 'python', image, '/smoke.py',
                 '--request', '/inputs/request.json', '--inputs', '/inputs/playbooks', '--output', '/outputs']
     return command

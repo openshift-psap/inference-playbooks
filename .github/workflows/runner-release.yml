@@ -75,7 +75,10 @@ jobs:
             tests/test_maintain_contributor.py -q
       - name: Build the native linux/${{ matrix.arch }} runner
         run: |
-          docker build -f benchmarks/runner/Containerfile \
+          # No provenance or SBOM attestations: the pushed platform manifest
+          # must be exactly one image manifest whose config we can verify.
+          docker build --provenance=false --sbom=false \
+            -f benchmarks/runner/Containerfile \
             -t "localhost/contributor-runner:release-${{ matrix.arch }}" .
           test "$(docker image inspect --format '{{.Architecture}}' \
             localhost/contributor-runner:release-${{ matrix.arch }})" = "${{ matrix.arch }}"
@@ -83,6 +86,8 @@ jobs:
         run: |
           image_id=$(docker image inspect --format '{{.Id}}' \
             "localhost/contributor-runner:release-${{ matrix.arch }}")
+          test "$(docker image inspect --format '{{.Architecture}}' "$image_id")" \
+            = "${{ matrix.arch }}"
           forge_revision=$(docker image inspect --format \
             '{{index .Config.Labels "dev.inference-playbooks.forge-revision"}}' "$image_id")
           printf 'IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
@@ -90,16 +95,28 @@ jobs:
       - name: Gate the frozen image on secret scanning
         env:
           CONTAINER_ENGINE: docker
-        run: python3 tools/scan_runner_image.py localhost/contributor-runner:release-${{ matrix.arch }}
+        run: |
+          python3 tools/scan_runner_image.py "$IMAGE_ID" \
+            --identity-output "$RUNNER_TEMP/scanned-config-digest"
+      - name: Record the exported config digest of the scanned image
+        run: |
+          config_digest=$(cat "$RUNNER_TEMP/scanned-config-digest")
+          printf '%s' "$config_digest" | grep -Eq '^sha256:[a-f0-9]{64}$'
+          printf 'CONFIG_DIGEST=%s\n' "$config_digest" >> "$GITHUB_ENV"
       - name: Prove the frozen image runs and imports evidence natively
         env:
           CONTAINER_ENGINE: docker
         run: |
           for workload in guidellm-smoke aiperf-smoke; do
             python3 tests/contributor_import_smoke.py --engine docker \
-              --image "localhost/contributor-runner:release-${{ matrix.arch }}" \
+              --image "$IMAGE_ID" \
               --arch "${{ matrix.arch }}" --workload "$workload"
           done
+      - name: Exercise Forge failure finalizers in the frozen image
+        run: |
+          docker run --rm --network none --entrypoint python \
+            -v "$PWD/tests/contributor_guidellm_cleanup_smoke.py:/cleanup-smoke.py:ro" \
+            "$IMAGE_ID" /cleanup-smoke.py
       - name: Re-check the frozen identity immediately before publication
         run: |
           test "$(docker image inspect --format '{{.Id}}' "$IMAGE_ID")" = "$IMAGE_ID"
@@ -109,6 +126,12 @@ jobs:
         run: |
           printf '%s' "$GHCR_TOKEN" | docker login "$REGISTRY" \
             --username "${{ github.actor }}" --password-stdin
+      - name: Refuse to overwrite an existing immutable platform tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 tools/runner_release.py guard-tag \
+            --reference "$RUNNER_REPOSITORY:$VERSION-${{ matrix.arch }}" --engine docker
       - name: Publish exactly the scanned image as a platform tag
         env:
           VERSION: ${{ inputs.version }}
@@ -118,12 +141,13 @@ jobs:
           docker push "$reference"
           docker buildx imagetools inspect "$reference" --raw \
             > "$RUNNER_TEMP/published-${{ matrix.arch }}.json"
-      - name: Verify the published manifest matches the scanned image
+      - name: Verify the published manifest references the scanned image config
         run: |
           mkdir -p "platform-${{ matrix.arch }}"
           python3 tools/runner_release.py verify-published \
             --manifest "$RUNNER_TEMP/published-${{ matrix.arch }}.json" \
-            --image-id "$IMAGE_ID" --arch "${{ matrix.arch }}" \
+            --config-digest "$CONFIG_DIGEST" \
+            --executed-image-id "$IMAGE_ID" --arch "${{ matrix.arch }}" \
             --forge-revision "$FORGE_REVISION" \
             --output "platform-${{ matrix.arch }}/digests.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

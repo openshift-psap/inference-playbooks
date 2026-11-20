@@ -332,11 +332,14 @@ under durable retention, not an expiring intake policy.
   verified at build time (archive SHA-256, ELF machine, and a live
   `oc version --client` probe). CI builds, scans, and runs the synthetic
   harness/cleanup/import proofs natively on both architectures. The published
-  default digest is still the AMD64 image; an ARM64/multi-architecture release
-  is not published yet, so do not substitute an unverified image or digest.
+  default digest is still the AMD64 image; the multi-architecture release
+  workflow exists but no ARM64/multi-architecture release is published yet, so
+  do not substitute an unverified image or digest.
 - Optional native runner: Apple Silicon macOS with Python 3.12, the matching
   macOS ARM64 OpenShift CLI 4.19.0, and the same pinned Forge revision. It uses
-  the same hash-locked dependencies as the Linux image.
+  the same hash-locked dependencies as the Linux image. The Linux runner image
+  can also run through a macOS podman machine; see [runner release](#runner-release)
+  for its unvalidated status and acceptance gate.
 - One platform and one self-contained manifest containing one Deployment,
   LeaderWorkerSet, or PVC-backed LLMInferenceService. Authored Services, companion
   objects, P/D, InferenceService, custom DRA, LLMInferenceService hostPath volumes,
@@ -571,7 +574,9 @@ printed or uploaded.
 CI runs the same command after the runner build and fails on secret findings,
 scanner errors, missing reports, or an image-identity mismatch. PR CI never
 publishes images. Do not rebuild or move a tag between successful scanning and
-publication; future publication automation must depend on this gate succeeding.
+publication; the runner release workflow depends on this gate succeeding before
+it pushes. Multi-architecture publication is described under
+[runner release](#runner-release).
 
 Host `__pycache__`/bytecode is excluded from the build context, and the runner
 copies only `tools/*.py`. The container smoke checks that no host Python caches
@@ -613,9 +618,45 @@ by the real host importer, and the cleanup smoke. If ARM64 hosted runners are
 unavailable in a fork, run that matrix leg on a real ARM64 machine with a
 container engine rather than relying on an untested cross-build.
 
-Multi-architecture publication (including `release.json` digest records) and
-macOS container-runtime documentation are not part of this stage. Native macOS
-mode remains supported until those are verified.
+Multi-architecture publication is implemented by the manually dispatched
+Runner release workflow, but no multi-architecture release is published yet.
+`benchmarks/runner/release.json` therefore still selects the v0.1.2 AMD64 image.
+
+#### Runner release
+
+[`runner-release.yml`](../.github/workflows/runner-release.yml) is manual,
+main-branch only, and requires the exact confirm value `publish`. It builds
+`linux/amd64` and `linux/arm64` natively, disables provenance and SBOM
+attestations so each pushed platform reference is one image manifest, freezes
+the local image ID, runs the secret-scan gate, both import smokes, and the
+Forge failure-cleanup smoke against that frozen ID, refuses to overwrite an
+existing version or per-architecture tag, and then pushes the platform tags. A
+second job assembles and verifies the multi-architecture index from the
+verified child manifests and uploads a candidate `release.json`; it does not
+modify the committed default.
+
+Because Docker's containerd image store can report an index digest as the local
+image ID, the workflow records the publication identity separately: the config
+digest derived from the exported scanned image. The pushed manifest must
+reference that config digest. `runner_release.py guard-tag` fails closed when
+the registry does not positively report that a tag is absent, so an
+authorization or network failure is never treated as a free tag.
+
+To publish, merge the release tooling to `main`, then dispatch the workflow
+with the target version and `confirm=publish`. Download the candidate artifact,
+review it, and update `benchmarks/runner/release.json` through a normal pull
+request. Until that reviewed change lands, contributors continue to use the
+recorded v0.1.2 AMD64 digest.
+
+macOS with Podman is implemented by the generated launcher and smoke driver:
+Podman is required, Docker Desktop and other VM-based Docker engines are
+rejected, and SELinux relabel options are omitted across the podman machine's
+virtiofs boundary. Hosted macOS CI cannot start a podman machine, so this path
+has not been validated end to end on real Apple Silicon hardware. Run
+`tests/contributor_macos_podman_smoke.py --image <digest>` on Apple Silicon with
+a running podman machine and record the observed macOS, Podman, and image
+versions before treating that combination as verified. Native `macos-arm64`
+mode remains the verified optional path and does not use Podman.
 
 ## Contributor benchmark execution example
 

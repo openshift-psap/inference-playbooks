@@ -48,6 +48,20 @@ def test_runtime_execution_is_frozen_to_the_inspected_image_id(monkeypatch):
     assert 'localhost/contributor-runner:ci' not in command, 'a mutable tag must not select runtime bytes'
 
 
+def test_linux_podman_mounts_keep_options_after_a_second_colon():
+    command = driver.container_command('podman', 'localhost/runner:ci', '/pkg', '/out',
+                                       '/smoke.py', 'amd64', platform='linux')
+    volumes = [command[index + 1] for index, argument in enumerate(command) if argument == '-v']
+    assert volumes == ['/pkg:/inputs:ro,Z', '/out:/outputs:Z', '/smoke.py:/smoke.py:ro,Z']
+
+
+def test_linux_docker_mounts_do_not_request_selinux_relabeling():
+    command = driver.container_command('docker', 'localhost/runner:ci', '/pkg', '/out',
+                                       '/smoke.py', 'amd64', platform='linux')
+    volumes = [command[index + 1] for index, argument in enumerate(command) if argument == '-v']
+    assert volumes == ['/pkg:/inputs:ro', '/out:/outputs', '/smoke.py:/smoke.py:ro']
+
+
 def test_immutable_image_id_accepts_podman_bare_hex(monkeypatch):
     monkeypatch.setattr(driver, 'inspect', lambda engine, image, template: 'd' * 64)
     assert driver.immutable_image_id('podman', 'localhost/runner:ci') == 'sha256:' + 'd' * 64

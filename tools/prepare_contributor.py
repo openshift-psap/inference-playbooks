@@ -159,7 +159,8 @@ case "$engine_name" in
   *) echo "Unsupported container engine: $engine_name (use Podman or Docker)" >&2; exit 2 ;;
 esac
 network=--network=host
-mount_label=,Z
+input_mount_options=:ro,Z
+output_mount_options=:Z
 if [ "$platform" = Darwin ]; then
   case "$engine_name" in
     podman|podman-remote) ;;
@@ -173,7 +174,8 @@ if [ "$platform" = Darwin ]; then
   # The podman machine is a Linux VM: --network host would select the VM network
   # namespace (not the Mac), and SELinux relabeling does not apply to virtiofs.
   network=
-  mount_label=
+  input_mount_options=:ro
+  output_mount_options=
 else
   command -v "$engine" >/dev/null 2>&1 || { echo "Container engine not found: $engine" >&2; exit 2; }
 fi
@@ -190,7 +192,7 @@ exec "$engine" run --rm --init ${network:+"$network"} --user "$(id -u):$(id -g)"
   --cap-drop ALL --security-opt no-new-privileges \\
   -e KUBECONFIG=/credentials/kubeconfig \\
   -e HTTP_PROXY -e HTTPS_PROXY -e NO_PROXY -e http_proxy -e https_proxy -e no_proxy \\
-  -v "$package:/inputs:ro$mount_label" -v "$kubeconfig:/credentials/kubeconfig:ro" -v "$output:/outputs$mount_label" \\
+  -v "$package:/inputs$input_mount_options" -v "$kubeconfig:/credentials/kubeconfig:ro" -v "$output:/outputs$output_mount_options" \\
   IMAGE --context "$2" --namespace "$3"
 '''.replace('  IMAGE ', '  ' + shlex.quote(runner_image) + ' ')
     (output / 'run.sh').write_text(launcher)

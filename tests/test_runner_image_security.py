@@ -87,6 +87,15 @@ def test_gate_scans_frozen_image_offline_without_credentials(monkeypatch, capsys
     assert not Path(report_mount.removesuffix(':/reports:Z')).exists()
 
 
+@pytest.mark.parametrize('inspected_id', [IMAGE_ID, CONFIG_ID])
+def test_gate_records_the_exported_config_digest(tmp_path, monkeypatch, inspected_id):
+    fake_engine(monkeypatch, inspected_id=inspected_id)
+    monkeypatch.setenv('CONTAINER_ENGINE', 'docker')
+    identity = tmp_path / 'config-digest'
+    assert scanner.main(['localhost/example:reviewed', '--identity-output', str(identity)]) == 0
+    assert identity.read_text() == CONFIG_ID + '\n'
+
+
 @pytest.mark.parametrize('scenario', ['inspect-error', 'save-error', 'missing-report', 'timeout',
                                     'secret', 'secret-zero-exit', 'scanner-error', 'wrong-image',
                                     'wrong-report', 'invalid-json'])
