@@ -323,6 +323,101 @@ def test_release_document_never_invents_digests():
 
 # Workflow safety -----------------------------------------------------------
 
+NIGHTLY = 'nightly-20261120-' + '5' * 40 + '-123-1'
+
+
+def test_nightly_promotes_only_verified_digest_and_keeps_stable_metadata_strict(tmp_path):
+    engine, records = fixture_release(tmp_path)
+    summary = assemble(REPOSITORY, NIGHTLY, tmp_path / 'platforms', '5' * 40,
+                       tmp_path / 'dist', run=engine, nightly=True)
+    creates = [call for call in engine.calls if call[3] == 'create']
+    assert len(creates) == 2
+    assert creates[-1][4:] == ['-t', REPOSITORY + ':nightly', summary['release']['image']]
+    promotion = json.loads((tmp_path / 'dist/nightly-promotion.json').read_text())
+    assert promotion['image'] == summary['release']['image']
+    assert validate_release(summary['release'], nightly=True)['source_revision'] == '5' * 40
+    with pytest.raises(ReleaseError, match='version'):
+        validate_release(summary['release'])
+    for arch in ARCHITECTURES:
+        child_read = next(i for i, call in enumerate(engine.calls)
+                          if call[-2:] == [REPOSITORY + '@' + records[arch]['manifest_digest'], '--raw'])
+        assert child_read < engine.calls.index(creates[-1])
+
+
+@pytest.mark.parametrize('failure', ['missing-platform', 'index', 'child', 'source'])
+def test_failed_nightly_identity_gate_never_promotes(tmp_path, failure):
+    engine, records = fixture_release(tmp_path)
+    source = '5' * 40
+    if failure == 'missing-platform':
+        (tmp_path / 'platforms/platform-arm64/digests.json').unlink()
+    elif failure == 'index':
+        engine.index = index_document({arch: 'sha256:' + '9' * 64 for arch in ARCHITECTURES})
+    elif failure == 'child':
+        engine.children[REPOSITORY + '@' + records['arm64']['manifest_digest']] += b'\n'
+    else:
+        source = '6' * 40
+    with pytest.raises(ReleaseError):
+        assemble(REPOSITORY, NIGHTLY, tmp_path / 'platforms', source,
+                 tmp_path / 'dist', run=engine, nightly=True)
+    assert not any(REPOSITORY + ':nightly' in call for call in engine.calls)
+
+
+def test_nightly_alias_readback_must_match_verified_index(tmp_path):
+    engine, _ = fixture_release(tmp_path)
+
+    def changed_alias(argv, **kwargs):
+        if argv[-2:] == [REPOSITORY + ':nightly', '--raw']:
+            return SimpleNamespace(returncode=0, stdout=engine.index + b'\n')
+        return engine(argv, **kwargs)
+
+    with pytest.raises(ReleaseError, match='index digest'):
+        assemble(REPOSITORY, NIGHTLY, tmp_path / 'platforms', '5' * 40,
+                 tmp_path / 'dist', run=changed_alias, nightly=True)
+    assert (tmp_path / 'dist/release.json').exists()
+    assert not (tmp_path / 'dist/nightly-promotion.json').exists()
+
+
+def test_nightly_workflow_selection_serialization_and_attempt_isolation():
+    document = workflow()
+    assert document['on']['schedule'] == [{'cron': '23 3 * * *'}]
+    assert document['concurrency'] == {'group': 'runner-release', 'cancel-in-progress': False}
+    select = steps_of(document, 'guard')[0]['run']
+    assert 'GITHUB_SHA' in select and 'GITHUB_RUN_ID' in select and 'GITHUB_RUN_ATTEMPT' in select
+    assert '"$EVENT" != schedule' in select and '"$CONFIRM" != publish' in select
+    steps = steps_of(document, 'assemble-index')
+    download = next(s for s in steps if 'actions/download-artifact@' in s.get('uses', ''))
+    assert download['with']['pattern'] == 'platform-*-${{ github.run_attempt }}'
+    assert any(s.get('if') == "needs.guard.outputs.nightly == 'true'" and
+               'git/ref/heads/main' in s.get('run', '') for s in steps)
+    assert 'always()' in document['jobs']['report']['if']
+
+
+@pytest.mark.parametrize('event,nightly,confirm,version,success', [
+    ('schedule', '', '', '', True),
+    ('workflow_dispatch', 'true', 'publish', '', True),
+    ('workflow_dispatch', 'true', '', '', False),
+    ('workflow_dispatch', 'false', 'publish', 'v0.2.1', True),
+    ('workflow_dispatch', 'false', 'publish', 'nightly', False),
+    ('workflow_dispatch', 'false', 'publish', '', False),
+])
+def test_publication_selection_executes_fail_closed(tmp_path, event, nightly, confirm, version, success):
+    output = tmp_path / 'outputs'
+    result = subprocess.run(['bash', '-e', '-c', steps_of(workflow(), 'guard')[0]['run']],
+                            capture_output=True, text=True, env={
+                                **os.environ, 'EVENT': event, 'NIGHTLY': nightly,
+                                'CONFIRM': confirm, 'VERSION': version,
+                                'GITHUB_SHA': '5' * 40, 'GITHUB_RUN_ID': '123',
+                                'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_OUTPUT': str(output),
+                            })
+    assert (result.returncode == 0) == success
+    if success:
+        selected = dict(line.split('=', 1) for line in output.read_text().splitlines())
+        if event == 'schedule' or nightly == 'true':
+            assert selected['nightly'] == 'true'
+            assert re.fullmatch(r'nightly-\d{8}-' + '5' * 40 + '-123-2', selected['version'])
+        else:
+            assert selected == {'version': version}
+
 def workflow():
     # PyYAML resolves the unquoted `on` key as True under YAML 1.1.
     document = yaml.safe_load(WORKFLOW.read_text())
@@ -340,15 +435,15 @@ def steps_of(document, job):
     return document['jobs'][job]['steps']
 
 
-def test_release_workflow_is_manual_main_only_and_never_pr_driven():
+def test_release_workflow_is_scheduled_or_manual_main_only_and_never_pr_driven():
     document = workflow()
-    assert set(document['on']) == {'workflow_dispatch'}, 'release must not run on push or pull_request'
+    assert set(document['on']) == {'workflow_dispatch', 'schedule'}
     assert document['permissions'] == {'contents': 'read'}
     for job in ('guard', 'publish-platform', 'assemble-index'):
         condition = document['jobs'][job].get('if', '')
         assert 'refs/heads/main' in condition and 'openshift-psap/inference-playbooks' in condition
     assert document['jobs']['publish-platform']['needs'] == 'guard'
-    assert document['jobs']['assemble-index']['needs'] == 'publish-platform'
+    assert document['jobs']['assemble-index']['needs'] == ['guard', 'publish-platform']
 
 
 def test_release_workflow_permissions_and_pinned_actions_are_scoped():
@@ -420,7 +515,7 @@ def test_release_workflow_records_only_a_candidate_artifact():
     assert any('tools/runner_release.py' in step.get('run', '') and 'assemble' in step.get('run', '')
                for step in steps)
     upload = next(step for step in steps if step.get('uses', '').startswith('actions/upload-artifact@'))
-    assert upload['with']['name'] == 'runner-release-candidate'
+    assert upload['with']['name'] == 'runner-release-candidate-${{ github.run_attempt }}'
     assert upload['with']['path'] == 'dist/'
     text = WORKFLOW.read_text()
     assert 'git commit' not in text and 'git push' not in text and 'git tag' not in text

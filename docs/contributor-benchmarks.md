@@ -332,9 +332,8 @@ under durable retention, not an expiring intake policy.
   verified at build time (archive SHA-256, ELF machine, and a live
   `oc version --client` probe). CI builds, scans, and runs the synthetic
   harness/cleanup/import proofs natively on both architectures. The published
-  default digest is still the AMD64 image; the multi-architecture release
-  workflow exists but no ARM64/multi-architecture release is published yet, so
-  do not substitute an unverified image or digest.
+  default is selected only by `benchmarks/runner/release.json`; see
+  [runner release](#runner-release) for publication evidence and nightly opt-in.
 - Optional native runner: Apple Silicon macOS with Python 3.12, the matching
   macOS ARM64 OpenShift CLI 4.19.0, and the same pinned Forge revision. It uses
   the same hash-locked dependencies as the Linux image. The Linux runner image
@@ -618,14 +617,16 @@ by the real host importer, and the cleanup smoke. If ARM64 hosted runners are
 unavailable in a fork, run that matrix leg on a real ARM64 machine with a
 container engine rather than relying on an untested cross-build.
 
-Multi-architecture publication is implemented by the manually dispatched
-Runner release workflow, but no multi-architecture release is published yet.
-`benchmarks/runner/release.json` therefore still selects the v0.1.2 AMD64 image.
+The initial native Linux AMD64/ARM64 release pipeline passed in
+[run 44767680848](https://github.com/openshift-psap/inference-playbooks/actions/runs/44767680848).
+The committed `benchmarks/runner/release.json` remains authoritative for defaults;
+publishing an image does not update it.
 
 #### Runner release
 
-[`runner-release.yml`](../.github/workflows/runner-release.yml) is manual,
-main-branch only, and requires the exact confirm value `publish`. It builds
+[`runner-release.yml`](../.github/workflows/runner-release.yml) runs only on trusted
+`main` in the upstream repository. Manual dispatch requires the exact confirm
+value `publish`; scheduled runs select the nightly channel. It builds
 `linux/amd64` and `linux/arm64` natively, disables provenance and SBOM
 attestations so each pushed platform reference is one image manifest, freezes
 the local image ID, runs the secret-scan gate, both import smokes, and the
@@ -650,6 +651,93 @@ with the target version and `confirm=publish`. Download the candidate artifact,
 review it, and update `benchmarks/runner/release.json` through a normal pull
 request. Until that reviewed change lands, contributors continue to use the
 recorded v0.1.2 AMD64 digest.
+
+##### Nightly runner channel
+
+The same platform gates run daily at **03:23 UTC** and on explicit dispatch:
+
+```sh
+gh workflow run runner-release.yml --repo openshift-psap/inference-playbooks \
+  --ref main -f nightly=true -f confirm=publish
+```
+
+GitHub schedules can be delayed or disabled by GitHub; a cron declaration is not
+proof that a nightly has run. The first scheduled nightly still needs live
+verification after merge. Native Linux ARM64 success does **not** establish
+Apple Silicon macOS/Podman acceptance; that validation remains outstanding below.
+
+Tags are `nightly-YYYYMMDD-<full-source-sha>-<run-id>-<attempt>` (UTC selection
+date), with `-amd64` and `-arm64` platform tags. All are write-once. Only after
+both platforms pass contract tests, scanning, synthetic GuideLLM/AIPerf execution,
+cleanup and evidence import does assembly verify the index → child manifest →
+scanned config digest chain. It copies that exact index digest to `:nightly`,
+then checks the alias bytes against the verified index digest. A failed platform
+or pre-promotion identity gate leaves the previous alias intact. A failure during
+the alias write/readback can leave the alias updated; use the immutable candidate
+and inspect the registry before recovery, rather than assuming rollback occurred.
+
+Stable and nightly runs share the `runner-release` concurrency group and do not
+cancel an active run. GitHub may replace a pending run and does not guarantee FIFO
+ordering. Before nightly assembly, the workflow rejects a source SHA that is no
+longer current main. Dispatch a fresh run if main advanced during the build.
+There are no PR, `pull_request_target`, or push triggers. Workflow permissions
+default to `contents: read`; only the two publication jobs have `packages: write`.
+
+Use **Re-run all jobs**, not only failed jobs: artifact names include the attempt
+and assembly accepts only that attempt's two platform records. Every full rerun
+gets fresh nightly tags, including when the source SHA has not changed. Partial
+reruns fail closed on missing current-attempt records or existing immutable tags.
+For stable dispatch, leave `nightly=false` and supply a version as before.
+
+The `runner-release-candidate-<attempt>` artifact contains `release.json`, raw
+index and child manifests, and each platform's executed ID, scanned config digest,
+manifest digest and Forge revision. Source SHA and Forge SHA are in `release.json`;
+the built image also carries the OCI source-revision label. Successful nightly
+promotion adds `nightly-promotion.json`. Candidate artifacts are uploaded even
+if promotion fails after assembly, so their presence alone is not success.
+Check the workflow result, publication summary, and promotion record together.
+
+**Retention:** Actions platform/candidate artifacts are requested for 30 days
+(subject to repository/org limits). Registry nightly tags and their referenced
+index/config/layer objects are retained indefinitely for now, including partial
+failed attempts. There is deliberately no automatic package-version or untagged
+manifest deletion: an untagged child can still belong to a stable/supported index.
+Stable releases and digest-pinned contributor packages must remain pullable.
+Shorter registry retention requires a separately reviewed support policy and
+reference-aware cleanup; archive candidate artifacts before expiry for durable
+audit evidence. Moving `:nightly` does not delete earlier unique tags.
+
+**Explicit opt-in:** download a successful run's candidate, read its `image` field,
+and pass that immutable reference to preparation:
+
+```sh
+RUNNER_IMAGE=$(python3 -c 'import json; print(json.load(open("release.json"))["image"])')
+# Add to your normal prepare_contributor.py invocation:
+#   --runner-image "$RUNNER_IMAGE"
+```
+
+Never pass `:nightly` or a dated tag as the package's runner image, and never copy
+nightly metadata over `benchmarks/runner/release.json`. Normal preparation keeps
+the stable default; nightly metadata is rejected by the stable metadata loader.
+
+**Anonymous pulls:** GHCR package visibility must be public (configured by a
+package administrator, not by this workflow). Verify without saved credentials:
+
+```sh
+anonymous_config=$(mktemp -d)
+DOCKER_CONFIG="$anonymous_config" docker pull "$RUNNER_IMAGE"
+rmdir "$anonymous_config"
+```
+
+On Apple Silicon use Podman with a fresh empty auth file instead; that pull check
+alone is not the macOS execution acceptance test. For `denied`/`unauthorized`,
+check package visibility and the exact repository/digest; do not substitute a
+mutable tag or add credentials to contributor bundles. For missing ARM64 manifests,
+check the index artifact and both platform job results. For scan, smoke, or digest
+failures, inspect the failing Actions step, fix on main, and dispatch a fresh run.
+The always-run publication summary exposes platform/index failures; maintainers
+should enable GitHub Actions failure notifications. No issue is automatically
+opened, and a failed run never changes the stable default.
 
 macOS with Podman is implemented by the generated launcher and smoke driver:
 Podman is required, Docker Desktop and other VM-based Docker engines are

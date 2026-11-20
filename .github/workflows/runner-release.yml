@@ -1,13 +1,18 @@
 name: Runner release
 
-# Trusted, manual publication only. There is deliberately no pull_request or
-# push trigger: PR CI builds and scans candidate images but never publishes.
+# Trusted main only. PR CI builds and scans candidates but never publishes.
 on:
+  schedule:
+    - cron: '23 3 * * *'
   workflow_dispatch:
     inputs:
+      nightly:
+        description: 'Publish a nightly instead of a stable release candidate'
+        type: boolean
+        default: false
       version:
         description: 'Release version, for example v0.2.0'
-        required: true
+        required: false
         type: string
       confirm:
         description: 'Type publish to confirm GHCR writes'
@@ -27,23 +32,33 @@ env:
 
 jobs:
   guard:
-    name: Require trusted main-branch confirmation
+    name: Select trusted main publication
     if: github.repository == 'openshift-psap/inference-playbooks' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.select.outputs.version }}
+      nightly: ${{ steps.select.outputs.nightly }}
     steps:
       - name: Check confirmation and release version
+        id: select
         env:
           VERSION: ${{ inputs.version }}
           CONFIRM: ${{ inputs.confirm }}
+          EVENT: ${{ github.event_name }}
+          NIGHTLY: ${{ inputs.nightly }}
         run: |
-          if [ "$CONFIRM" != publish ]; then
+          if [ "$EVENT" != schedule ] && [ "$CONFIRM" != publish ]; then
             echo 'Refusing publication: confirm must be exactly "publish".' >&2
             exit 1
           fi
-          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+          if [ "$EVENT" = schedule ] || [ "$NIGHTLY" = true ]; then
+            VERSION="nightly-$(date -u +%Y%m%d)-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo 'nightly=true' >> "$GITHUB_OUTPUT"
+          elif ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
             echo 'Refusing publication: version must look like v0.2.0.' >&2
             exit 1
           fi
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
 
   publish-platform:
     name: Build, scan, and publish linux/${{ matrix.arch }}
@@ -78,6 +93,7 @@ jobs:
           # No provenance or SBOM attestations: the pushed platform manifest
           # must be exactly one image manifest whose config we can verify.
           docker build --provenance=false --sbom=false \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -f benchmarks/runner/Containerfile \
             -t "localhost/contributor-runner:release-${{ matrix.arch }}" .
           test "$(docker image inspect --format '{{.Architecture}}' \
@@ -128,13 +144,13 @@ jobs:
             --username "${{ github.actor }}" --password-stdin
       - name: Refuse to overwrite an existing immutable platform tag
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ needs.guard.outputs.version }}
         run: |
           python3 tools/runner_release.py guard-tag \
             --reference "$RUNNER_REPOSITORY:$VERSION-${{ matrix.arch }}" --engine docker
       - name: Publish exactly the scanned image as a platform tag
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ needs.guard.outputs.version }}
         run: |
           reference="$RUNNER_REPOSITORY:$VERSION-${{ matrix.arch }}"
           docker tag "$IMAGE_ID" "$reference"
@@ -152,14 +168,14 @@ jobs:
             --output "platform-${{ matrix.arch }}/digests.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: platform-${{ matrix.arch }}
+          name: platform-${{ matrix.arch }}-${{ github.run_attempt }}
           path: platform-${{ matrix.arch }}/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   assemble-index:
     name: Assemble and verify the published index
-    needs: publish-platform
+    needs: [guard, publish-platform]
     if: github.repository == 'openshift-psap/inference-playbooks' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -174,9 +190,24 @@ jobs:
         run: python3 -m pip install -r tools/requirements.txt
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: platform-*
+          pattern: platform-*-${{ github.run_attempt }}
           path: platforms
           merge-multiple: false
+      - name: Normalize this attempt's platform artifact paths
+        run: |
+          for arch in amd64 arm64; do
+            mv "platforms/platform-$arch-$GITHUB_RUN_ATTEMPT" "platforms/platform-$arch"
+          done
+      - name: Refuse stale nightly publication
+        if: needs.guard.outputs.nightly == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          test "$current" = "$GITHUB_SHA" || {
+            echo 'Main advanced; dispatch a fresh nightly run instead of promoting stale code.' >&2
+            exit 1
+          }
       - name: Log in to the container registry with the workflow token
         env:
           GHCR_TOKEN: ${{ github.token }}
@@ -185,33 +216,58 @@ jobs:
             --username "${{ github.actor }}" --password-stdin
       - name: Publish the index from the verified child manifests and record the candidate
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          NIGHTLY: ${{ needs.guard.outputs.nightly }}
           SOURCE_REVISION: ${{ github.sha }}
         run: |
+          channel_args=()
+          if [ "$NIGHTLY" = true ]; then channel_args+=(--nightly); fi
           python3 tools/runner_release.py assemble \
             --repository "$RUNNER_REPOSITORY" \
             --version "$VERSION" \
             --platforms platforms \
             --source-revision "$SOURCE_REVISION" \
             --engine docker \
-            --output dist
+            --output dist "${channel_args[@]}"
       - name: Record that the default release was not changed
+        env:
+          NIGHTLY: ${{ needs.guard.outputs.nightly }}
         run: |
           git diff --exit-code -- benchmarks/runner/release.json
           {
             echo '### Runner release candidate'
             echo
-            echo 'This workflow records a candidate only. `benchmarks/runner/release.json`'
-            echo 'was not modified and no default changed. Commit it through a reviewed PR'
-            echo 'after downloading and checking this artifact.'
+            echo '`benchmarks/runner/release.json` was not modified and no default changed.'
+            if [ "$NIGHTLY" = true ]; then
+              echo 'Nightly alias verified. Opt in with the immutable image below; never install this as stable metadata.'
+            else
+              echo 'Review this stable candidate and commit it through a reviewed PR.'
+            fi
             echo
             echo '```json'
             cat dist/release.json
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
-          name: runner-release-candidate
+          name: runner-release-candidate-${{ github.run_attempt }}
           path: dist/
           if-no-files-found: error
           retention-days: 30
+
+  report:
+    name: Publication result
+    needs: [guard, publish-platform, assemble-index]
+    if: always() && github.repository == 'openshift-psap/inference-playbooks' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize publication status
+        env:
+          GUARD: ${{ needs.guard.result }}
+          PLATFORMS: ${{ needs.publish-platform.result }}
+          INDEX: ${{ needs.assemble-index.result }}
+        run: |
+          printf '### Runner publication\n\nSelection: %s\n\nPlatform gates: %s\n\nIndex/promotion: %s\n' \
+            "$GUARD" "$PLATFORMS" "$INDEX" >> "$GITHUB_STEP_SUMMARY"
+          test "$GUARD" = success && test "$PLATFORMS" = success && test "$INDEX" = success
