@@ -24,8 +24,10 @@ see the [contributor benchmark execution example](docs/contributor-benchmarks.md
 See the [portable contributor runner reference](docs/contributor-benchmarks.md)
 for supported inputs, permissions, and maintainer import details.
 Preparation defaults to the published
-`quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2` release, pinned by digest.
-The manually applied Jobs below are a separate workflow.
+`ghcr.io/openshift-psap/inference-playbooks-runner:v0.2.1` multi-architecture
+release, pinned by digest. Existing packages that reference the earlier Quay
+`v0.1.2` AMD64 image remain supported. The manually applied Jobs below are a
+separate workflow.
 
 Reusable benchmark Jobs live in
 [`benchmarks/manifests/`](benchmarks/manifests/). Set the `ENDPOINT`,

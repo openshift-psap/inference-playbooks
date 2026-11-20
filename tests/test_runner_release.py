@@ -27,7 +27,6 @@ from runner_release import (ARCHITECTURES, ReleaseError, assemble, guard_tag, re
 
 WORKFLOW = REPO / '.github/workflows/runner-release.yml'
 PR_WORKFLOW = REPO / '.github/workflows/recipe-evidence.yml'
-RELEASE = REPO / 'benchmarks/runner/release.json'
 MANIFEST_TYPE = 'application/vnd.oci.image.manifest.v1+json'
 INDEX_TYPE = 'application/vnd.oci.image.index.v1+json'
 CONFIG = {'amd64': 'sha256:' + '1' * 64, 'arm64': 'sha256:' + '2' * 64}
@@ -90,8 +89,12 @@ def write_platforms(root: Path):
 # Release metadata contract -------------------------------------------------
 
 def test_existing_v1_release_remains_valid():
-    release = json.loads(RELEASE.read_text())
-    assert release['schema_version'] == 1
+    release = {
+        'schema_version': 1, 'version': 'v0.1.2',
+        'tag': 'quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2',
+        'image': 'quay.io/rh-ee-thibrahi/inference-playbooks-runner@sha256:' + '4' * 64,
+        'forge_revision': FORGE_REVISION, 'source_revision': '5' * 40,
+    }
     normalized = validate_release(release)
     assert normalized['image'] == release['image'] and normalized['platforms'] == {}
 

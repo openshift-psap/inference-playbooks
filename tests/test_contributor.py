@@ -381,11 +381,11 @@ def test_pin_is_consistent_with_image_and_guide():
 
 def test_published_runner_default_matches_release_metadata():
     release = json_load(preparation.RELEASE_FILE.read_bytes())
-    assert release['version'] == 'v0.1.2'
-    assert release['tag'] == 'quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2'
+    assert release['version'] == 'v0.2.1'
+    assert release['tag'] == 'ghcr.io/openshift-psap/inference-playbooks-runner:v0.2.1'
     assert release['forge_revision'] == FORGE_REVISION
     assert preparation.released_runner_image() == release['image']
-    assert release['image'].startswith('quay.io/rh-ee-thibrahi/inference-playbooks-runner@sha256:')
+    assert release['image'].startswith('ghcr.io/openshift-psap/inference-playbooks-runner@sha256:')
     assert release['image'].split('@', 1)[1] in (REPO / 'docs/contributor-benchmarks.md').read_text()
 
 

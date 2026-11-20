@@ -30,19 +30,24 @@ python3 -m pip install -r tools/requirements.txt
 python3 tools/validate.py --current
 ```
 
-The default runner is the published Linux AMD64 image
-**`quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2`**. You do not need to
-build or publish an image. Preparation reads the release's immutable digest from
+The default runner is the published multi-architecture (Linux AMD64 and ARM64)
+**`ghcr.io/openshift-psap/inference-playbooks-runner:v0.2.1`** release. You do
+not need to build or publish an image. Preparation reads the release's immutable
+index digest from
 [`benchmarks/runner/release.json`](../benchmarks/runner/release.json), not from a
-moving tag. The launcher pulls that digest when you run the package; anonymous
-pulls are supported. No registry write credentials are needed.
+moving tag. The launcher pulls that digest when you run the package, and the
+container engine selects the matching platform image. Anonymous pulls are
+supported. No registry write credentials are needed.
 
-For Apple Silicon, prepare with `--runner macos-arm64`. That package runs
-natively without Docker or Podman. It requires macOS ARM64 and Python 3.12; at
-launch it downloads the pinned Forge source and macOS ARM64 OpenShift CLI,
-verifies their SHA-256 digests, and installs the hash-locked Python dependencies
-in a temporary virtual environment. Preparation packages the native runner files
-from the selected Git commit and rejects uncommitted changes to them.
+For Apple Silicon, the verified optional path is `--runner macos-arm64`. That
+package runs natively without Docker or Podman. It requires macOS ARM64 and
+Python 3.12; at launch it downloads the pinned Forge source and macOS ARM64
+OpenShift CLI, verifies their SHA-256 digests, and installs the hash-locked
+Python dependencies in a temporary virtual environment. Preparation packages
+the native runner files from the selected Git commit and rejects uncommitted
+changes to them. The default release also includes a `linux/arm64` image, but
+running it through macOS Podman has not been validated end to end; see
+[runner release](#runner-release).
 
 Set `HARNESS_IMAGE` to an audited compatible GuideLLM v0.7.4 or AIPerf 0.12.0 image
 by digest. The harness image must be pullable by your cluster. For the GuideLLM
@@ -78,9 +83,10 @@ One package is one attempt.
 Review `request.json` and the selected manifest under `playbooks/`. Do not edit
 the generated package; make any necessary changes in the source checkout instead.
 
-- For the default runner, use Linux AMD64 with Podman or Docker and access to the
-  runner image. For `macos-arm64`, use an Apple Silicon Mac with Python 3.12 and
-  network access to PyPI, the pinned Forge archive, and the OpenShift mirror.
+- For the default runner, use Linux AMD64 or ARM64 with Podman or Docker and
+  access to the runner image. For `macos-arm64`, use an Apple Silicon Mac with
+  Python 3.12 and network access to PyPI, the pinned Forge archive, and the
+  OpenShift mirror.
 - Provide a self-contained kubeconfig with embedded credentials/certificates and
   an explicit context. External exec authentication plugins are unsupported.
 - Use an existing namespace with enough NVIDIA GPU capacity, required controllers,
@@ -314,17 +320,23 @@ under durable retention, not an expiring intake policy.
 
 ### Supported inputs and evidence limits
 
-- Default runner release: `quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2`,
-  pinned in host-side `benchmarks/runner/release.json` to
-  `sha256:4b8dc7e0d2f05a40949992a322a103e6650ad9136616edd60ab26e55b811ce88`.
-  The image records source commit `92c37ef84658daf997df2000c403a4abca8a033f`.
+- Default runner release:
+  `ghcr.io/openshift-psap/inference-playbooks-runner:v0.2.1`, a multi-architecture
+  index pinned in host-side `benchmarks/runner/release.json` to
+  `sha256:c6d2444a753fc5e8f6a58803ec3f8046f58d26528a122851ae5ee25d9033e0eb`.
+  Its `linux/amd64` child is
+  `sha256:b61691a1e8f90e6ef284412fc689de2dcb3e011b233a5a113bdf5e9cbd6c406f`
+  and its `linux/arm64` child is
+  `sha256:51ddd78f5b6d0dfd52c05284079a5ea75619d745ece754d0fa435d834fb03160`.
+  The image records source commit `3df0e84890e6e220f66d97c7968aeb8d74805edb`.
   Release metadata is recorded after publication; it is not embedded into its
-  own image. Container-mode requests capture this digest; native macOS requests
-  record their runner mode and use the pinned downloads described below.
-- Default runner: Linux AMD64, Python 3.12, OpenShift CLI 4.19.0, Forge cleanup fix
-  `df3c14a5eab5e8f502402f51c48765b35067fca8`, based on PR #322 and published
-  on `thameem-abbas/forge` branch `fix/guidellm-failure-cleanup`. Archives/base image are pinned and
-  checksummed; Python dependencies are hash-locked.
+  own image. Container-mode requests capture this index digest; native macOS
+  requests record their runner mode and use the pinned downloads described below.
+- Default runner: Linux AMD64 or ARM64, Python 3.12, OpenShift CLI 4.19.0, Forge
+  cleanup fix `df3c14a5eab5e8f502402f51c48765b35067fca8`, based on PR #322 and
+  published on `thameem-abbas/forge` branch `fix/guidellm-failure-cleanup`.
+  Archives/base image are pinned and checksummed; Python dependencies are
+  hash-locked.
 - Runner image architectures: one Containerfile builds `linux/amd64` and
   `linux/arm64` from the same digest-pinned base and the same hash-locked
   dependency set. The architecture-specific OpenShift CLI is selected from
@@ -332,9 +344,15 @@ under durable retention, not an expiring intake policy.
   verified at build time (archive SHA-256, ELF machine, and a live
   `oc version --client` probe). CI builds, scans, and runs the synthetic
   harness/cleanup/import proofs natively on both architectures. The published
-  default digest is still the AMD64 image; the multi-architecture release
-  workflow exists but no ARM64/multi-architecture release is published yet, so
-  do not substitute an unverified image or digest.
+  default is the verified multi-architecture index; each child image was built,
+  scanned, smoke-tested, and published by its own release job.
+- Earlier release: the Quay
+  `quay.io/rh-ee-thibrahi/inference-playbooks-runner:v0.1.2` AMD64 image,
+  pinned to
+  `sha256:4b8dc7e0d2f05a40949992a322a103e6650ad9136616edd60ab26e55b811ce88`
+  from source commit `92c37ef84658daf997df2000c403a4abca8a033f`, remains
+  pullable and existing packages that reference it remain supported. New
+  preparation uses the GHCR multi-architecture release above.
 - Optional native runner: Apple Silicon macOS with Python 3.12, the matching
   macOS ARM64 OpenShift CLI 4.19.0, and the same pinned Forge revision. It uses
   the same hash-locked dependencies as the Linux image. The Linux runner image
@@ -619,8 +637,8 @@ unavailable in a fork, run that matrix leg on a real ARM64 machine with a
 container engine rather than relying on an untested cross-build.
 
 Multi-architecture publication is implemented by the manually dispatched
-Runner release workflow, but no multi-architecture release is published yet.
-`benchmarks/runner/release.json` therefore still selects the v0.1.2 AMD64 image.
+Runner release workflow. The `v0.2.1` release published the verified index, and
+`benchmarks/runner/release.json` now selects that multi-architecture release.
 
 #### Runner release
 
@@ -648,14 +666,16 @@ authorization or network failure is never treated as a free tag.
 To publish, merge the release tooling to `main`, then dispatch the workflow
 with the target version and `confirm=publish`. Download the candidate artifact,
 review it, and update `benchmarks/runner/release.json` through a normal pull
-request. Until that reviewed change lands, contributors continue to use the
-recorded v0.1.2 AMD64 digest.
+request. The `v0.2.1` update followed this path; contributors now use its index
+digest.
 
 macOS with Podman is implemented by the generated launcher and smoke driver:
 Podman is required, Docker Desktop and other VM-based Docker engines are
 rejected, and SELinux relabel options are omitted across the podman machine's
 virtiofs boundary. Hosted macOS CI cannot start a podman machine, so this path
-has not been validated end to end on real Apple Silicon hardware. Run
+has not been validated end to end on real Apple Silicon hardware. The `v0.2.1`
+release includes a `linux/arm64` child, but publishing that child does not
+validate the macOS Podman path. Run
 `tests/contributor_macos_podman_smoke.py --image <digest>` on Apple Silicon with
 a running podman machine and record the observed macOS, Podman, and image
 versions before treating that combination as verified. Native `macos-arm64`
@@ -695,7 +715,8 @@ No AWS, MLflow, or internal artifact credentials are needed by the contributor.
 
 ### 1. Set up the tools and select a recipe
 
-This walkthrough uses the default Linux AMD64 container runner. For Apple
+This walkthrough uses the default Linux AMD64 container runner; the same
+multi-architecture release provides a `linux/arm64` image. For Apple
 Silicon, add `--runner macos-arm64` when preparing the package and use Python
 3.12 when launching `run.sh`. For the Linux path, use Git, Python, and Podman or
 Docker in a new checkout:
