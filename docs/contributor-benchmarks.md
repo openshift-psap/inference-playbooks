@@ -476,11 +476,11 @@ validates; nothing is imported inside the image. Repeat with
 `--workload aiperf-smoke` for the second harness.
 
 Runtime execution is frozen to the image ID resolved once from `--image`, so a
-tag retarget cannot change what ran. The request's `runner_image` records the
-local manifest digest when the engine exposes one (podman does for a local
-build). A locally built docker image has no registry manifest digest, so that
-field is then an explicitly synthetic fixture reference rather than a config ID
-misrepresented as a digest.
+tag retarget cannot change what ran. The request's `runner_image` records a
+complete `repository@digest` when the engine records one for that local image.
+When no repository is available, including when `--image` is already a frozen
+`sha256:` ID with no recorded repository digest, the field is an explicitly
+synthetic fixture reference rather than a config ID misrepresented as a digest.
 
 The container smokes invoke the real Forge CLI and Caliper; only Kubernetes and
 benchmark Jobs are simulated. Rerun these proofs after pin/CLI/dependency changes.
@@ -634,6 +634,9 @@ existing version or per-architecture tag, and then pushes the platform tags. A
 second job assembles and verifies the multi-architecture index from the
 verified child manifests and uploads a candidate `release.json`; it does not
 modify the committed default.
+
+Pull-request CI freezes the built image ID and runs the import smokes against
+that ID, exercising the release invocation path before publication.
 
 Because Docker's containerd image store can report an index digest as the local
 image ID, the workflow records the publication identity separately: the config

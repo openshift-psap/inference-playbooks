@@ -330,6 +330,12 @@ def workflow():
     return document
 
 
+def pr_workflow():
+    document = yaml.safe_load(PR_WORKFLOW.read_text())
+    document['on'] = document.get('on', document.get(True))
+    return document
+
+
 def steps_of(document, job):
     return document['jobs'][job]['steps']
 
@@ -389,6 +395,23 @@ def test_release_workflow_scans_and_smokes_the_frozen_id_before_pushing():
     assert 'guard-tag' in runs[guard]
     for job in ('guard', 'assemble-index'):
         assert all('docker push' not in step.get('run', '') for step in steps_of(document, job))
+
+
+def test_pr_ci_import_smoke_uses_the_frozen_image_id():
+    document = pr_workflow()
+    steps = steps_of(document, 'contributor-bundles')
+    runs = [step.get('run', '') for step in steps]
+    build = next(index for index, run in enumerate(runs) if 'Containerfile' in run)
+    freeze = next(index for index, step in enumerate(steps)
+                  if 'Freeze the exact built image' in step.get('name', ''))
+    smoke = next(index for index, run in enumerate(runs)
+                 if 'tests/contributor_import_smoke.py' in run)
+    assert build < freeze < smoke
+    assert '{{.Id}}' in runs[freeze] and '{{.Architecture}}' in runs[freeze]
+    assert 'IMAGE_ID=%s' in runs[freeze] and 'GITHUB_ENV' in runs[freeze]
+    # PR CI must exercise the same frozen-ID invocation as release, not a tag.
+    assert '--image "$IMAGE_ID"' in runs[smoke]
+    assert 'localhost/contributor-runner:ci' not in runs[smoke]
 
 
 def test_release_workflow_records_only_a_candidate_artifact():

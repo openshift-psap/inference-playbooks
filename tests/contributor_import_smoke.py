@@ -6,7 +6,8 @@ synthetic jobs, then runs the maintainer importer's dry-run plan against that
 exact archive and the committed Git revision. No cluster, GPU, or metrics claim.
 
 Runtime execution is frozen to the inspected image ID. The request records a
-local manifest digest only when the engine exposes one; otherwise it uses an
+complete repository@digest only when the engine records one for the local image;
+otherwise, including when the frozen ID supplies no repository, it uses an
 explicit fixture reference instead of presenting a config ID as a digest.
 """
 import argparse
@@ -23,7 +24,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tools'))
 sys.path.insert(0, str(REPO / 'tests'))
 
-from contributor_bundle import WORKLOADS, checksum, read_archive
+from contributor_bundle import IMAGE, WORKLOADS, checksum, read_archive
 from contributor_fixtures import HARNESS_IMAGES, SMOKE_WORKLOADS, build_source_repo
 from import_contributor import import_bundle
 from prepare_contributor import prepare
@@ -68,26 +69,49 @@ def immutable_image_id(engine, image):
     return 'sha256:' + digest
 
 
-def local_manifest_digest(engine, image):
-    """Manifest digest only when the engine exposes a real one for this image."""
-    if os.path.basename(engine) == 'podman':
-        value = inspect(engine, image, '{{.Digest}}')
-        return value if re.fullmatch(r'sha256:[a-f0-9]{64}', value) else None
+def recorded_reference(engine, image):
+    """Complete repository@digest the engine records for this local image, if any."""
     try:
         references = json.loads(inspect(engine, image, '{{json .RepoDigests}}') or '[]')
     except ValueError:
         return None
+    if not isinstance(references, list):
+        return None
     for reference in references:
-        _, separator, digest = reference.rpartition('@')
-        if separator and re.fullmatch(r'sha256:[a-f0-9]{64}', digest):
-            return digest
+        if isinstance(reference, str) and re.fullmatch(IMAGE, reference):
+            return reference
     return None
 
 
+def local_manifest_digest(engine, image):
+    """Manifest digest only when the engine exposes a real one for this image."""
+    reference = recorded_reference(engine, image)
+    if reference is not None:
+        return reference.rpartition('@')[2]
+    if os.path.basename(engine) == 'podman':
+        value = inspect(engine, image, '{{.Digest}}')
+        return value if re.fullmatch(r'sha256:[a-f0-9]{64}', value) else None
+    return None
+
+
+def is_image_id(image):
+    """A frozen local ID, with or without the ``sha256:`` prefix Podman omits."""
+    return bool(re.fullmatch(r'(?:sha256:)?[a-f0-9]{64}', image))
+
+
 def request_runner_image(engine, image):
-    """Return (reference, attribution) without ever presenting a config ID as a digest."""
+    """Return (reference, attribution) without ever presenting a config ID as a digest.
+
+    A frozen local ID carries no repository, so only a complete
+    repository@digest recorded by the engine can identify a usable reference.
+    """
     digest = local_manifest_digest(engine, image)
     if digest is None:
+        return SYNTHETIC_RUNNER_IMAGE, 'synthetic-fixture'
+    if is_image_id(image):
+        reference = recorded_reference(engine, image)
+        if reference is not None and reference.rpartition('@')[2] == digest:
+            return reference, 'local-manifest-digest'
         return SYNTHETIC_RUNNER_IMAGE, 'synthetic-fixture'
     return image_reference_name(image) + '@' + digest, 'local-manifest-digest'
 
