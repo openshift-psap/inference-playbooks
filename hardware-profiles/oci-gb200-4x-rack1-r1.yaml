@@ -1,0 +1,27 @@
+schema_version: 1
+profile_id: oci-gb200-4x-rack1-r1
+profile_revision: 1
+kind: hardware-profile
+description: >
+  OCI GB200 rack-1 profile used by the multi-node GLM recipes. The cluster
+  exposes four GB200 GPUs per node. Host memory and inter-node bandwidth were
+  not recorded in the source cluster profile.
+accelerator_key: nvidia-gb200-x4
+
+provider:
+  name: oci
+
+accelerators:
+  vendor: nvidia
+  model: GB200
+  count_per_node: 4
+
+network:
+  notes: >
+    The source manifests require the cluster's Megamoe/IMEX fabric and use
+    multi-node UCX/NCCL communication. The source does not declare transport
+    type or bandwidth.
+
+correction_log:
+  - revision: 1
+    summary: Initial profile from the OCI GB200 rack-1 cluster manifest.

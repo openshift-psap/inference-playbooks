@@ -1,0 +1,1194 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-model-server
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: model-server
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-dcgm-metrics
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: monitoring
+data:
+  custom-counters.csv: |-
+    DCGM_FI_PROF_NVLINK_TX_BYTES, gauge, NVLink transmit bytes per second
+    DCGM_FI_PROF_NVLINK_RX_BYTES, gauge, NVLink receive bytes per second
+    DCGM_FI_DEV_GPU_UTIL, gauge, GPU utilization
+    DCGM_FI_DEV_FB_USED, gauge, Framebuffer memory used
+    DCGM_FI_DEV_FB_FREE, gauge, Framebuffer memory free
+---
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-decode
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: lws
+    llm-d.ai/role: decode
+    llm-d.ai/inferenceServing: 'true'
+    llm-d.ai/model: glm-5.3-nvfp4
+    llm-d.ai/deployment: pd
+spec:
+  replicas: 1
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxUnavailable: 100%
+  leaderWorkerTemplate:
+    size: 2
+    workerTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: manifesto
+          app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+          llm-d.ai/owner: inference-playbooks
+          app.kubernetes.io/component: model-server
+          llm-d.ai/role: decode
+          llm-d.ai/inferenceServing: 'true'
+          llm-d.ai/model: glm-5.3-nvfp4
+          llm-d.ai/deployment: pd
+      spec:
+        serviceAccountName: glm-5-3-gb200-p1d1-dep8-dspark5-model-server
+        terminationGracePeriodSeconds: 0
+        volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 640Gi
+        - name: shared-storage
+          persistentVolumeClaim:
+            claimName: lustre-pvc-vllm
+        - name: local-nvme
+          hostPath:
+            path: /mnt/numa0
+            type: Directory
+        - name: dcgm-metrics
+          configMap:
+            name: glm-5-3-gb200-p1d1-dep8-dspark5-dcgm-metrics
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: proc
+          hostPath:
+            path: /proc
+            type: Directory
+        containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.33.0
+          imagePullPolicy: Always
+          securityContext:
+            capabilities:
+              add:
+              - IPC_LOCK
+              - SYS_RAWIO
+            runAsGroup: 0
+            runAsUser: 0
+          command:
+          - /bin/bash
+          - -c
+          args:
+          - |-
+            set -euo pipefail
+            LOG_DIR=/mnt/lustre-3/logs/decode
+            mkdir -p "$LOG_DIR"
+            LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+            echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+
+            find /mnt/lustre-3/vllm-dev/vllm -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
+            if [ -n "${MANIFESTO_VLLM_DEV_VENV:-}" ] && [ -d "${MANIFESTO_VLLM_DEV_VENV}" ]; then
+              echo "Using dev venv at ${MANIFESTO_VLLM_DEV_VENV}"
+              source "${MANIFESTO_VLLM_DEV_VENV}/bin/activate"
+            elif [ -f /opt/vllm/bin/activate ]; then
+              source /opt/vllm/bin/activate
+            fi
+
+            echo '=== Running pre-launch hooks ==='
+            uv pip install --system 'nixl==1.5.0' 'cupy-cuda13x!=14.1.0' nvshmem4py-cu13==0.4.0
+            # PATCHING DISABLED: apply_nixl_packed_cache_registration.py
+            # set -e
+            # PATCH_DIR="$(dirname "$(dirname "$LOG_DIR")")/dspark_patches"
+            # test -f "$PATCH_DIR/apply_nixl_packed_cache_registration.py"
+            # test -f "$PATCH_DIR/nixl-packed-cache-registration.hunks"
+            # echo "Applying NIXL packed-cache registration patch (pull-worker guard; role-specific capacities)"
+            # python3 "$PATCH_DIR/apply_nixl_packed_cache_registration.py"
+
+            DP_SIZE_LOCAL=4
+            DP_SIZE=8
+            START_RANK=$(( LWS_WORKER_INDEX * DP_SIZE_LOCAL ))
+            P2P_BASE=$(( 7777 - START_RANK ))
+            KV_TRANSFER_CONFIG=$(printf '%s' "{\"kv_connector\":\"MultiConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"connectors\":[{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\",\"kv_buffer_device\":\"cuda\",\"kv_load_failure_policy\":\"fail\"},{\"kv_connector\":\"OffloadingConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"spec_name\":\"TieringOffloadingSpec\",\"cpu_bytes_to_use\":107374182400,\"eviction_policy\":\"lru\",\"offload_prompt_only\":false,\"self_describing_kv_events\":true,\"secondary_tiers\":[{\"type\":\"p2p\",\"host\":\"${POD_IP}\",\"port\":${P2P_BASE},\"backends\":[\"UCX\"],\"num_threads\":4}]}}]}}")
+
+            FLASH_ATTENTION_CUTE_DSL_CACHE_DIR=${FLASH_ATTENTION_CUTE_DSL_CACHE_DIR}/decode \
+            TILELANG_CACHE_DIR=${TILELANG_CACHE_DIR}/decode \
+            exec \
+              vllm \
+              serve \
+              RedHatAI/GLM-5.3-NVFP4 \
+              --port 8200 \
+              --tensor-parallel-size 1 \
+              --enable-expert-parallel \
+              --data-parallel-size $DP_SIZE \
+              --data-parallel-start-rank $START_RANK \
+              --data-parallel-size-local $DP_SIZE_LOCAL \
+              --data-parallel-address ${LWS_LEADER_ADDRESS} \
+              --data-parallel-rpc-port 5555 \
+              --data-parallel-multi-port-external-lb \
+              --data-parallel-supervisor-port 8100 \
+              --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+              --served-model-name RedHatAI/GLM-5.3-NVFP4 \
+              --load-format auto \
+              --disable-uvicorn-access-log \
+              --trust-remote-code \
+              --enable-cumem-allocator \
+              --enable-ep-weight-filter \
+              --numa-bind \
+              --no-disable-hybrid-kv-cache-manager \
+              --no-enable-flashinfer-autotune \
+              --moe-backend flashinfer_moe_ep_cutedsl \
+              --kv-cache-dtype fp8 \
+              --block-size 64 \
+              --max-model-len 1048576 \
+              --disable-access-log-for-endpoints /health,/metrics \
+              --reasoning-parser glm45 \
+              --tool-call-parser glm47 \
+              --enable-auto-tool-choice \
+              --gpu-memory-utilization 0.90 \
+              --max-num-batched-tokens 128 \
+              --max-num-seqs 32 \
+              --max-cudagraph-capture-size 128 \
+              --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY","mode":0}' \
+              --kv-cache-metrics \
+              --kv-cache-metrics-sample 0.25 \
+              --speculative-config '{"method":"dspark","model":"RedHatAI/GLM-5.3-speculator.dspark","num_speculative_tokens":5,"enable_adaptive_verification":true,"draft_sample_method":"probabilistic"}'
+          env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: HF_TOKEN
+                optional: true
+          - name: DG_JIT_CACHE_DIR
+            value: /tmp/dg-cache-glm53-nvfp4
+          - name: FLASHINFER_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/flashinfer
+          - name: FLASHINFER_WORKSPACE_BASE
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/flashinfer-workspace
+          - name: FLASH_ATTENTION_CUTE_DSL_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/fa-cute-dsl
+          - name: FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED
+            value: '0'
+          - name: HF_HOME
+            value: /mnt/local/hf_cache
+          - name: HOME
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/home
+          - name: MANIFESTO_VLLM_DEV_VENV
+            value: ''
+          - name: MC_ENABLE_DEST_DEVICE_AFFINITY
+            value: '1'
+          - name: NCCL_CUMEM_ENABLE
+            value: '1'
+          - name: NCCL_MNNVL_ENABLE
+            value: '1'
+          - name: NCCL_NVLS_ENABLE
+            value: '1'
+          - name: NVIDIA_GDRCOPY
+            value: enabled
+          - name: PYTHONHASHSEED
+            value: '0'
+          - name: TILELANG_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/tilelang
+          - name: TILELANG_CLEANUP_TEMP_FILES
+            value: '1'
+          - name: TORCHINDUCTOR_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/torchinductor
+          - name: TORCH_SYMMMEM
+            value: NVSHMEM
+          - name: TQDM_DISABLE
+            value: '1'
+          - name: TRITON_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/triton
+          - name: TRITON_LIBCUDA_PATH
+            value: /usr/lib64
+          - name: UCX_CUDA_IPC_ENABLE_MNNVL
+            value: 'y'
+          - name: UCX_MEMTYPE_CACHE
+            value: 'n'
+          - name: UCX_NET_DEVICES
+            value: mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1
+          - name: UCX_TLS
+            value: cuda_copy,cuda_ipc,rc
+          - name: VLLM_CACHE_ROOT
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/vllm
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: '3600'
+          - name: VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS
+            value: '1800'
+          - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+            value: '120'
+          - name: VLLM_LOGGING_LEVEL
+            value: INFO
+          - name: VLLM_NO_USAGE_STATS
+            value: '1'
+          - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+            value: '1'
+          - name: VLLM_USE_DEEP_GEMM
+            value: '1'
+          - name: VLLM_USE_NCCL_SYMM_MEM
+            value: '1'
+          - name: VLLM_USE_RUST_FRONTEND
+            value: '1'
+          - name: VLLM_USE_V2_MODEL_RUNNER
+            value: '1'
+          - name: XDG_CACHE_HOME
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/xdg
+          - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: VLLM_P2P_SIDE_CHANNEL_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          ports:
+          - containerPort: 8100
+            name: dp-supervisor
+            protocol: TCP
+          - containerPort: 8200
+            name: vllm-0
+            protocol: TCP
+          - containerPort: 8201
+            name: vllm-1
+            protocol: TCP
+          - containerPort: 8202
+            name: vllm-2
+            protocol: TCP
+          - containerPort: 8203
+            name: vllm-3
+            protocol: TCP
+          - containerPort: 7777
+            name: p2p-0
+            protocol: TCP
+          - containerPort: 7778
+            name: p2p-1
+            protocol: TCP
+          - containerPort: 7779
+            name: p2p-2
+            protocol: TCP
+          - containerPort: 7780
+            name: p2p-3
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/bash
+              - -c
+              - curl -sf http://localhost:8000/v1/models | grep -q '"id"' && curl
+                -sf http://localhost:8001/v1/models | grep -q '"id"' && curl -sf http://localhost:8002/v1/models
+                | grep -q '"id"' && curl -sf http://localhost:8003/v1/models | grep
+                -q '"id"'
+            periodSeconds: 5
+            failureThreshold: 120
+          resources:
+            requests:
+              cpu: '32'
+              memory: 800Gi
+              ephemeral-storage: 128Gi
+              nvidia.com/gpu: '4'
+            limits:
+              memory: 800Gi
+              ephemeral-storage: 128Gi
+              nvidia.com/gpu: '4'
+            claims:
+            - name: compute-domain-channel
+          volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: shared-storage
+            mountPath: /mnt/lustre
+          - name: local-nvme
+            mountPath: /mnt/local
+          workingDir: /code
+          startupProbe:
+            httpGet:
+              path: /health
+              port: dp-supervisor
+            periodSeconds: 1
+            timeoutSeconds: 5
+            failureThreshold: 1800
+        - name: dcgm-exporter
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
+          imagePullPolicy: IfNotPresent
+          args:
+          - -f
+          - /etc/dcgm-exporter/custom-counters.csv
+          ports:
+          - containerPort: 9400
+            name: dcgm
+            protocol: TCP
+          env:
+          - name: NVIDIA_VISIBLE_DEVICES
+            value: all
+          - name: NVIDIA_DRIVER_CAPABILITIES
+            value: utility
+          - name: DCGM_EXPORTER_KUBERNETES_GPU_ID_TYPE
+            value: uid
+          volumeMounts:
+          - name: dcgm-metrics
+            mountPath: /etc/dcgm-exporter/custom-counters.csv
+            subPath: custom-counters.csv
+            readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+        - name: node-exporter
+          image: quay.io/prometheus/node-exporter:v1.9.0
+          imagePullPolicy: IfNotPresent
+          args:
+          - --collector.disable-defaults
+          - --collector.infiniband
+          - --collector.netstat
+          - --collector.pressure
+          - --collector.schedstat
+          - --collector.cpu
+          - --path.sysfs=/host/sys
+          - --path.procfs=/host/proc
+          ports:
+          - containerPort: 9100
+            name: node-metrics
+            protocol: TCP
+          volumeMounts:
+          - name: sys
+            mountPath: /host/sys
+            readOnly: true
+          - name: proc
+            mountPath: /host/proc
+            readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - key: node-role.kubernetes.io/hpc-rack-1
+                  operator: Exists
+                - key: nvidia.com/gpu.product
+                  operator: In
+                  values:
+                  - NVIDIA-GB200
+        tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        initContainers:
+        - name: routing-proxy
+          image: ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.10.0
+          imagePullPolicy: Always
+          args:
+          - --port=8000
+          - --vllm-port=8200
+          - --data-parallel-size=4
+          - --secure-proxy=false
+          - --kv-connector=nixlv2
+          ports:
+          - containerPort: 8000
+            name: rank0
+            protocol: TCP
+          - containerPort: 8001
+            name: rank1
+            protocol: TCP
+          - containerPort: 8002
+            name: rank2
+            protocol: TCP
+          - containerPort: 8003
+            name: rank3
+            protocol: TCP
+          restartPolicy: Always
+          resources:
+            requests:
+              cpu: 8
+              memory: 16Gi
+            limits:
+              cpu: 8
+              memory: 16Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+        resourceClaims:
+        - name: compute-domain-channel
+          resourceClaimTemplateName: llm-d-dev-claim
+---
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-prefill
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: lws
+    llm-d.ai/role: prefill
+    llm-d.ai/inferenceServing: 'true'
+    llm-d.ai/model: glm-5.3-nvfp4
+    llm-d.ai/deployment: pd
+spec:
+  replicas: 1
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxUnavailable: 100%
+  leaderWorkerTemplate:
+    size: 2
+    workerTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/name: manifesto
+          app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+          llm-d.ai/owner: inference-playbooks
+          app.kubernetes.io/component: model-server
+          llm-d.ai/role: prefill
+          llm-d.ai/inferenceServing: 'true'
+          llm-d.ai/model: glm-5.3-nvfp4
+          llm-d.ai/deployment: pd
+      spec:
+        serviceAccountName: glm-5-3-gb200-p1d1-dep8-dspark5-model-server
+        terminationGracePeriodSeconds: 0
+        volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 640Gi
+        - name: shared-storage
+          persistentVolumeClaim:
+            claimName: lustre-pvc-vllm
+        - name: local-nvme
+          hostPath:
+            path: /mnt/numa0
+            type: Directory
+        - name: dcgm-metrics
+          configMap:
+            name: glm-5-3-gb200-p1d1-dep8-dspark5-dcgm-metrics
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: proc
+          hostPath:
+            path: /proc
+            type: Directory
+        containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.33.0
+          imagePullPolicy: Always
+          securityContext:
+            capabilities:
+              add:
+              - IPC_LOCK
+              - SYS_RAWIO
+            runAsGroup: 0
+            runAsUser: 0
+          command:
+          - /bin/bash
+          - -c
+          args:
+          - |-
+            set -euo pipefail
+            LOG_DIR=/mnt/lustre-3/logs/prefill
+            mkdir -p "$LOG_DIR"
+            LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+            echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+
+            find /mnt/lustre-3/vllm-dev/vllm -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
+            if [ -n "${MANIFESTO_VLLM_DEV_VENV:-}" ] && [ -d "${MANIFESTO_VLLM_DEV_VENV}" ]; then
+              echo "Using dev venv at ${MANIFESTO_VLLM_DEV_VENV}"
+              source "${MANIFESTO_VLLM_DEV_VENV}/bin/activate"
+            elif [ -f /opt/vllm/bin/activate ]; then
+              source /opt/vllm/bin/activate
+            fi
+
+            echo '=== Running pre-launch hooks ==='
+            uv pip install --system 'nixl==1.5.0' 'cupy-cuda13x!=14.1.0' nvshmem4py-cu13==0.4.0
+            # PATCHING DISABLED: apply_nixl_packed_cache_registration.py
+            # set -e
+            # PATCH_DIR="$(dirname "$(dirname "$LOG_DIR")")/dspark_patches"
+            # test -f "$PATCH_DIR/apply_nixl_packed_cache_registration.py"
+            # test -f "$PATCH_DIR/nixl-packed-cache-registration.hunks"
+            # echo "Applying NIXL packed-cache registration patch (pull-worker guard; role-specific capacities)"
+            # python3 "$PATCH_DIR/apply_nixl_packed_cache_registration.py"
+            rm -rf /mnt/local/kv-offload-glm-prefill
+            mkdir -p /mnt/local/kv-offload-glm-prefill
+
+            DP_SIZE_LOCAL=4
+            DP_SIZE=8
+            START_RANK=$(( LWS_WORKER_INDEX * DP_SIZE_LOCAL ))
+            P2P_BASE=$(( 7777 - START_RANK ))
+            KV_TRANSFER_CONFIG=$(printf '%s' "{\"kv_connector\":\"MultiConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"connectors\":[{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\",\"kv_buffer_device\":\"cuda\",\"kv_load_failure_policy\":\"fail\"},{\"kv_connector\":\"OffloadingConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"spec_name\":\"TieringOffloadingSpec\",\"cpu_bytes_to_use\":107374182400,\"eviction_policy\":\"lru\",\"offload_prompt_only\":true,\"self_describing_kv_events\":true,\"secondary_tiers\":[{\"type\":\"p2p\",\"host\":\"${POD_IP}\",\"port\":${P2P_BASE},\"backends\":[\"UCX\"],\"num_threads\":4},{\"type\":\"fs\",\"root_dir\":\"/mnt/local/kv-offload-glm-prefill\",\"n_read_threads\":32,\"n_write_threads\":8,\"locality\":\"LOCAL\"}]}}]}}")
+
+            FLASH_ATTENTION_CUTE_DSL_CACHE_DIR=${FLASH_ATTENTION_CUTE_DSL_CACHE_DIR}/prefill \
+            TILELANG_CACHE_DIR=${TILELANG_CACHE_DIR}/prefill \
+            exec \
+              vllm \
+              serve \
+              RedHatAI/GLM-5.3-NVFP4 \
+              --port 8000 \
+              --tensor-parallel-size 1 \
+              --enable-expert-parallel \
+              --data-parallel-size $DP_SIZE \
+              --data-parallel-start-rank $START_RANK \
+              --data-parallel-size-local $DP_SIZE_LOCAL \
+              --data-parallel-address ${LWS_LEADER_ADDRESS} \
+              --data-parallel-rpc-port 5555 \
+              --data-parallel-multi-port-external-lb \
+              --data-parallel-supervisor-port 8100 \
+              --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+              --served-model-name RedHatAI/GLM-5.3-NVFP4 \
+              --load-format auto \
+              --disable-uvicorn-access-log \
+              --trust-remote-code \
+              --enable-cumem-allocator \
+              --enable-ep-weight-filter \
+              --numa-bind \
+              --no-disable-hybrid-kv-cache-manager \
+              --no-enable-flashinfer-autotune \
+              --moe-backend flashinfer_moe_ep_cutedsl \
+              --kv-cache-dtype fp8 \
+              --block-size 64 \
+              --max-model-len 1048576 \
+              --disable-access-log-for-endpoints /health,/metrics \
+              --gpu-memory-utilization 0.97 \
+              --max-num-batched-tokens 8192 \
+              --long-prefill-token-threshold 1024 \
+              --kv-cache-metrics \
+              --kv-cache-metrics-sample 0.25 \
+              --max-num-seqs 16 \
+              --speculative-config '{"method":"dspark","model":"RedHatAI/GLM-5.3-speculator.dspark","num_speculative_tokens":5,"enable_adaptive_verification":true,"draft_sample_method":"probabilistic"}'
+          env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: HF_TOKEN
+                optional: true
+          - name: DG_JIT_CACHE_DIR
+            value: /tmp/dg-cache-glm53-nvfp4
+          - name: FLASHINFER_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/flashinfer
+          - name: FLASHINFER_WORKSPACE_BASE
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/flashinfer-workspace
+          - name: FLASH_ATTENTION_CUTE_DSL_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/fa-cute-dsl
+          - name: FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED
+            value: '0'
+          - name: HF_HOME
+            value: /mnt/local/hf_cache
+          - name: HOME
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/home
+          - name: KV_OFFLOAD_CPU_BYTES
+            value: '107374182400'
+          - name: MANIFESTO_VLLM_DEV_VENV
+            value: ''
+          - name: MC_ENABLE_DEST_DEVICE_AFFINITY
+            value: '1'
+          - name: NCCL_CUMEM_ENABLE
+            value: '1'
+          - name: NCCL_MNNVL_ENABLE
+            value: '1'
+          - name: NCCL_NVLS_ENABLE
+            value: '1'
+          - name: NVIDIA_GDRCOPY
+            value: enabled
+          - name: PYTHONHASHSEED
+            value: '0'
+          - name: TILELANG_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/tilelang
+          - name: TILELANG_CLEANUP_TEMP_FILES
+            value: '1'
+          - name: TORCHINDUCTOR_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/torchinductor
+          - name: TORCH_SYMMMEM
+            value: NVSHMEM
+          - name: TQDM_DISABLE
+            value: '1'
+          - name: TRITON_CACHE_DIR
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/triton
+          - name: TRITON_LIBCUDA_PATH
+            value: /usr/lib64
+          - name: UCX_CUDA_IPC_ENABLE_MNNVL
+            value: 'y'
+          - name: UCX_MEMTYPE_CACHE
+            value: 'n'
+          - name: UCX_NET_DEVICES
+            value: mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1
+          - name: UCX_TLS
+            value: cuda_copy,cuda_ipc,rc
+          - name: VLLM_CACHE_ROOT
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/vllm
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: '3600'
+          - name: VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS
+            value: '1800'
+          - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+            value: '120'
+          - name: VLLM_LOGGING_LEVEL
+            value: INFO
+          - name: VLLM_NO_USAGE_STATS
+            value: '1'
+          - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+            value: '1'
+          - name: VLLM_USE_DEEP_GEMM
+            value: '1'
+          - name: VLLM_USE_NCCL_SYMM_MEM
+            value: '1'
+          - name: VLLM_USE_RUST_FRONTEND
+            value: '1'
+          - name: VLLM_USE_V2_MODEL_RUNNER
+            value: '1'
+          - name: XDG_CACHE_HOME
+            value: /mnt/lustre-3/jit-cache/gb200/cu13/v0.33.0/glm53-p1d1-dep8-dspark5/xdg
+          - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: VLLM_P2P_SIDE_CHANNEL_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          ports:
+          - containerPort: 8100
+            name: dp-supervisor
+            protocol: TCP
+          - containerPort: 8000
+            name: vllm-0
+            protocol: TCP
+          - containerPort: 8001
+            name: vllm-1
+            protocol: TCP
+          - containerPort: 8002
+            name: vllm-2
+            protocol: TCP
+          - containerPort: 8003
+            name: vllm-3
+            protocol: TCP
+          - containerPort: 7777
+            name: p2p-0
+            protocol: TCP
+          - containerPort: 7778
+            name: p2p-1
+            protocol: TCP
+          - containerPort: 7779
+            name: p2p-2
+            protocol: TCP
+          - containerPort: 7780
+            name: p2p-3
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/bash
+              - -c
+              - curl -sf http://localhost:8000/v1/models | grep -q '"id"' && curl
+                -sf http://localhost:8001/v1/models | grep -q '"id"' && curl -sf http://localhost:8002/v1/models
+                | grep -q '"id"' && curl -sf http://localhost:8003/v1/models | grep
+                -q '"id"'
+            periodSeconds: 5
+            failureThreshold: 120
+          resources:
+            requests:
+              cpu: '32'
+              memory: 800Gi
+              ephemeral-storage: 256Gi
+              nvidia.com/gpu: '4'
+            limits:
+              memory: 800Gi
+              ephemeral-storage: 256Gi
+              nvidia.com/gpu: '4'
+            claims:
+            - name: compute-domain-channel
+          volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: shared-storage
+            mountPath: /mnt/lustre
+          - name: local-nvme
+            mountPath: /mnt/local
+          workingDir: /code
+          startupProbe:
+            httpGet:
+              path: /health
+              port: dp-supervisor
+            periodSeconds: 1
+            timeoutSeconds: 5
+            failureThreshold: 1800
+        - name: dcgm-exporter
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
+          imagePullPolicy: IfNotPresent
+          args:
+          - -f
+          - /etc/dcgm-exporter/custom-counters.csv
+          ports:
+          - containerPort: 9400
+            name: dcgm
+            protocol: TCP
+          env:
+          - name: NVIDIA_VISIBLE_DEVICES
+            value: all
+          - name: NVIDIA_DRIVER_CAPABILITIES
+            value: utility
+          - name: DCGM_EXPORTER_KUBERNETES_GPU_ID_TYPE
+            value: uid
+          volumeMounts:
+          - name: dcgm-metrics
+            mountPath: /etc/dcgm-exporter/custom-counters.csv
+            subPath: custom-counters.csv
+            readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+        - name: node-exporter
+          image: quay.io/prometheus/node-exporter:v1.9.0
+          imagePullPolicy: IfNotPresent
+          args:
+          - --collector.disable-defaults
+          - --collector.infiniband
+          - --collector.netstat
+          - --collector.pressure
+          - --collector.schedstat
+          - --collector.cpu
+          - --path.sysfs=/host/sys
+          - --path.procfs=/host/proc
+          ports:
+          - containerPort: 9100
+            name: node-metrics
+            protocol: TCP
+          volumeMounts:
+          - name: sys
+            mountPath: /host/sys
+            readOnly: true
+          - name: proc
+            mountPath: /host/proc
+            readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - key: node-role.kubernetes.io/hpc-rack-1
+                  operator: Exists
+                - key: nvidia.com/gpu.product
+                  operator: In
+                  values:
+                  - NVIDIA-GB200
+        tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        resourceClaims:
+        - name: compute-domain-channel
+          resourceClaimTemplateName: llm-d-dev-claim
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: epp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp-rbac
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: epp
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - inference.networking.k8s.io
+  resources:
+  - inferencepools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - inference.networking.x-k8s.io
+  resources:
+  - inferencemodelrewrites
+  - inferencemodels
+  - inferenceobjectives
+  - inferencepoolimports
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp-rbac
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: epp
+subjects:
+- kind: ServiceAccount
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp
+  namespace: vllm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp-rbac
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-epp-config
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: routing
+data:
+  plugins.yaml: |
+    apiVersion: llm-d.ai/v1alpha1
+    kind: EndpointPickerConfig
+    plugins:
+    - type: prefill-filter
+    - type: decode-filter
+    - type: inflight-load-producer
+    - type: approx-prefix-cache-producer
+      parameters:
+        autoTune: false
+        blockSizeTokens: 64
+        maxPrefixTokensToMatch: 1048576
+        maxPrefixBlocksToMatch: 4096
+        lruCapacityPerServer: 159081
+    - type: p2p-source-producer
+      parameters:
+        prefixMatchInfoProducerName: approx-prefix-cache-producer
+        prefillProfileName: prefill
+        minCachedTokenDelta: 6144
+    - type: prefix-cache-affinity-filter
+      parameters:
+        peakPrefillThroughput: 4200
+        maxTTFTPenaltyMs: 30000
+        affinityThreshold: 0.8
+    - type: prefix-cache-scorer
+    - type: no-hit-lru-scorer
+    - type: token-load-scorer
+      parameters:
+        queueThresholdTokens: 1290000
+    - type: active-request-scorer
+    - type: queue-scorer
+    - type: always-disagg-pd-decider
+    - type: disagg-profile-handler
+      parameters:
+        deciders:
+          prefill: always-disagg-pd-decider
+    - type: max-score-picker
+      name: prefill-picker
+    - type: max-score-picker
+      name: decode-picker
+    schedulingProfiles:
+    - name: prefill
+      plugins:
+      - pluginRef: prefill-filter
+      - pluginRef: prefix-cache-affinity-filter
+      - pluginRef: prefix-cache-scorer
+        weight: 10
+      - pluginRef: no-hit-lru-scorer
+        weight: 2
+      - pluginRef: token-load-scorer
+        weight: 3
+      - pluginRef: queue-scorer
+        weight: 3
+      - pluginRef: prefill-picker
+    - name: decode
+      plugins:
+      - pluginRef: decode-filter
+      - pluginRef: active-request-scorer
+        weight: 1
+      - pluginRef: queue-scorer
+        weight: 1
+      - pluginRef: decode-picker
+---
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: routing
+spec:
+  targetPorts:
+  - number: 8000
+  - number: 8001
+  - number: 8002
+  - number: 8003
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+      llm-d.ai/inferenceServing: 'true'
+      llm-d.ai/deployment: pd
+  endpointPickerRef:
+    name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp
+    kind: Service
+    port:
+      number: 9002
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: epp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: manifesto
+      app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+      llm-d.ai/owner: inference-playbooks
+      app.kubernetes.io/component: epp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: manifesto
+        app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+        llm-d.ai/owner: inference-playbooks
+        app.kubernetes.io/component: epp
+        inferencepool: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp
+    spec:
+      serviceAccountName: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+      containers:
+      - name: epp
+        image: ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.10.0
+        imagePullPolicy: Always
+        args:
+        - --config-file=/etc/epp/plugins.yaml
+        - --grpc-port=9002
+        - --metrics-port=9090
+        - --metrics-endpoint-auth=false
+        - -v=4
+        - --pool-name=glm-5-3-gb200-p1d1-dep8-dspark5-infpool
+        - --pool-namespace=vllm
+        - --allow-experimental-plugins
+        ports:
+        - containerPort: 9002
+          name: grpc
+        - containerPort: 9090
+          name: metrics
+        volumeMounts:
+        - name: config
+          mountPath: /etc/epp/plugins.yaml
+          subPath: plugins.yaml
+        resources:
+          requests:
+            cpu: '8'
+            memory: 16Gi
+          limits:
+            cpu: '8'
+            memory: 16Gi
+      volumes:
+      - name: config
+        configMap:
+          name: glm-5-3-gb200-p1d1-dep8-dspark5-epp-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-gateway-options
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: gateway
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          containers:
+          - name: istio-proxy
+            resources:
+              requests:
+                cpu: '8'
+                memory: 64Gi
+              limits:
+                cpu: '8'
+                memory: 64Gi
+  service: |
+    spec:
+      type: ClusterIP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-gateway
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: gateway
+    istio.io/enable-inference-extproc: 'true'
+spec:
+  infrastructure:
+    parametersRef:
+      group: ''
+      kind: ConfigMap
+      name: glm-5-3-gb200-p1d1-dep8-dspark5-gateway-options
+  gatewayClassName: istio
+  listeners:
+  - name: default
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-route
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: route
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: glm-5-3-gb200-p1d1-dep8-dspark5-gateway
+  rules:
+  - backendRefs:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool
+      port: 8000
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /
+    timeouts:
+      backendRequest: 0s
+      request: 0s
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: epp
+spec:
+  host: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-epp
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        connectTimeout: 900s
+        maxConnectionDuration: 1800s
+        maxConnections: 256000
+      http:
+        http1MaxPendingRequests: 256000
+        http2MaxRequests: 256000
+        idleTimeout: 900s
+        maxRequestsPerConnection: 256000
+    tls:
+      insecureSkipVerify: true
+      mode: SIMPLE
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-backend
+  labels:
+    app.kubernetes.io/name: manifesto
+    app.kubernetes.io/instance: glm-5-3-gb200-p1d1-dep8-dspark5
+    llm-d.ai/owner: inference-playbooks
+    app.kubernetes.io/component: routing
+spec:
+  host: glm-5-3-gb200-p1d1-dep8-dspark5-infpool-ip
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 256000
+      http:
+        idleTimeout: 300s
